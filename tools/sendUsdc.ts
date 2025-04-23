@@ -1,4 +1,4 @@
-import { createUSDCTransferCalls } from "@helpers/usdc";
+import { createUSDCTransferCalls } from "../helpers/usdc";
 import { ContentTypeWalletSendCalls } from "@xmtp/content-type-wallet-send-calls";
 import type { Conversation } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
@@ -14,7 +14,7 @@ export const sendUsdcSchema = z.object({
   recipient: z
     .string()
     .describe(
-      "The recipient's Ethereum wallet address where USDC will be sent",
+      "The recipient's Ethereum wallet address where USDC will be sent"
     ),
 });
 
@@ -48,12 +48,12 @@ async function handleUsdcTransfer({
     }
 
     const amountInDecimals = Math.floor(
-      validatedArgs.data.amount * Math.pow(10, 6),
+      validatedArgs.data.amount * Math.pow(10, 6)
     );
     const walletSendCalls = createUSDCTransferCalls(
       senderInboxId,
       validatedArgs.data.recipient,
-      amountInDecimals,
+      amountInDecimals
     );
 
     const response = await getCharacterResponse({
@@ -67,7 +67,7 @@ async function handleUsdcTransfer({
   } catch (error: unknown) {
     console.error(
       "Transaction error:",
-      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.message : String(error)
     );
     const errorResponse = await getCharacterResponse({
       openai,
@@ -88,7 +88,7 @@ export const sendUsdcTool = {
   }),
   handler: async (
     context: ToolContext,
-    args: Record<string, unknown> = {},
+    args: Record<string, unknown> = {}
   ): Promise<string> => {
     return handleUsdcTransfer({
       openai: context.openai,

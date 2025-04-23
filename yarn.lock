@@ -244,12 +244,17 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@examples/xmtp-flaunch@workspace:."
   dependencies:
-    "@xmtp/node-sdk": "npm:1.1.1"
+    "@types/node": "npm:^22.14.1"
+    "@xmtp/content-type-wallet-send-calls": "npm:^1.0.1"
+    "@xmtp/node-sdk": "npm:^2.0.5"
     ai: "npm:^4.2.9"
+    dotenv: "npm:^16.5.0"
     openai: "npm:^4.28.0"
     tsx: "npm:^4.19.2"
     typescript: "npm:^5.7.3"
+    uint8arrays: "npm:^5.1.0"
     viem: "npm:^2.28.0"
+    zod: "npm:^3.24.3"
   languageName: unknown
   linkType: soft
 
@@ -469,7 +474,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:*, @types/node@npm:>=13.7.0":
+"@types/node@npm:*, @types/node@npm:>=13.7.0, @types/node@npm:^22.14.1":
   version: 22.14.1
   resolution: "@types/node@npm:22.14.1"
   dependencies:
@@ -487,7 +492,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/content-type-group-updated@npm:^2.0.1":
+"@xmtp/content-type-group-updated@npm:^2.0.2":
   version: 2.0.2
   resolution: "@xmtp/content-type-group-updated@npm:2.0.2"
   dependencies:
@@ -497,7 +502,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/content-type-primitives@npm:^2.0.1, @xmtp/content-type-primitives@npm:^2.0.2":
+"@xmtp/content-type-primitives@npm:^2.0.2":
   version: 2.0.2
   resolution: "@xmtp/content-type-primitives@npm:2.0.2"
   dependencies:
@@ -506,7 +511,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/content-type-text@npm:^2.0.1":
+"@xmtp/content-type-text@npm:^2.0.2":
   version: 2.0.2
   resolution: "@xmtp/content-type-text@npm:2.0.2"
   dependencies:
@@ -515,23 +520,32 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/node-bindings@npm:^1.2.0-dev.bed98df":
-  version: 1.2.0-dev.d811cc6
-  resolution: "@xmtp/node-bindings@npm:1.2.0-dev.d811cc6"
-  checksum: 10c0/1619f22734806f95a4717f0c27b57b158efbeb6907ecda2f520b2edf66a1edc118141ac466c61138018c3855603ae8ffac45fd4a02b5c58cfa06817bc456568c
+"@xmtp/content-type-wallet-send-calls@npm:^1.0.1":
+  version: 1.0.1
+  resolution: "@xmtp/content-type-wallet-send-calls@npm:1.0.1"
+  dependencies:
+    "@xmtp/content-type-primitives": "npm:^2.0.2"
+  checksum: 10c0/61ac2fdc0cab2410f6aac85253737a0fa49e7206d471fd92052b0ac612f60485d52c66e34452bf4a0f00acd870bd587f7213e31743dab1681c3fd7ee03d1dbd1
   languageName: node
   linkType: hard
 
-"@xmtp/node-sdk@npm:1.1.1":
-  version: 1.1.1
-  resolution: "@xmtp/node-sdk@npm:1.1.1"
+"@xmtp/node-bindings@npm:1.2.0-dev.b96f93d":
+  version: 1.2.0-dev.b96f93d
+  resolution: "@xmtp/node-bindings@npm:1.2.0-dev.b96f93d"
+  checksum: 10c0/919857ffb0421c77dd93fdeb191c1af726e79a5b27edc879eb3b016855b4d677ba799a4847236a707788b7f1a041a52674d480b867e401dde09d12ac5bca2cbb
+  languageName: node
+  linkType: hard
+
+"@xmtp/node-sdk@npm:^2.0.5":
+  version: 2.0.5
+  resolution: "@xmtp/node-sdk@npm:2.0.5"
   dependencies:
-    "@xmtp/content-type-group-updated": "npm:^2.0.1"
-    "@xmtp/content-type-primitives": "npm:^2.0.1"
-    "@xmtp/content-type-text": "npm:^2.0.1"
-    "@xmtp/node-bindings": "npm:^1.2.0-dev.bed98df"
+    "@xmtp/content-type-group-updated": "npm:^2.0.2"
+    "@xmtp/content-type-primitives": "npm:^2.0.2"
+    "@xmtp/content-type-text": "npm:^2.0.2"
+    "@xmtp/node-bindings": "npm:1.2.0-dev.b96f93d"
     "@xmtp/proto": "npm:^3.78.0"
-  checksum: 10c0/ecaf854636b48f65557f9322a1f33b18ca38afbc78917ca21e4943373a79089fb38aadd7cb061b129c972075baf90426c7e01aa2c725355109408672dffefc6f
+  checksum: 10c0/b299ff57bd1045644deefd3663cd8a00538e2cd0419f9502254e232a46bd087ef8dea5d1c23c344558f4a85b6261c5ca8e1336eeef58f2eb127e03f803b46ed2
   languageName: node
   linkType: hard
 
@@ -777,6 +791,13 @@ __metadata:
   version: 1.0.5
   resolution: "diff-match-patch@npm:1.0.5"
   checksum: 10c0/142b6fad627b9ef309d11bd935e82b84c814165a02500f046e2773f4ea894d10ed3017ac20454900d79d4a0322079f5b713cf0986aaf15fce0ec4a2479980c86
+  languageName: node
+  linkType: hard
+
+"dotenv@npm:^16.5.0":
+  version: 16.5.0
+  resolution: "dotenv@npm:16.5.0"
+  checksum: 10c0/5bc94c919fbd955bf0ba44d33922a1e93d1078e64a1db5c30faeded1d996e7a83c55332cb8ea4fae5a9ca4d0be44cbceb95c5811e70f9f095298df09d1997dd9
   languageName: node
   linkType: hard
 
@@ -1444,6 +1465,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"multiformats@npm:^13.0.0":
+  version: 13.3.2
+  resolution: "multiformats@npm:13.3.2"
+  checksum: 10c0/a2c6f17b04d6a9cd5d0cb7d07e32dc4f3be82804d44fc056357a98e449340a7ad37d0789da41186ccd8c953e0cf783be3b71f03a00b0a84788689f544ecade46
+  languageName: node
+  linkType: hard
+
 "nanoid@npm:^3.3.8":
   version: 3.3.11
   resolution: "nanoid@npm:3.3.11"
@@ -1878,6 +1906,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"uint8arrays@npm:^5.1.0":
+  version: 5.1.0
+  resolution: "uint8arrays@npm:5.1.0"
+  dependencies:
+    multiformats: "npm:^13.0.0"
+  checksum: 10c0/e7587f97d03a17a608becd01b3ca52aa6db43e7ee6156c18b278c715a62f4f9e62ef2fe9432a3cd02791b6222a17578476a20b8e3ea37dd3b5ce454c6a8782a9
+  languageName: node
+  linkType: hard
+
 "undici-types@npm:~5.26.4":
   version: 5.26.5
   resolution: "undici-types@npm:5.26.5"
@@ -2052,5 +2089,12 @@ __metadata:
   peerDependencies:
     zod: ^3.24.1
   checksum: 10c0/0745b94ba53e652d39f262641cdeb2f75d24339fb6076a38ce55bcf53d82dfaea63adf524ebc5f658681005401687f8e9551c4feca7c4c882e123e66091dfb90
+  languageName: node
+  linkType: hard
+
+"zod@npm:^3.24.3":
+  version: 3.24.3
+  resolution: "zod@npm:3.24.3"
+  checksum: 10c0/ab0369810968d0329a1a141e9418e01e5c9c2a4905cbb7cb7f5a131d6e9487596e1400e21eeff24c4a8ee28dacfa5bd6103893765c055b7a98c2006a5a4fc68d
   languageName: node
   linkType: hard

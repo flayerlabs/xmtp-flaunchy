@@ -1,4 +1,4 @@
-import { getUSDCBalance } from "@helpers/usdc";
+import { getUSDCBalance } from "../helpers/usdc";
 import type OpenAI from "openai";
 import { z } from "zod";
 import type { Character, ToolContext } from "../types";
@@ -30,7 +30,7 @@ async function handleBalanceCheck({
   } catch (error: unknown) {
     console.error(
       "Balance check error:",
-      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.message : String(error)
     );
     return "Sorry, I couldn't check the balance. Please make sure the address is correct.";
   }
