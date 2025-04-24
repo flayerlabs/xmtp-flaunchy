@@ -7,6 +7,7 @@ import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
 import { flaunchy } from "./characters/flaunchy";
 import { processMessage } from "./utils/llm";
+import { MessageHistory } from "./utils/messageHistory";
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -23,6 +24,7 @@ async function main() {
   const signer = createSigner(WALLET_KEY);
   const encryptionKey = getEncryptionKeyFromHex(ENCRYPTION_KEY);
   const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+  const messageHistory = new MessageHistory(20); // Keep last 20 messages per sender
 
   // Get wallet address for storage path
   const identifier = await signer.getIdentifier();
@@ -46,18 +48,27 @@ async function main() {
   console.log("✓ Syncing conversations...");
   await client.conversations.sync();
 
+  console.log("✓ Loading message history...");
+  await messageHistory.loadHistoricalMessages(client);
+
   console.log("Waiting for messages...");
   const stream = client.conversations.streamAllMessages();
 
   for await (const message of await stream) {
     if (message) {
-      await processMessage({
+      const response = await processMessage({
         client,
         openai,
         character: flaunchy,
         message,
         signer,
+        messageHistory,
       });
+
+      if (response) {
+        messageHistory.addMessage(message.senderInboxId, message, true);
+      }
+
       console.log("Waiting for messages...");
     }
   }

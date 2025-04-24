@@ -3,6 +3,7 @@ import type OpenAI from "openai";
 import { OPENAI_TOOLS, TOOL_REGISTRY } from "../tools";
 import type { Character, ToolCall, ToolContext } from "../types";
 import { generateCharacterContext } from "./character";
+import type { MessageHistory } from "./messageHistory";
 
 // Message processing helper
 export async function processMessage({
@@ -11,38 +12,51 @@ export async function processMessage({
   character,
   message,
   signer,
+  messageHistory,
 }: {
   client: Client;
   openai: OpenAI;
   character: Character;
   message: DecodedMessage;
   signer: Signer;
-}): Promise<void> {
+  messageHistory: MessageHistory;
+}): Promise<boolean> {
   if (
     message.senderInboxId.toLowerCase() === client.inboxId.toLowerCase() ||
     message.contentType?.typeId !== "text"
   ) {
-    return;
+    return false;
   }
 
   console.log(
-    `Received message: ${message.content as string} by ${message.senderInboxId}`,
+    `Received message: ${message.content as string} by ${message.senderInboxId}`
   );
 
   const conversation = await client.conversations.getConversationById(
-    message.conversationId,
+    message.conversationId
   );
   if (!conversation) {
     console.log("Unable to find conversation, skipping");
-    return;
+    return false;
   }
 
   try {
+    // Add the incoming message to history before processing
+    messageHistory.addMessage(message.senderInboxId, message);
+
+    // Get conversation history for this sender
+    const history = messageHistory.getHistory(message.senderInboxId);
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         { role: "system", content: generateCharacterContext(character) },
-        { role: "user", content: message.content as string },
+        // Add a reminder about the character's role
+        {
+          role: "system",
+          content: `You are ${character.name}. Respond naturally in your character's voice. Never repeat the user's message verbatim.`,
+        },
+        ...history, // The history already contains properly formatted role: "user" or "assistant" messages
       ],
       tools: OPENAI_TOOLS,
       stream: true,
@@ -100,12 +114,26 @@ export async function processMessage({
     if (fullResponse.length > 0) {
       console.log(`Sending ${character.name}'s response: ${fullResponse}`);
       await conversation.send(fullResponse);
+
+      // Add the bot's response to history after sending
+      const responseMessage = {
+        content: fullResponse,
+        senderInboxId: client.inboxId,
+        conversationId: conversation.id,
+        contentType: { typeId: "text" },
+      } as DecodedMessage;
+      messageHistory.addMessage(message.senderInboxId, responseMessage, true);
+
+      return true;
     }
-  } catch (error: unknown) {
+
+    return false;
+  } catch (error) {
     console.error(
       "Error processing message:",
-      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.message : String(error)
     );
     await conversation.send("Error processing message");
+    return true;
   }
 }
