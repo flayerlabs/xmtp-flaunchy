@@ -1,6 +1,6 @@
-# XMTP Snoop Dogg Chat Bot
+# XMTP Flaunchy Chat Bot
 
-This is an XMTP chat bot that responds as Snoop Dogg using the Vercel AI SDK and OpenAI's GPT-4.
+This is an XMTP chat bot that responds as Flaunchy using OpenAI's GPT-4.
 
 ## Setup
 
@@ -33,8 +33,7 @@ yarn start
 
 ## Features
 
-- Responds to messages in character as Snoop Dogg
-- Uses Vercel AI SDK for streaming responses
+- Responds to messages in character as Flaunchy
 - Maintains consistent character personality using dynamic context
 - Handles both direct messages and group chats
 - Graceful error handling with in-character error messages
