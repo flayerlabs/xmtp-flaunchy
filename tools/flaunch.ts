@@ -148,19 +148,38 @@ async function handleFlaunch({
       return "";
     }
 
+    if (validatedArgs.data.image) {
+      await conversation.send(
+        await getCharacterResponse({
+          openai,
+          character,
+          prompt: `
+        I've started uploading the image to ipfs for ticker: ${validatedArgs.data.ticker}.
+        Tell the user to wait a bit for the transaction request in your character's voice.
+        Keep the response very very concise and to the point. Make sure to mention that the transaction request is upcoming.
+        `,
+        })
+      );
+    }
+
     const walletSendCalls = await createFlaunchCalls({
       args: validatedArgs.data,
       senderInboxId,
       client,
     });
 
-    const response = await getCharacterResponse({
-      openai,
-      character,
-      prompt: `I've prepared a transaction to flaunch ${validatedArgs.data.ticker}. Tell the user to review and submit the transaction in your character's voice.`,
-    });
+    await conversation.send(
+      await getCharacterResponse({
+        openai,
+        character,
+        prompt: `
+      I've prepared a transaction to flaunch ${validatedArgs.data.ticker}.
+      Tell the user to review and submit the transaction in your character's voice.
+      Keep the response concise and to the point.
+      `,
+      })
+    );
 
-    await conversation.send(response);
     await conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
   } catch (error: unknown) {
     console.error(
