@@ -6,12 +6,12 @@ import { sendUsdcTool } from "./sendUsdc";
 
 // Registry of all available tools with their handlers
 export const TOOL_REGISTRY: ToolRegistry = {
-  check_balance: checkBalanceTool,
-  send_usdc: sendUsdcTool,
+  // check_balance: checkBalanceTool,
+  // send_usdc: sendUsdcTool,
   flaunch: flaunchTool,
 };
 
 // Export tools array for OpenAI
 export const OPENAI_TOOLS: ChatCompletionTool[] = Object.values(
-  TOOL_REGISTRY,
+  TOOL_REGISTRY
 ).map(({ tool }) => tool);

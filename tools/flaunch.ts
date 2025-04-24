@@ -15,6 +15,7 @@ import { FlaunchPositionManagerAddress } from "../addresses";
 import type { Character, ToolContext } from "../types";
 import { getCharacterResponse } from "../utils/character";
 import { getTool, invalidArgsResponse } from "../utils/tool";
+import { generateTokenUri } from "../utils/ipfs";
 
 const chain = baseSepolia;
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
@@ -28,7 +29,7 @@ export const flaunchSchema = z.object({
     .max(10000)
     .optional()
     .describe(
-      "The starting market cap of the coin in USD. Between 100 and 10,000",
+      "The starting market cap of the coin in USD. Between 100 and 10,000"
     ),
   feeReceivers: z
     .array(z.string())
@@ -55,7 +56,7 @@ const createFlaunchCalls = async ({
         type: "uint256",
       },
     ],
-    [initialMCapInUSDCWei],
+    [initialMCapInUSDCWei]
   );
 
   const fairLaunchPercent = 60;
@@ -70,6 +71,19 @@ const createFlaunchCalls = async ({
   ]);
   const creatorAddress = inboxState[0].identifiers[0].identifier;
 
+  // upload image & token uri to ipfs
+  const tokenUri = await generateTokenUri(args.ticker, {
+    pinataConfig: { jwt: process.env.PINATA_JWT! },
+    metadata: {
+      imageUrl: args.image ?? "",
+      description: "Flaunched via Flaunchy on XMTP",
+      websiteUrl: "",
+      discordUrl: "",
+      twitterUrl: "",
+      telegramUrl: "",
+    },
+  });
+
   const data = encodeFunctionData({
     abi: FlaunchPositionManagerAbi,
     functionName: "flaunch",
@@ -77,8 +91,7 @@ const createFlaunchCalls = async ({
       {
         name: args.ticker,
         symbol: args.ticker.toUpperCase(),
-        // FIXME: generate & upload tokenUri with image
-        tokenUri: "",
+        tokenUri: tokenUri,
         initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10_000n,
         premineAmount: 0n,
         creator: creatorAddress as Address,
@@ -152,7 +165,7 @@ async function handleFlaunch({
   } catch (error: unknown) {
     console.error(
       "Transaction error:",
-      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.message : String(error)
     );
     const errorResponse = await getCharacterResponse({
       openai,
@@ -168,12 +181,13 @@ async function handleFlaunch({
 export const flaunchTool = {
   tool: getTool({
     name: "flaunch",
+    // FIXME: make it descriptive in terms of the params to pass
     description: "Flaunch a new coin",
     schema: flaunchSchema,
   }),
   handler: async (
     context: ToolContext,
-    args: Record<string, unknown> = {},
+    args: Record<string, unknown> = {}
   ): Promise<string> => {
     return handleFlaunch({
       openai: context.openai,
