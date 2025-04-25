@@ -18,7 +18,7 @@ type OpenAIFunctionParameters = {
 };
 
 export function zodToOpenAIParameters(
-  schema: ZodObjectType,
+  schema: ZodObjectType
 ): OpenAIFunctionParameters {
   const shape = schema._def.shape();
   const properties: Record<
@@ -79,10 +79,12 @@ export function zodToOpenAIParameters(
 export const getTool = ({
   name,
   description,
+  llmInstructions,
   schema,
 }: {
   name: string;
   description: string;
+  llmInstructions?: string;
   schema: ZodObjectType;
 }): ChatCompletionTool => {
   const parameters = zodToOpenAIParameters(schema);
@@ -91,7 +93,9 @@ export const getTool = ({
     type: "function",
     function: {
       name,
-      description,
+      description: llmInstructions
+        ? `${description}\n\nLLM Instructions: ${llmInstructions}`
+        : description,
       parameters,
     },
   };

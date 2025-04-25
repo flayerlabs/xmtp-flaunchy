@@ -247,7 +247,7 @@ export const flaunchTool = {
 This tool allows launching a new coin using the Flaunch protocol. 60% of the supply is allocated to the fair launch, creator gets 80% of the fees.
 
 It takes:
-- ticker: (required) The ticker of the coin to flaunch. DON'T hallucinate or make up a ticker if the user doesn't provide one.
+- ticker: The ticker of the coin to flaunch
 
 - image: (optional) The image url
 - startingMarketCap: (optional) The starting market cap of the coin in USD. Between 100 and 10,000
@@ -255,6 +255,8 @@ It takes:
 
 If the required fields are not provided, ask the user to provide them. Ignore the optional fields.
 `,
+    llmInstructions:
+      "DON'T hallucinate or make up a ticker if the user doesn't provide one.",
     schema: flaunchSchema,
   }),
   handler: async (
