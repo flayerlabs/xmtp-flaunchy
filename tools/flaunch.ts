@@ -5,17 +5,19 @@ import {
   encodeAbiParameters,
   encodeFunctionData,
   parseUnits,
+  zeroAddress,
+  zeroHash,
   type Address,
   type Hex,
 } from "viem";
 import { baseSepolia } from "viem/chains";
 import { z } from "zod";
-import { FlaunchPositionManagerAbi } from "../abi/FlaunchPositionManager";
-import { FlaunchPositionManagerAddress } from "../addresses";
+import { FlaunchZapAddress } from "../addresses";
 import type { Character, ToolContext } from "../types";
 import { getCharacterResponse } from "../utils/character";
 import { getTool, invalidArgsResponse } from "../utils/tool";
 import { generateTokenUri } from "../utils/ipfs";
+import { FlaunchZapAbi } from "../abi/FlaunchZap";
 
 const chain = baseSepolia;
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
@@ -88,20 +90,42 @@ const createFlaunchCalls = async ({
   }
 
   const data = encodeFunctionData({
-    abi: FlaunchPositionManagerAbi,
+    abi: FlaunchZapAbi,
     functionName: "flaunch",
     args: [
+      // FlaunchParams
       {
         name: args.ticker,
         symbol: args.ticker.toUpperCase(),
         tokenUri,
         initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10_000n,
+        fairLaunchDuration: 30n * 60n,
         premineAmount: 0n,
         creator: creatorAddress as Address,
         creatorFeeAllocation: creatorFeeAllocationInBps,
         flaunchAt: 0n,
         initialPriceParams,
         feeCalculatorParams: "0x",
+      },
+      // WhitelistParams
+      {
+        merkleRoot: zeroHash,
+        merkleIPFSHash: "",
+        maxTokens: 0n,
+      },
+      // AirdropParams
+      {
+        airdropIndex: 0n,
+        airdropAmount: 0n,
+        airdropEndTime: 0n,
+        merkleRoot: zeroHash,
+        merkleIPFSHash: "",
+      },
+      // TreasuryManagerParams
+      {
+        manager: zeroAddress,
+        initializeData: "0x",
+        depositData: "0x",
       },
     ],
   });
@@ -112,10 +136,10 @@ const createFlaunchCalls = async ({
     chainId: "0x" + chain.id.toString(16),
     calls: [
       {
-        to: FlaunchPositionManagerAddress[chain.id],
+        to: FlaunchZapAddress[chain.id],
         data,
         metadata: {
-          description: `Flaunch ${args.ticker} on Base Sepolia`,
+          description: `Flaunch ${args.ticker} on ${chain.name}`,
         },
       },
     ],
