@@ -243,8 +243,18 @@ async function handleFlaunch({
 export const flaunchTool = {
   tool: getTool({
     name: "flaunch",
-    // FIXME: make it descriptive in terms of the params to pass
-    description: "Flaunch a new coin",
+    description: `
+This tool allows launching a new coin using the Flaunch protocol. 60% of the supply is allocated to the fair launch, creator gets 80% of the fees.
+
+It takes:
+- ticker: (required) The ticker of the coin to flaunch. DON'T hallucinate or make up a ticker if the user doesn't provide one.
+
+- image: (optional) The image url
+- startingMarketCap: (optional) The starting market cap of the coin in USD. Between 100 and 10,000
+- feeReceiver: (optional) The ETH address of the creator that receives the fees
+
+If the required fields are not provided, ask the user to provide them. Ignore the optional fields.
+`,
     schema: flaunchSchema,
   }),
   handler: async (
