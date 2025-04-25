@@ -249,7 +249,7 @@ This tool allows launching a new coin using the Flaunch protocol. 60% of the sup
 It takes:
 - ticker: The ticker of the coin to flaunch
 
-- image: (optional) The image url
+- image: (optional) Attach the image of the coin to flaunch or the user can provide the image url.
 - startingMarketCap: (optional) The starting market cap of the coin in USD. Between 100 and 10,000
 - feeReceiver: (optional) The ETH address of the creator that receives the fees
 

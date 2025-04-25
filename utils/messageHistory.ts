@@ -77,6 +77,7 @@ export class MessageHistory {
   }
 
   getHistory(senderId: string): MessageHistoryEntry[] {
-    return this.history.get(senderId) || [];
+    const history = this.history.get(senderId) || [];
+    return history;
   }
 }

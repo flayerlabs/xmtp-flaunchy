@@ -8,6 +8,7 @@ import OpenAI from "openai";
 import { flaunchy } from "./characters/flaunchy";
 import { processMessage } from "./utils/llm";
 import { MessageHistory } from "./utils/messageHistory";
+import { RemoteAttachmentCodec } from "@xmtp/content-type-remote-attachment";
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -38,7 +39,7 @@ async function main() {
   // Configure client with persistent storage
   const client = await Client.create(signer, {
     env: XMTP_ENV as XmtpEnv,
-    codecs: [new WalletSendCallsCodec()],
+    codecs: [new WalletSendCallsCodec(), new RemoteAttachmentCodec()],
     dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
     dbEncryptionKey: encryptionKey,
   });
@@ -56,6 +57,14 @@ async function main() {
 
   for await (const message of await stream) {
     if (message) {
+      console.log("\n=== New Message Received ===");
+      console.log("Raw message:", {
+        content: message.content,
+        contentType: message.contentType,
+        senderInboxId: message.senderInboxId,
+        conversationId: message.conversationId,
+      });
+
       const response = await processMessage({
         client,
         openai,
@@ -69,6 +78,7 @@ async function main() {
         messageHistory.addMessage(message.senderInboxId, message, true);
       }
 
+      console.log("=== Message Processing Complete ===\n");
       console.log("Waiting for messages...");
     }
   }

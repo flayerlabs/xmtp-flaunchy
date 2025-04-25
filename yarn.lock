@@ -245,6 +245,7 @@ __metadata:
   resolution: "@examples/xmtp-flaunch@workspace:."
   dependencies:
     "@types/node": "npm:^22.14.1"
+    "@xmtp/content-type-remote-attachment": "npm:^2.0.2"
     "@xmtp/content-type-wallet-send-calls": "npm:^1.0.1"
     "@xmtp/node-sdk": "npm:^2.0.5"
     ai: "npm:^4.2.9"
@@ -317,6 +318,13 @@ __metadata:
   version: 1.8.0
   resolution: "@noble/hashes@npm:1.8.0"
   checksum: 10c0/06a0b52c81a6fa7f04d67762e08b2c476a00285858150caeaaff4037356dd5e119f45b2a530f638b77a5eeca013168ec1b655db41bae3236cb2e9d511484fc77
+  languageName: node
+  linkType: hard
+
+"@noble/secp256k1@npm:^2.2.3":
+  version: 2.2.3
+  resolution: "@noble/secp256k1@npm:2.2.3"
+  checksum: 10c0/d88c9c239ae6b1b7aeacf4212f84ab12dff51e12b1a221f52830cf275e19c66af9bd1bdbde2104090f5b1eb4325e24309eded312aa322104ec43f6c8b0877807
   languageName: node
   linkType: hard
 
@@ -508,6 +516,17 @@ __metadata:
   dependencies:
     "@xmtp/proto": "npm:^3.78.0"
   checksum: 10c0/84ea3432e65e7f0483b5f396e1169e47d6f18201085b8f47e0f4e1d80d6573b97716f654acdef0390f2a3de987e6227cdceed99e446a0b60e4a0f116d4f6dded
+  languageName: node
+  linkType: hard
+
+"@xmtp/content-type-remote-attachment@npm:^2.0.2":
+  version: 2.0.2
+  resolution: "@xmtp/content-type-remote-attachment@npm:2.0.2"
+  dependencies:
+    "@noble/secp256k1": "npm:^2.2.3"
+    "@xmtp/content-type-primitives": "npm:^2.0.2"
+    "@xmtp/proto": "npm:^3.78.0"
+  checksum: 10c0/aacec27d001b4707c3a3c0bf3aa0402839e6e59deced0d777ff21906d21a6771b43bfe07d944d7269ca422a3f0f47bd227bbc6fef181307c3533abdb0606ab72
   languageName: node
   linkType: hard
 

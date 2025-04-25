@@ -11,6 +11,7 @@
     "start": "tsx index.ts"
   },
   "dependencies": {
+    "@xmtp/content-type-remote-attachment": "^2.0.2",
     "@xmtp/content-type-wallet-send-calls": "^1.0.1",
     "@xmtp/node-sdk": "^2.0.5",
     "ai": "^4.2.9",

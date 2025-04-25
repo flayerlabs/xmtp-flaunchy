@@ -1,9 +1,14 @@
 import type { Client, DecodedMessage, Signer } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { OPENAI_TOOLS, TOOL_REGISTRY } from "../tools";
 import type { Character, ToolCall, ToolContext } from "../types";
 import { generateCharacterContext } from "./character";
 import type { MessageHistory } from "./messageHistory";
+import {
+  ContentTypeRemoteAttachment,
+  type RemoteAttachment,
+} from "@xmtp/content-type-remote-attachment";
 
 // Message processing helper
 export async function processMessage({
@@ -22,15 +27,30 @@ export async function processMessage({
   messageHistory: MessageHistory;
 }): Promise<boolean> {
   if (
-    message.senderInboxId.toLowerCase() === client.inboxId.toLowerCase() ||
-    message.contentType?.typeId !== "text"
+    !message.content ||
+    message.senderInboxId === client.inboxId ||
+    message.contentType?.typeId === "wallet-send-calls"
   ) {
     return false;
   }
 
-  console.log(
-    `Received message: ${message.content as string} by ${message.senderInboxId}`
-  );
+  // Extract image URL from remote attachment if present
+  let imageUrl: string | undefined;
+  let messageText = message.content as string;
+
+  if (message.contentType?.sameAs(ContentTypeRemoteAttachment)) {
+    const attachment = message.content as RemoteAttachment;
+    if (attachment.url) {
+      try {
+        // Parse the JSON string from the URL field
+        const attachmentData = JSON.parse(attachment.url);
+        imageUrl = attachmentData.url;
+        messageText = attachmentData.text || "";
+      } catch (error) {
+        console.error("Error parsing attachment URL:", error);
+      }
+    }
+  }
 
   const conversation = await client.conversations.getConversationById(
     message.conversationId
@@ -42,22 +62,37 @@ export async function processMessage({
 
   try {
     // Add the incoming message to history before processing
-    messageHistory.addMessage(message.senderInboxId, message);
+    messageHistory.addMessage(
+      message.senderInboxId,
+      {
+        ...message,
+        content: messageText,
+      } as DecodedMessage,
+      false
+    );
 
     // Get conversation history for this sender
     const history = messageHistory.getHistory(message.senderInboxId);
 
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: generateCharacterContext(character) },
+      {
+        role: "system",
+        content: `You are ${character.name}. ${
+          imageUrl
+            ? `The user has sent an image: ${imageUrl}. Use this image for the flaunch if they want to flaunch a coin.`
+            : ""
+        } Respond naturally in your character's voice. Never repeat the user's message verbatim.`,
+      },
+      ...history.map((entry) => ({
+        role: entry.role as "user" | "assistant",
+        content: entry.content,
+      })),
+    ];
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
-      messages: [
-        { role: "system", content: generateCharacterContext(character) },
-        // Add a reminder about the character's role
-        {
-          role: "system",
-          content: `You are ${character.name}. Respond naturally in your character's voice. Never repeat the user's message verbatim.`,
-        },
-        ...history, // The history already contains properly formatted role: "user" or "assistant" messages
-      ],
+      messages,
       tools: OPENAI_TOOLS,
       stream: true,
     });
@@ -95,6 +130,11 @@ export async function processMessage({
         string,
         unknown
       >;
+
+      // Add image URL to flaunch args if present
+      if (toolCall.function.name === "flaunch" && imageUrl) {
+        rawArgs.image = imageUrl;
+      }
 
       if (toolCall.function.name in TOOL_REGISTRY) {
         const toolHandler = TOOL_REGISTRY[toolCall.function.name];
