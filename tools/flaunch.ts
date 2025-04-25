@@ -10,7 +10,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { baseSepolia } from "viem/chains";
+import { baseSepolia, base } from "viem/chains";
 import { z } from "zod";
 import { FlaunchZapAddress } from "../addresses";
 import type { Character, ToolContext } from "../types";
@@ -20,7 +20,7 @@ import { generateTokenUri } from "../utils/ipfs";
 import { FlaunchZapAbi } from "../abi/FlaunchZap";
 import { resolveEns } from "../utils/ens";
 
-const chain = baseSepolia;
+const chain = base;
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
 
 export const flaunchSchema = z.object({
