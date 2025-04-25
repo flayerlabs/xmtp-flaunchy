@@ -18,6 +18,7 @@ import { getCharacterResponse } from "../utils/character";
 import { getTool, invalidArgsResponse } from "../utils/tool";
 import { generateTokenUri } from "../utils/ipfs";
 import { FlaunchZapAbi } from "../abi/FlaunchZap";
+import { resolveEns } from "../utils/ens";
 
 const chain = baseSepolia;
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
@@ -33,10 +34,16 @@ export const flaunchSchema = z.object({
     .describe(
       "The starting market cap of the coin in USD. Between 100 and 10,000"
     ),
-  feeReceivers: z
-    .array(z.string())
+  feeReceiver: z
+    .string()
     .optional()
-    .describe("The addresses of the fee receivers"),
+    .describe(
+      "The ETH address or .eth or .base.eth ENS of the fee receiver / creator"
+    ),
+  // feeReceivers: z
+  //   .array(z.string())
+  //   .optional()
+  //   .describe("The addresses of the fee receivers"),
 });
 
 export type FlaunchParams = z.infer<typeof flaunchSchema>;
@@ -67,11 +74,20 @@ const createFlaunchCalls = async ({
   const creatorFeeAllocationPercent = 80;
   const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
 
-  // Get the creator's address from the inboxId
-  const inboxState = await client.preferences.inboxStateFromInboxIds([
-    senderInboxId,
-  ]);
-  const creatorAddress = inboxState[0].identifiers[0].identifier;
+  // Get the creator's address - either from feeReceiver or inboxId
+  let creatorAddress: string;
+  if (args.feeReceiver) {
+    const resolvedAddress = await resolveEns(args.feeReceiver);
+    if (!resolvedAddress) {
+      throw new Error(`Could not resolve ENS name: ${args.feeReceiver}`);
+    }
+    creatorAddress = resolvedAddress;
+  } else {
+    const inboxState = await client.preferences.inboxStateFromInboxIds([
+      senderInboxId,
+    ]);
+    creatorAddress = inboxState[0].identifiers[0].identifier;
+  }
 
   // upload image & token uri to ipfs
   let tokenUri = "";
