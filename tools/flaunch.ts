@@ -72,17 +72,20 @@ const createFlaunchCalls = async ({
   const creatorAddress = inboxState[0].identifiers[0].identifier;
 
   // upload image & token uri to ipfs
-  const tokenUri = await generateTokenUri(args.ticker, {
-    pinataConfig: { jwt: process.env.PINATA_JWT! },
-    metadata: {
-      imageUrl: args.image ?? "",
-      description: "Flaunched via Flaunchy on XMTP",
-      websiteUrl: "",
-      discordUrl: "",
-      twitterUrl: "",
-      telegramUrl: "",
-    },
-  });
+  let tokenUri = "";
+  if (args.image) {
+    tokenUri = await generateTokenUri(args.ticker, {
+      pinataConfig: { jwt: process.env.PINATA_JWT! },
+      metadata: {
+        imageUrl: args.image,
+        description: "Flaunched via Flaunchy on XMTP",
+        websiteUrl: "",
+        discordUrl: "",
+        twitterUrl: "",
+        telegramUrl: "",
+      },
+    });
+  }
 
   const data = encodeFunctionData({
     abi: FlaunchPositionManagerAbi,
@@ -91,7 +94,7 @@ const createFlaunchCalls = async ({
       {
         name: args.ticker,
         symbol: args.ticker.toUpperCase(),
-        tokenUri: tokenUri,
+        tokenUri,
         initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10_000n,
         premineAmount: 0n,
         creator: creatorAddress as Address,
