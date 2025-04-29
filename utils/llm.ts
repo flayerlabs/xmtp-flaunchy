@@ -74,6 +74,9 @@ export async function processMessage({
     // Get conversation history for this sender
     const history = messageHistory.getHistory(message.senderInboxId);
 
+    // Check if this is the first message in the conversation
+    const isFirstMessage = history.length === 1; // Only the current message exists
+
     const messages: ChatCompletionMessageParam[] = [
       { role: "system", content: generateCharacterContext(character) },
       {
@@ -81,6 +84,10 @@ export async function processMessage({
         content: `You are ${character.name}. ${
           imageUrl
             ? `The user has sent an image: ${imageUrl}. Use this image for the flaunch if they want to flaunch a coin.`
+            : ""
+        } ${
+          isFirstMessage
+            ? "This is the first message in the conversation. Start with a brief, friendly introduction of yourself and your capabilities before responding to their message."
             : ""
         } Respond naturally in your character's voice. Never repeat the user's message verbatim.`,
       },
