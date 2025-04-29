@@ -74,6 +74,11 @@ const createFlaunchCalls = async ({
   const creatorFeeAllocationPercent = 80;
   const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
 
+  const inboxState = await client.preferences.inboxStateFromInboxIds([
+    senderInboxId,
+  ]);
+  const senderAddress = inboxState[0].identifiers[0].identifier;
+
   // Get the creator's address - either from feeReceiver or inboxId
   let creatorAddress: string;
   if (args.feeReceiver) {
@@ -83,10 +88,7 @@ const createFlaunchCalls = async ({
     }
     creatorAddress = resolvedAddress;
   } else {
-    const inboxState = await client.preferences.inboxStateFromInboxIds([
-      senderInboxId,
-    ]);
-    creatorAddress = inboxState[0].identifiers[0].identifier;
+    creatorAddress = senderAddress;
   }
 
   // upload image & token uri to ipfs
@@ -148,7 +150,7 @@ const createFlaunchCalls = async ({
 
   return {
     version: "1.0",
-    from: senderInboxId as Hex,
+    from: senderAddress,
     chainId: "0x" + chain.id.toString(16),
     calls: [
       {
