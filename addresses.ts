@@ -11,7 +11,6 @@ export const FlaunchPositionManagerAddress: Addresses = {
 };
 
 export const FlaunchZapAddress: Addresses = {
-  // FIXME: add base mainnet address
-  [base.id]: "0x0000000000000000000000000000000000000000",
+  [base.id]: "0xfa9e8528ee95eb109bffd1a2d59cb95b300a672a",
   [baseSepolia.id]: "0xB2F5D987DE90e026B61805e60b6002D367461474",
 };
