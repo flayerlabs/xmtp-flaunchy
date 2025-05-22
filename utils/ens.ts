@@ -4,15 +4,23 @@ import { mainnet } from "viem/chains";
 
 export const mainnetClient = createPublicClient({
   chain: mainnet,
-  transport: http(process.env.MAINNET_RPC_URL),
+  transport: http("https://eth.llamarpc.com"), // Using a public RPC endpoint
 });
 
 export const resolveEns = async (ens: string) => {
-  if (ens.endsWith(".eth")) {
-    return await mainnetClient.getEnsAddress({
-      name: normalize(ens),
-    });
-  } else {
-    return ens;
+  try {
+    if (ens.endsWith(".eth")) {
+      console.log("Resolving ENS:", ens);
+      const address = await mainnetClient.getEnsAddress({
+        name: normalize(ens),
+      });
+      console.log("Resolved ENS address:", address);
+      return address;
+    } else {
+      return ens;
+    }
+  } catch (error) {
+    console.error("Error resolving ENS:", error);
+    return ens; // Return original input if resolution fails
   }
 };

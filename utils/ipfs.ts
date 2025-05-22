@@ -1,3 +1,5 @@
+import axios from "axios";
+
 /**
  * Configuration for Pinata
  */
@@ -10,7 +12,7 @@ interface PinataConfig {
  */
 interface UploadResponse {
   IpfsHash: string;
-  PinSize: number;
+  PinSize?: number;
   Timestamp: string;
   isDuplicate: boolean;
 }
@@ -60,7 +62,7 @@ interface TokenUriParams {
  * @param params.metadata - Optional metadata key-value pairs
  * @returns Upload response with CID and other details
  */
-const uploadImageToIPFS = async (params: {
+export const uploadImageToIPFS = async (params: {
   pinataConfig: PinataConfig;
   base64Image: string;
   name?: string;
@@ -108,32 +110,23 @@ const uploadImageToIPFS = async (params: {
     };
     formData.append("pinataOptions", JSON.stringify(pinataOptions));
 
-    const response = await fetch(
+    const response = await axios.post(
       "https://api.pinata.cloud/pinning/pinFileToIPFS",
+      formData,
       {
-        method: "POST",
         headers: {
           Authorization: `Bearer ${params.pinataConfig.jwt}`,
+          "Content-Type": "multipart/form-data",
         },
-        body: formData,
+        timeout: 10000, // 10 second timeout
       }
     );
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(
-        `Failed to upload image to IPFS: ${
-          error.message || response.statusText
-        }`
-      );
-    }
-
-    const data = await response.json();
     return {
-      IpfsHash: data.IpfsHash,
-      PinSize: data.PinSize,
-      Timestamp: data.Timestamp,
-      isDuplicate: data.isDuplicate || false,
+      IpfsHash: response.data.IpfsHash,
+      PinSize: response.data.PinSize,
+      Timestamp: response.data.Timestamp,
+      isDuplicate: response.data.isDuplicate || false,
     };
   } catch (error) {
     if (error instanceof Error) {
@@ -235,32 +228,80 @@ const generateTokenUriBase64Image = async (
   return `ipfs://${metadataRes.IpfsHash}`;
 };
 
-export const generateTokenUri = async (
+export async function generateTokenUri(
   name: string,
-  params: TokenUriParams
-) => {
-  // 1. get base64Image from imageUrl
-  const response = await fetch(params.metadata.imageUrl);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image: ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const base64Image = Buffer.from(arrayBuffer).toString("base64");
-
-  // 2. generate token uri
-  const tokenUri = await generateTokenUriBase64Image(name, {
-    pinataConfig: params.pinataConfig,
+  {
+    pinataConfig,
+    metadata,
+  }: {
+    pinataConfig: PinataConfig;
     metadata: {
-      base64Image,
-      description: params.metadata.description,
-      websiteUrl: params.metadata.websiteUrl,
-      discordUrl: params.metadata.discordUrl,
-      twitterUrl: params.metadata.twitterUrl,
-      telegramUrl: params.metadata.telegramUrl,
-    },
-  });
+      imageUrl: string;
+      description: string;
+      websiteUrl: string;
+      discordUrl: string;
+      twitterUrl: string;
+      telegramUrl: string;
+    };
+  }
+): Promise<string> {
+  try {
+    console.log("Generating token URI for:", name);
+    console.log("Using image URL:", metadata.imageUrl);
 
-  return tokenUri;
-};
+    // If the image URL is already an IPFS URL, use it directly
+    const imageUrl = metadata.imageUrl.startsWith("ipfs://")
+      ? metadata.imageUrl
+      : await uploadImageToIPFS({
+          pinataConfig,
+          base64Image: metadata.imageUrl,
+          name: `${name}-image`,
+        }).then((res) => `ipfs://${res.IpfsHash}`);
+
+    console.log("Final image URL:", imageUrl);
+
+    const tokenMetadata = {
+      name,
+      description: metadata.description,
+      image: imageUrl,
+      external_url: metadata.websiteUrl,
+      attributes: [
+        {
+          trait_type: "Discord",
+          value: metadata.discordUrl,
+        },
+        {
+          trait_type: "Twitter",
+          value: metadata.twitterUrl,
+        },
+        {
+          trait_type: "Telegram",
+          value: metadata.telegramUrl,
+        },
+      ],
+    };
+
+    console.log("Uploading token metadata to IPFS:", tokenMetadata);
+
+    const response = await axios.post(
+      "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+      tokenMetadata,
+      {
+        headers: {
+          Authorization: `Bearer ${pinataConfig.jwt}`,
+        },
+        timeout: 10000, // 10 second timeout
+      }
+    );
+
+    console.log(
+      "Successfully uploaded token metadata, hash:",
+      response.data.IpfsHash
+    );
+
+    return `ipfs://${response.data.IpfsHash}`;
+  } catch (error) {
+    console.error("Error generating token URI:", error);
+    throw error;
+  }
+}

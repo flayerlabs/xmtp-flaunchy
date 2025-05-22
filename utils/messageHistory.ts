@@ -1,5 +1,5 @@
 import type { Client, DecodedMessage, Conversation } from "@xmtp/node-sdk";
-
+import fs from "fs";
 interface MessageHistoryEntry {
   role: "user" | "assistant";
   content: string;
@@ -22,6 +22,16 @@ export class MessageHistory {
       try {
         // Get messages for each conversation
         const messages = await conversation.messages();
+
+        // DEBUGGING: save the messages to local json
+        // Ensure msgs directory exists
+        if (!fs.existsSync("./msgs")) {
+          fs.mkdirSync("./msgs", { recursive: true });
+        }
+        fs.writeFileSync(
+          `./msgs/messages-${conversation.id}.json`,
+          JSON.stringify(messages, null, 2)
+        );
 
         // Group messages by sender
         for (const message of messages) {

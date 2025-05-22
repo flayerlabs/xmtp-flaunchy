@@ -19,6 +19,7 @@ import { getTool, invalidArgsResponse } from "../utils/tool";
 import { generateTokenUri } from "../utils/ipfs";
 import { FlaunchZapAbi } from "../abi/FlaunchZap";
 import { resolveEns } from "../utils/ens";
+import axios from "axios";
 
 const chain = base;
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
@@ -57,111 +58,107 @@ const createFlaunchCalls = async ({
   senderInboxId: string;
   client: Client;
 }) => {
-  const initialMarketCapUSD = args.startingMarketCap ?? 10_000;
-  const initialMCapInUSDCWei = parseUnits(initialMarketCapUSD.toString(), 6);
-  const initialPriceParams = encodeAbiParameters(
-    [
-      {
-        type: "uint256",
-      },
-    ],
-    [initialMCapInUSDCWei]
-  );
-
-  const fairLaunchPercent = 60;
-  const fairLaunchInBps = BigInt(fairLaunchPercent * 100);
-
-  const creatorFeeAllocationPercent = 80;
-  const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
-
-  const inboxState = await client.preferences.inboxStateFromInboxIds([
-    senderInboxId,
-  ]);
-  const senderAddress = inboxState[0].identifiers[0].identifier;
-
-  // Get the creator's address - either from feeReceiver or inboxId
-  let creatorAddress: string;
-  if (args.feeReceiver) {
-    const resolvedAddress = await resolveEns(args.feeReceiver);
-    if (!resolvedAddress) {
-      throw new Error(`Could not resolve ENS name: ${args.feeReceiver}`);
-    }
-    creatorAddress = resolvedAddress;
-  } else {
-    creatorAddress = senderAddress;
-  }
-
-  // upload image & token uri to ipfs
-  let tokenUri = "";
-  if (args.image) {
-    tokenUri = await generateTokenUri(args.ticker, {
-      pinataConfig: { jwt: process.env.PINATA_JWT! },
-      metadata: {
-        imageUrl: args.image,
-        description: "Flaunched via Flaunchy on XMTP",
-        websiteUrl: "",
-        discordUrl: "",
-        twitterUrl: "",
-        telegramUrl: "",
-      },
+  try {
+    console.log({
+      flaunchArgs: args,
     });
-  }
 
-  const data = encodeFunctionData({
-    abi: FlaunchZapAbi,
-    functionName: "flaunch",
-    args: [
-      // FlaunchParams
-      {
-        name: args.ticker,
-        symbol: args.ticker.toUpperCase(),
-        tokenUri,
-        initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10_000n,
-        fairLaunchDuration: 30n * 60n,
-        premineAmount: 0n,
-        creator: creatorAddress as Address,
-        creatorFeeAllocation: creatorFeeAllocationInBps,
-        flaunchAt: 0n,
-        initialPriceParams,
-        feeCalculatorParams: "0x",
-      },
-      // WhitelistParams
-      {
-        merkleRoot: zeroHash,
-        merkleIPFSHash: "",
-        maxTokens: 0n,
-      },
-      // AirdropParams
-      {
-        airdropIndex: 0n,
-        airdropAmount: 0n,
-        airdropEndTime: 0n,
-        merkleRoot: zeroHash,
-        merkleIPFSHash: "",
-      },
-      // TreasuryManagerParams
-      {
-        manager: zeroAddress,
-        initializeData: "0x",
-        depositData: "0x",
-      },
-    ],
-  });
-
-  return {
-    version: "1.0",
-    from: senderAddress,
-    chainId: "0x" + chain.id.toString(16),
-    calls: [
-      {
-        to: FlaunchZapAddress[chain.id],
-        data,
-        metadata: {
-          description: `Flaunch ${args.ticker} on ${chain.name}`,
+    const initialMarketCapUSD = args.startingMarketCap ?? 10_000;
+    const initialMCapInUSDCWei = parseUnits(initialMarketCapUSD.toString(), 6);
+    const initialPriceParams = encodeAbiParameters(
+      [
+        {
+          type: "uint256",
         },
-      },
-    ],
-  };
+      ],
+      [initialMCapInUSDCWei]
+    );
+
+    const fairLaunchPercent = 60;
+    const fairLaunchInBps = BigInt(fairLaunchPercent * 100);
+
+    const creatorFeeAllocationPercent = 80;
+    const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
+
+    const inboxState = await client.preferences.inboxStateFromInboxIds([
+      senderInboxId,
+    ]);
+    const senderAddress = inboxState[0].identifiers[0].identifier;
+
+    // Get the creator's address - either from feeReceiver or inboxId
+    let creatorAddress: string;
+    if (args.feeReceiver) {
+      console.log("Resolving ENS for fee receiver:", args.feeReceiver);
+      const resolvedAddress = await resolveEns(args.feeReceiver);
+      if (!resolvedAddress) {
+        throw new Error(`Could not resolve ENS name: ${args.feeReceiver}`);
+      }
+      creatorAddress = resolvedAddress;
+      console.log("Resolved fee receiver address:", creatorAddress);
+    } else {
+      creatorAddress = senderAddress;
+      console.log("Using sender address as creator:", creatorAddress);
+    }
+
+    // upload image & token uri to ipfs
+    let tokenUri = "";
+    if (args.image) {
+      console.log("Generating token URI with image:", args.image);
+      tokenUri = await generateTokenUri(args.ticker, {
+        pinataConfig: { jwt: process.env.PINATA_JWT! },
+        metadata: {
+          imageUrl: args.image,
+          description: "Flaunched via Flaunchy on XMTP",
+          websiteUrl: "",
+          discordUrl: "",
+          twitterUrl: "",
+          telegramUrl: "",
+        },
+      });
+      console.log("Generated token URI:", tokenUri);
+    }
+
+    // Prepare flaunch params
+    const flaunchParams = {
+      name: args.ticker,
+      symbol: args.ticker,
+      tokenUri,
+      initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10000n,
+      fairLaunchDuration: 0n,
+      premineAmount: 0n,
+      creator: creatorAddress as `0x${string}`,
+      creatorFeeAllocation: creatorFeeAllocationInBps,
+      flaunchAt: 0n,
+      initialPriceParams,
+      feeCalculatorParams: "0x" as `0x${string}`,
+    };
+
+    console.log("Prepared flaunch params:", flaunchParams);
+
+    // Encode the flaunch function call
+    const functionData = encodeFunctionData({
+      abi: FlaunchZapAbi,
+      functionName: "flaunch",
+      args: [flaunchParams],
+    });
+
+    console.log("Encoded function data");
+
+    // Return the wallet send calls
+    return {
+      calls: [
+        {
+          chainId: chain.id,
+          to: FlaunchZapAddress[chain.id],
+          data: functionData,
+          value: "0",
+        },
+      ],
+    };
+  } catch (error) {
+    console.error("Error in createFlaunchCalls:", error);
+    throw error;
+  }
 };
 
 async function handleFlaunch({
@@ -225,6 +222,10 @@ async function handleFlaunch({
       })
     );
 
+    console.log({
+      walletSendCalls: JSON.stringify(walletSendCalls, null, 2),
+    });
+
     await conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
   } catch (error: unknown) {
     console.error(
@@ -258,7 +259,7 @@ It takes:
 If the required fields are not provided, ask the user to provide them. Ignore the optional fields.
 `,
     llmInstructions:
-      "DON'T hallucinate or make up a ticker if the user doesn't provide one.",
+      "DON'T hallucinate or make up a ticker if the user doesn't provide one. Ask for the ticker if it's not provided.",
     schema: flaunchSchema,
   }),
   handler: async (
