@@ -185,7 +185,7 @@ async function fetchAndDecryptAttachment(
  * - message: The most recent message (attachment in this case)
  * - relatedMessages: Array containing the text message
  *
- * This ensures that commands like "flaunch" receive both the text and image
+ * This ensures that commands like "flaunch" or "group_flaunch" receive both the text and image
  * context together, preventing partial processing.
  */
 export async function processMessage({
@@ -301,7 +301,7 @@ export async function processMessage({
         role: "system",
         content: `You are ${character.name}. ${
           imageUrl
-            ? `The user has sent an image. Its IPFS URL is: ${imageUrl}. Use this image for the flaunch if they want to flaunch a coin.`
+            ? `The user has sent an image. Its IPFS URL is: ${imageUrl}. Use this image for the "flaunch" or "group_flaunch" tools if they want to flaunch a coin.`
             : ""
         } ${
           isFirstMessage
@@ -361,10 +361,17 @@ export async function processMessage({
         unknown
       >;
 
-      // Add image URL to flaunch args if present
-      if (toolCall.function.name === "flaunch" && imageUrl) {
+      // Add image URL to flaunch or group_flaunch args if present
+      if (
+        (toolCall.function.name === "flaunch" ||
+          toolCall.function.name === "group_flaunch") &&
+        imageUrl
+      ) {
         rawArgs.image = imageUrl;
-        console.log("Added image URL to flaunch args:", rawArgs);
+        console.log(
+          `Added image URL to ${toolCall.function.name} args:`,
+          rawArgs
+        );
       }
 
       if (toolCall.function.name in TOOL_REGISTRY) {

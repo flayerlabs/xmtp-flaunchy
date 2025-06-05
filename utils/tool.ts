@@ -94,7 +94,7 @@ export const getTool = ({
     function: {
       name,
       description: llmInstructions
-        ? `${description}\n\nLLM Instructions: ${llmInstructions}`
+        ? `${description}\n\n<important>LLM Instructions: ${llmInstructions}</important>`
         : description,
       parameters,
     },

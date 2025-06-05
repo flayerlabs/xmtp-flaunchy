@@ -11,17 +11,17 @@ import {
   type Hex,
 } from "viem";
 import { z } from "zod";
-import { FlaunchZapAddress } from "../addresses";
+import { AddressFeeSplitManagerAddress, FlaunchZapAddress } from "../addresses";
 import type { Character, ToolContext } from "../types";
 import { getCharacterResponse } from "../utils/character";
 import { getTool, invalidArgsResponse } from "../utils/tool";
 import { generateTokenUri } from "../utils/ipfs";
 import { FlaunchZapAbi } from "../abi/FlaunchZap";
-import { getDisplayName, resolveEns } from "../utils/ens";
 import { chain, TOTAL_SUPPLY } from "./constants";
 import { numToHex } from "../utils/hex";
+import { getDisplayName } from "../utils/ens";
 
-export const flaunchSchema = z.object({
+export const groupFlaunchSchema = z.object({
   ticker: z.string().describe("The ticker of the coin to flaunch"),
   image: z.string().optional().describe("The image of the coin to flaunch"),
   startingMarketCap: z
@@ -32,28 +32,20 @@ export const flaunchSchema = z.object({
     .describe(
       "The starting market cap of the coin in USD. Between 100 and 10,000"
     ),
-  feeReceiver: z
-    .string()
-    .optional()
-    .describe(
-      "The ETH address or .eth or .base.eth ENS of the fee receiver / creator"
-    ),
-  // feeReceivers: z
-  //   .array(z.string())
-  //   .optional()
-  //   .describe("The addresses of the fee receivers"),
 });
 
-export type FlaunchParams = z.infer<typeof flaunchSchema>;
+export type GroupFlaunchParams = z.infer<typeof groupFlaunchSchema>;
 
-const createFlaunchCalls = async ({
+const createGroupFlaunchCalls = async ({
   args,
   senderInboxId,
   client,
+  conversation,
 }: {
-  args: FlaunchParams;
+  args: GroupFlaunchParams;
   senderInboxId: string;
   client: Client;
+  conversation: Conversation;
 }) => {
   try {
     console.log({
@@ -82,20 +74,77 @@ const createFlaunchCalls = async ({
     ]);
     const senderAddress = inboxState[0].identifiers[0].identifier;
 
-    // Get the creator's address - either from feeReceiver or inboxId
-    let creatorAddress: string;
-    if (args.feeReceiver) {
-      console.log("Resolving ENS for fee receiver:", args.feeReceiver);
-      const resolvedAddress = await resolveEns(args.feeReceiver);
-      if (!resolvedAddress) {
-        throw new Error(`Could not resolve ENS name: ${args.feeReceiver}`);
+    // Get the creator's address - from inboxId
+    const creatorAddress = senderAddress;
+
+    // Get all the participants from the group, except the sender and this bot
+    const members = await conversation.members();
+    const feeReceivers: Address[] = [];
+
+    console.log(`Found ${members.length} total members in the group`);
+
+    for (const member of members) {
+      // Skip the sender and the bot
+      if (
+        member.inboxId !== senderInboxId &&
+        member.inboxId !== client.inboxId
+      ) {
+        // Get the address for this member
+        const memberInboxState =
+          await client.preferences.inboxStateFromInboxIds([member.inboxId]);
+        if (
+          memberInboxState.length > 0 &&
+          memberInboxState[0].identifiers.length > 0
+        ) {
+          const memberAddress = memberInboxState[0].identifiers[0]
+            .identifier as Address;
+          feeReceivers.push(memberAddress);
+          console.log(`Added fee receiver: ${memberAddress}`);
+        }
       }
-      creatorAddress = resolvedAddress;
-      console.log("Resolved fee receiver address:", creatorAddress);
-    } else {
-      creatorAddress = senderAddress;
-      console.log("Using sender address as creator:", creatorAddress);
     }
+
+    console.log(`Total fee receivers: ${feeReceivers.length}`);
+
+    const VALID_SHARE_TOTAL = 100_00000n; // 5 decimals as BigInt
+    const totalParticipants = BigInt(feeReceivers.length + 1); // +1 for the creator
+    const sharePerAddress = VALID_SHARE_TOTAL / totalParticipants;
+    const remainder = VALID_SHARE_TOTAL % totalParticipants;
+
+    // Generate initialize data for the fee split manager
+    const recipientShares = feeReceivers.map((receiver) => ({
+      recipient: receiver,
+      share: sharePerAddress,
+    }));
+
+    // Creator gets the base share plus any rounding remainder to ensure a valid share total
+    const creatorShare = sharePerAddress + remainder;
+
+    const initializeData = encodeAbiParameters(
+      [
+        {
+          type: "tuple",
+          name: "params",
+          components: [
+            { type: "uint256", name: "creatorShare" },
+            {
+              type: "tuple[]",
+              name: "recipientShares",
+              components: [
+                { type: "address", name: "recipient" },
+                { type: "uint256", name: "share" },
+              ],
+            },
+          ],
+        },
+      ],
+      [
+        {
+          creatorShare,
+          recipientShares,
+        },
+      ]
+    );
 
     // upload image & token uri to ipfs
     let tokenUri = "";
@@ -129,20 +178,58 @@ const createFlaunchCalls = async ({
       initialPriceParams,
       feeCalculatorParams: "0x" as `0x${string}`,
     };
+    const treasuryManagerParams = {
+      manager: AddressFeeSplitManagerAddress[chain.id],
+      initializeData: initializeData as `0x${string}`,
+      depositData: "0x" as `0x${string}`,
+    };
+    const whitelistParams = {
+      merkleRoot: zeroHash,
+      merkleIPFSHash: "",
+      maxTokens: 0n,
+    };
+    const airdropParams = {
+      airdropIndex: 0n,
+      airdropAmount: 0n,
+      airdropEndTime: 0n,
+      merkleRoot: zeroHash,
+      merkleIPFSHash: "",
+    };
 
-    console.log("Prepared flaunch params:", flaunchParams);
+    console.log("Prepared flaunch params:", {
+      flaunchParams,
+      creatorShare,
+      recipientShares,
+      treasuryManagerParams,
+      whitelistParams,
+      airdropParams,
+    });
 
     // Encode the flaunch function call
     const functionData = encodeFunctionData({
       abi: FlaunchZapAbi,
       functionName: "flaunch",
-      args: [flaunchParams],
+      args: [
+        flaunchParams,
+        whitelistParams,
+        airdropParams,
+        treasuryManagerParams,
+      ],
     });
 
     console.log("Encoded function data");
 
+    // Calculate percentages for display
+    const creatorPercentage = Number((creatorShare * 100n) / VALID_SHARE_TOTAL);
+    const recipientPercentage = Number(
+      (sharePerAddress * 100n) / VALID_SHARE_TOTAL
+    );
+
     // Resolve ENS names for display
     const creatorDisplayName = await getDisplayName(creatorAddress);
+    const recipientDisplayNames = await Promise.all(
+      feeReceivers.map((addr) => getDisplayName(addr))
+    );
 
     // Return the wallet send calls
     return {
@@ -156,7 +243,13 @@ const createFlaunchCalls = async ({
           data: functionData,
           value: "0",
           metadata: {
-            description: `Flaunching $${args.ticker} on ${chain.name}\nFor Creator: ${creatorDisplayName}`,
+            description: `Flaunching $${args.ticker} for the group on ${
+              chain.name
+            }\nwith Fee splits:\nCreator: ${creatorPercentage.toFixed(
+              2
+            )}% - ${creatorDisplayName}\nRecipients:\n${recipientDisplayNames
+              .map((name) => `${recipientPercentage.toFixed(2)}% - ${name}`)
+              .join("\n")}`,
           },
         },
       ],
@@ -167,7 +260,7 @@ const createFlaunchCalls = async ({
   }
 };
 
-async function handleFlaunch({
+async function handleGroupFlaunch({
   openai,
   character,
   conversation,
@@ -179,12 +272,12 @@ async function handleFlaunch({
   character: Character;
   conversation: Conversation;
   senderInboxId: string;
-  args: FlaunchParams;
+  args: GroupFlaunchParams;
   client: Client;
 }): Promise<string> {
   try {
     // Validate args using Zod schema
-    const validatedArgs = flaunchSchema.safeParse(args);
+    const validatedArgs = groupFlaunchSchema.safeParse(args);
 
     if (!validatedArgs.success) {
       await invalidArgsResponse({
@@ -210,10 +303,11 @@ async function handleFlaunch({
       );
     }
 
-    const walletSendCalls = await createFlaunchCalls({
+    const walletSendCalls = await createGroupFlaunchCalls({
       args: validatedArgs.data,
       senderInboxId,
       client,
+      conversation,
     });
 
     await conversation.send(
@@ -249,35 +343,34 @@ async function handleFlaunch({
   return "";
 }
 
-export const flaunchTool = {
+export const groupFlaunchTool = {
   tool: getTool({
-    name: "flaunch",
+    name: "group_flaunch",
     description: `
-This tool allows launching a new coin using the Flaunch protocol. 60% of the supply is allocated to the fair launch, creator gets 80% of the fees.
+This Group Flaunch tool allows launching a new coin using the Flaunch protocol. 80% of the fees are equally split between the group members. 60% of the supply is allocated to the fair launch.
 
 It takes:
 - ticker: The ticker of the coin to flaunch
 
 - image: (optional) Attach the image of the coin to flaunch or the user can provide the image url.
 - startingMarketCap: (optional) The starting market cap of the coin in USD. Between 100 and 10,000
-- feeReceiver: (optional) The ETH address of the creator that receives the fees
 
 If the required fields are not provided, ask the user to provide them. Ignore the optional fields.
 `,
     llmInstructions:
       "DON'T hallucinate or make up a ticker if the user doesn't provide one. Ask for the ticker if it's not provided.",
-    schema: flaunchSchema,
+    schema: groupFlaunchSchema,
   }),
   handler: async (
     context: ToolContext,
     args: Record<string, unknown> = {}
   ): Promise<string> => {
-    return handleFlaunch({
+    return handleGroupFlaunch({
       openai: context.openai,
       character: context.character,
       conversation: context.conversation,
       senderInboxId: context.senderInboxId,
-      args: args as FlaunchParams,
+      args: args as GroupFlaunchParams,
       client: context.client,
     });
   },

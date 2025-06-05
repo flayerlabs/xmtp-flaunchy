@@ -47,7 +47,7 @@ export async function getUSDCBalance(address: string): Promise<string> {
 export function createUSDCTransferCalls(
   fromAddress: string,
   recipientAddress: string,
-  amount: number,
+  amount: number
 ): WalletSendCallsParams {
   const methodSignature = "0xa9059cbb"; // Function signature for ERC20 'transfer(address,uint256)'
 
@@ -65,7 +65,9 @@ export function createUSDCTransferCalls(
         to: USDC_CONFIG.tokenAddress as `0x${string}`,
         data: transactionData as `0x${string}`,
         metadata: {
-          description: `Transfer ${amount / Math.pow(10, USDC_CONFIG.decimals)} USDC on Base Sepolia`,
+          description: `Transfer ${
+            amount / Math.pow(10, USDC_CONFIG.decimals)
+          } USDC on Base Sepolia`,
           transactionType: "transfer",
           currency: "USDC",
           amount: amount,
