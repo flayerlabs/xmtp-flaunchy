@@ -219,11 +219,11 @@ const createGroupFlaunchCalls = async ({
 
     console.log("Encoded function data");
 
-    // Calculate percentages for display
-    const creatorPercentage = Number((creatorShare * 100n) / VALID_SHARE_TOTAL);
-    const recipientPercentage = Number(
-      (sharePerAddress * 100n) / VALID_SHARE_TOTAL
-    );
+    // Calculate percentages for display with proper precision
+    const creatorPercentage =
+      (Number(creatorShare) / Number(VALID_SHARE_TOTAL)) * 100;
+    const recipientPercentage =
+      (Number(sharePerAddress) / Number(VALID_SHARE_TOTAL)) * 100;
 
     // Resolve ENS names for display
     const creatorDisplayName = await getDisplayName(creatorAddress);
