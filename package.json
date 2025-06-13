@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@xmtp/content-type-remote-attachment": "^2.0.2",
-    "@xmtp/content-type-wallet-send-calls": "^1.0.1",
-    "@xmtp/node-sdk": "^2.0.9",
+    "@xmtp/content-type-wallet-send-calls": "^2.0.0",
+    "@xmtp/node-sdk": "^2.1.0",
     "ai": "^4.2.9",
     "axios": "^1.9.0",
     "dotenv": "^16.5.0",

@@ -76,17 +76,17 @@ export interface ToolCall {
 export interface ToolContext {
   openai: OpenAI;
   character: Character;
-  conversation: Conversation;
+  conversation: Conversation<any>;
   senderInboxId: string;
   signer: Signer;
-  client: Client;
+  client: Client<any>;
 }
 
 export interface ToolHandler {
   tool: ChatCompletionTool;
   handler: (
     context: ToolContext,
-    args?: Record<string, unknown>,
+    args?: Record<string, unknown>
   ) => Promise<string>;
 }
 

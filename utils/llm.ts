@@ -43,8 +43,8 @@ async function fetchAndDecryptAttachment(
     decryptedData?: Uint8Array;
     decryptedMimeType?: string;
   },
-  client: Client,
-  conversation: Conversation,
+  client: Client<any>,
+  conversation: Conversation<any>,
   character: Character,
   openai: OpenAI
 ): Promise<string | undefined> {
@@ -197,7 +197,7 @@ export async function processMessage({
   messageHistory,
   relatedMessages,
 }: {
-  client: Client;
+  client: Client<any>;
   openai: OpenAI;
   character: Character;
   message: DecodedMessage;

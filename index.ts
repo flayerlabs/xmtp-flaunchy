@@ -53,9 +53,9 @@ class MessageCoordinator {
     }
   >;
   private waitTimeMs: number; // How long to wait for the counterpart message
-  private client: Client; // XMTP client instance for attachment decoding
+  private client: Client<any>; // XMTP client instance for attachment decoding
 
-  constructor(client: Client, waitTimeMs = 1000) {
+  constructor(client: Client<any>, waitTimeMs = 1000) {
     this.messageQueue = new Map();
     this.waitTimeMs = waitTimeMs;
     this.client = client; // Store client for use in RemoteAttachmentCodec.load

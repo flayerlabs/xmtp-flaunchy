@@ -14,7 +14,7 @@ export class MessageHistory {
     this.maxMessages = maxMessages;
   }
 
-  async loadHistoricalMessages(client: Client) {
+  async loadHistoricalMessages(client: Client<any>) {
     // Get all conversations
     const conversations = await client.conversations.list();
 
