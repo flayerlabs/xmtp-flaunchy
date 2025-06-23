@@ -102,22 +102,10 @@ class MessageCoordinator {
           url: remoteAttachmentContent.url,
         });
 
-        console.log(
-          "Attempting to decrypt attachment in MessageCoordinator..."
-        );
         const decryptedAttachment = (await RemoteAttachmentCodec.load(
           remoteAttachmentContent,
           this.client
         )) as Attachment;
-
-        console.log(
-          "Successfully decrypted attachment in MessageCoordinator:",
-          {
-            filename: decryptedAttachment.filename,
-            mimeType: decryptedAttachment.mimeType,
-            dataLength: decryptedAttachment.data.length,
-          }
-        );
 
         // Store the decrypted data directly on the message content for later use.
         // The `llm.ts/fetchAndDecryptAttachment` can use this to avoid re-decrypting.
@@ -260,6 +248,12 @@ async function main() {
 
       // Process only non-readReceipt messages
       if (message.contentType?.typeId !== "readReceipt") {
+        // Skip transaction receipt messages that come as '...'
+        if (typeof message.content === 'string' && message.content.trim() === '...') {
+          console.log(`[MessageCoordinator] Skipping transaction receipt message from ${message.senderInboxId}`);
+          continue;
+        }
+        
         // Pass the message to the coordinator. The coordinator will decide when and how to call the processor.
         await messageCoordinator.processMessage(message, async (messages) => {
           // The processor callback receives an array of messages (1 or 2).

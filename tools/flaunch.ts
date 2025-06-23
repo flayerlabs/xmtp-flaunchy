@@ -100,7 +100,6 @@ const createFlaunchCalls = async ({
     // upload image & token uri to ipfs
     let tokenUri = "";
     if (args.image) {
-      console.log("Generating token URI with image:", args.image);
       tokenUri = await generateTokenUri(args.ticker, {
         pinataConfig: { jwt: process.env.PINATA_JWT! },
         metadata: {

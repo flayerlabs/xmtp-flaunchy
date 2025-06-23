@@ -1,0 +1,103 @@
+export interface UserState {
+  userId: string;
+  status: 'new' | 'onboarding' | 'active';
+  onboardingProgress?: OnboardingProgress;
+  coins: UserCoin[];
+  groups: UserGroup[];
+  preferences: UserPreferences;
+  pendingTransaction?: PendingTransaction;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface OnboardingProgress {
+  step: 'group_creation' | 'coin_creation' | 'username_collection' | 'completed';
+  coinData?: {
+    name?: string;
+    ticker?: string;
+    image?: string;
+  };
+  splitData?: {
+    receivers: Array<{
+      username: string;
+      resolvedAddress?: string;
+      percentage?: number;
+    }>;
+    equalSplit: boolean;
+    creatorPercent?: number;
+    managerAddress?: string; // Address of deployed AddressFeeSplitManager
+  };
+  groupData?: {
+    managerAddress?: string;
+    txHash?: string;
+  };
+  startedAt: Date;
+  completedAt?: Date;
+}
+
+export interface UserCoin {
+  ticker: string;
+  name: string;
+  image: string;
+  groupId: string;
+  contractAddress?: string;
+  txHash?: string;
+  launched: boolean;
+  fairLaunchDuration: number;
+  fairLaunchPercent: number;
+  initialMarketCap: number;
+  createdAt: Date;
+  // Live data from API
+  liveData?: {
+    totalHolders: number;
+    marketCapUSDC: string;
+    priceChangePercentage: number;
+    totalFeesUSDC: string;
+    lastUpdated: Date;
+  };
+}
+
+export interface UserGroup {
+  id: string; // This is the contract address
+  type: 'username_split' | 'staking_split';
+  receivers: Array<{
+    username: string;
+    resolvedAddress: string;
+    percentage: number;
+  }>;
+  coins: string[]; // Array of ticker symbols
+  createdAt: Date;
+  updatedAt: Date;
+  // Live data from API
+  liveData?: {
+    recipients: Array<{
+      recipient: string;
+      recipientShare: string;
+    }>;
+    totalFeesUSDC: string;
+    totalCoins: number;
+    lastUpdated: Date;
+  };
+}
+
+export interface UserPreferences {
+  defaultMarketCap?: number;
+  defaultFairLaunchPercent?: number;
+  defaultFairLaunchDuration?: number;
+  notificationSettings?: {
+    launchUpdates: boolean;
+    priceAlerts: boolean;
+  };
+}
+
+export interface PendingTransaction {
+  type: 'group_creation' | 'coin_creation';
+  txHash?: string;
+  coinData?: {
+    name: string;
+    ticker: string;
+    image: string;
+  };
+  network: 'base' | 'base-sepolia';
+  timestamp: Date;
+} 

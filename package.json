@@ -6,9 +6,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx --watch index.ts",
+    "dev:new": "tsx --watch src/main.ts",
+    "cleanup": "tsx ./scripts/cleanup.ts",
+    "full-cleanup": "tsx ./scripts/full-cleanup.ts",
     "gen:keys": "tsx ./scripts/generateKeys.ts",
     "lint": "yarn eslint examples/xmtp-flaunch",
-    "start": "tsx index.ts"
+    "start": "tsx index.ts",
+    "start:new": "tsx src/main.ts"
   },
   "dependencies": {
     "@xmtp/content-type-remote-attachment": "^2.0.2",

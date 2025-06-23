@@ -82,13 +82,20 @@ const createGroupFlaunchCalls = async ({
     const feeReceivers: Address[] = [];
 
     console.log(`Found ${members.length} total members in the group`);
+    console.log(`Group members analysis:`);
+    console.log(`- Sender InboxId: ${senderInboxId}`);
+    console.log(`- Bot InboxId: ${client.inboxId}`);
 
     for (const member of members) {
+      console.log(`Processing member: ${member.inboxId}`);
+      
       // Skip the sender and the bot
       if (
         member.inboxId !== senderInboxId &&
         member.inboxId !== client.inboxId
       ) {
+        console.log(`  → Including member ${member.inboxId} as fee receiver`);
+        
         // Get the address for this member
         const memberInboxState =
           await client.preferences.inboxStateFromInboxIds([member.inboxId]);
@@ -99,12 +106,18 @@ const createGroupFlaunchCalls = async ({
           const memberAddress = memberInboxState[0].identifiers[0]
             .identifier as Address;
           feeReceivers.push(memberAddress);
-          console.log(`Added fee receiver: ${memberAddress}`);
+          console.log(`  → Added fee receiver: ${memberAddress}`);
+        } else {
+          console.log(`  → Could not get address for member ${member.inboxId}`);
         }
+      } else {
+        const reason = member.inboxId === senderInboxId ? 'sender' : 'bot';
+        console.log(`  → Skipping member ${member.inboxId} (${reason})`);
       }
     }
 
-    console.log(`Total fee receivers: ${feeReceivers.length}`);
+    console.log(`Total fee receivers that will be included in transaction: ${feeReceivers.length}`);
+    console.log(`Fee receiver addresses:`, feeReceivers);
 
     const VALID_SHARE_TOTAL = 100_00000n; // 5 decimals as BigInt
     const totalParticipants = BigInt(feeReceivers.length + 1); // +1 for the creator
