@@ -29,11 +29,10 @@ export class FlowRouter {
       return;
     }
 
-    const intentResult = await this.intentClassifier.classifyIntent(context.messageText, context.userState);
-    const flowType = this.intentToFlowType(intentResult.intent, context.userState);
+    // PRIORITY: Check if user is in active onboarding - keep them there unless it's a clear QA request
+    const flowType = await this.determineFlowType(context);
     const flow = this.flows[flowType];
     
-    console.log(`[FlowRouter] Intent: ${intentResult.intent} (confidence: ${intentResult.confidence.toFixed(2)}) - ${intentResult.reasoning}`);
     console.log(`[FlowRouter] Routing to ${flowType} flow for user ${context.userState.userId}`);
     
     try {
@@ -42,6 +41,36 @@ export class FlowRouter {
       console.error(`[FlowRouter] Error in ${flowType} flow:`, error);
       await context.sendResponse("sorry, something went wrong. please try again or type 'help' for assistance.");
     }
+  }
+
+  private async determineFlowType(context: FlowContext): Promise<FlowType> {
+    const { userState, messageText } = context;
+    
+    // PRIORITY 1: Active onboarding - keep user in onboarding unless clear QA
+    if ((userState.status === 'onboarding' || userState.status === 'new') && userState.onboardingProgress) {
+      // Only allow QA for clear help requests
+      if (this.isQARequest(messageText)) {
+        console.log(`[FlowRouter] User in onboarding but requesting help - routing to QA`);
+        return 'qa';
+      }
+      
+      console.log(`[FlowRouter] User in active onboarding (status: ${userState.status}, step: ${userState.onboardingProgress.step}) - keeping in onboarding`);
+      return 'onboarding';
+    }
+
+    // PRIORITY 2: Use intent classification for other cases
+    const intentResult = await this.intentClassifier.classifyIntent(messageText, userState);
+    const flowType = this.intentToFlowType(intentResult.intent, userState);
+    
+    console.log(`[FlowRouter] Intent: ${intentResult.intent} (confidence: ${intentResult.confidence.toFixed(2)}) - ${intentResult.reasoning}`);
+    
+    return flowType;
+  }
+
+  private isQARequest(message: string): boolean {
+    const qaKeywords = ['help', 'what', 'how', 'explain', 'tell me', '?'];
+    const lowerMessage = message.toLowerCase();
+    return qaKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
   private intentToFlowType(intent: MessageIntent, userState?: UserState): FlowType {

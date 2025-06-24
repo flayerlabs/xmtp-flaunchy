@@ -44,11 +44,11 @@ export interface GroupCreationResult {
 export async function createAddressFeeSplitManager(
   receivers: FeeReceiver[],
   creatorAddress: Address,
-  creatorPercent: number = 60
+  creatorPercent: number = 0
 ): Promise<GroupCreationResult> {
   
-  // Calculate recipient shares
-  const totalReceiverPercent = 100 - creatorPercent;
+  // Calculate recipient shares - creator gets 0%, all fees go to recipients
+  const totalReceiverPercent = 100;
   const recipientShares = receivers.map(receiver => {
     const sharePercent = receiver.percentage || (totalReceiverPercent / receivers.length);
     return {
@@ -59,7 +59,7 @@ export async function createAddressFeeSplitManager(
 
   // Create the InitializeParams structure
   const initializeParamsStruct = {
-    creatorShare: BigInt(creatorPercent * 100000), // Convert to basis points
+    creatorShare: BigInt(0), // Creator always gets 0%
     recipientShares: recipientShares
   };
 
@@ -106,7 +106,7 @@ export async function deployAddressFeeSplitManager(
   creatorAddress: Address,
   privateKey: string,
   rpcUrl: string,
-  creatorPercent: number = 60
+  creatorPercent: number = 0
 ): Promise<GroupCreationResult> {
   
   // Create clients
@@ -120,8 +120,8 @@ export async function deployAddressFeeSplitManager(
     transport: http(rpcUrl)
   });
 
-  // Calculate recipient shares (same as above)
-  const totalReceiverPercent = 100 - creatorPercent;
+  // Calculate recipient shares - creator gets 0%, all fees go to recipients
+  const totalReceiverPercent = 100;
   const recipientShares = receivers.map(receiver => {
     const sharePercent = receiver.percentage || (totalReceiverPercent / receivers.length);
     return {
@@ -131,7 +131,7 @@ export async function deployAddressFeeSplitManager(
   });
 
   const initializeParamsStruct = {
-    creatorShare: BigInt(creatorPercent * 100000),
+    creatorShare: BigInt(0), // Creator always gets 0%
     recipientShares: recipientShares
   };
 

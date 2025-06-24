@@ -116,18 +116,37 @@ const createGroupFlaunchCalls = async ({
       }
     }
 
-    console.log(`Total fee receivers that will be included in transaction: ${feeReceivers.length}`);
-    console.log(`Fee receiver addresses:`, feeReceivers);
+    console.log(`Total fee receivers before deduplication: ${feeReceivers.length}`);
+    console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
 
+    // Deduplicate fee receivers - combine shares for duplicate addresses (case-insensitive)
+    const addressShareMap = new Map<Address, bigint>();
     const VALID_SHARE_TOTAL = 100_00000n; // 5 decimals as BigInt
-    const totalParticipants = BigInt(feeReceivers.length + 1); // +1 for the creator
+    
+    // First pass: calculate equal share per unique address (case-insensitive)
+    const uniqueFeeReceivers = [...new Set(feeReceivers.map(addr => addr.toLowerCase() as Address))];
+    const totalParticipants = BigInt(uniqueFeeReceivers.length + 1); // +1 for the creator
     const sharePerAddress = VALID_SHARE_TOTAL / totalParticipants;
     const remainder = VALID_SHARE_TOTAL % totalParticipants;
 
-    // Generate initialize data for the fee split manager
-    const recipientShares = feeReceivers.map((receiver) => ({
+    // Build the address share map by counting duplicates (case-insensitive)
+    for (const receiver of feeReceivers) {
+      const normalizedAddress = receiver.toLowerCase() as Address;
+      const currentShare = addressShareMap.get(normalizedAddress) || 0n;
+      addressShareMap.set(normalizedAddress, currentShare + sharePerAddress);
+    }
+
+    console.log(`Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`);
+    console.log(`Deduplicated fee receiver shares:`, Array.from(addressShareMap.entries()).map(([addr, share]) => ({
+      address: addr,
+      share: share.toString(),
+      percentage: (Number(share) / Number(VALID_SHARE_TOTAL) * 100).toFixed(2) + '%'
+    })));
+
+    // Generate initialize data for the fee split manager using deduplicated addresses
+    const recipientShares = Array.from(addressShareMap.entries()).map(([receiver, share]) => ({
       recipient: receiver,
-      share: sharePerAddress,
+      share: share,
     }));
 
     // Creator gets the base share plus any rounding remainder to ensure a valid share total
@@ -235,13 +254,15 @@ const createGroupFlaunchCalls = async ({
     // Calculate percentages for display with proper precision
     const creatorPercentage =
       (Number(creatorShare) / Number(VALID_SHARE_TOTAL)) * 100;
-    const recipientPercentage =
-      (Number(sharePerAddress) / Number(VALID_SHARE_TOTAL)) * 100;
 
-    // Resolve ENS names for display
+    // Resolve ENS names for display using deduplicated addresses
     const creatorDisplayName = await getDisplayName(creatorAddress);
-    const recipientDisplayNames = await Promise.all(
-      feeReceivers.map((addr) => getDisplayName(addr))
+    const recipientDisplayData = await Promise.all(
+      Array.from(addressShareMap.entries()).map(async ([addr, share]) => ({
+        address: addr,
+        name: await getDisplayName(addr),
+        percentage: (Number(share) / Number(VALID_SHARE_TOTAL)) * 100
+      }))
     );
 
     // Return the wallet send calls
@@ -260,8 +281,8 @@ const createGroupFlaunchCalls = async ({
               chain.name
             }\nwith Fee splits:\nCreator: ${creatorPercentage.toFixed(
               2
-            )}% - ${creatorDisplayName}\nRecipients:\n${recipientDisplayNames
-              .map((name) => `${recipientPercentage.toFixed(2)}% - ${name}`)
+            )}% - ${creatorDisplayName}\nRecipients:\n${recipientDisplayData
+              .map((data) => `${data.percentage.toFixed(2)}% - ${data.name}`)
               .join("\n")}`,
           },
         },

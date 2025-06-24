@@ -10,6 +10,9 @@ import {
   RemoteAttachmentCodec,
   AttachmentCodec,
 } from "@xmtp/content-type-remote-attachment";
+import { 
+  TransactionReferenceCodec 
+} from "@xmtp/content-type-transaction-reference";
 
 // New architecture imports
 import { FileStateStorage } from "./core/storage/StateStorage";
@@ -24,6 +27,7 @@ import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoor
 // Initialize codecs globally
 const attachmentCodec = new AttachmentCodec();
 const remoteAttachmentCodec = new RemoteAttachmentCodec();
+const transactionReferenceCodec = new TransactionReferenceCodec();
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -68,6 +72,7 @@ async function main() {
       new WalletSendCallsCodec(),
       remoteAttachmentCodec,
       attachmentCodec,
+      transactionReferenceCodec,
     ],
     dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
     dbEncryptionKey: encryptionKey,

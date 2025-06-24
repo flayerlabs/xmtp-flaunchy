@@ -2,7 +2,7 @@ import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
 import { getCharacterResponse } from "../../../utils/character";
 
-type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'general_help';
+type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'create_group' | 'general_help';
 
 export class ManagementFlow extends BaseFlow {
   constructor() {
@@ -30,6 +30,9 @@ export class ManagementFlow extends BaseFlow {
       case 'add_coin':
         await this.handleAddCoin(context);
         break;
+      case 'create_group':
+        await this.handleCreateGroup(context);
+        break;
       default:
         await this.handleGeneralManagement(context);
         break;
@@ -50,14 +53,16 @@ ACTION OPTIONS:
 1. list_groups - User wants to see their groups (examples: "show my groups", "do I have any groups?", "my groups", "list groups")
 2. list_coins - User wants to see their coins (examples: "show my coins", "do I have any coins?", "my coins", "list coins")  
 3. add_coin - User wants to add/launch a new coin (examples: "add coin", "launch coin", "create new coin")
-4. general_help - General management help or unclear request
+4. create_group - User wants to create a new group (examples: "create group", "launch group", "new group", "another group")
+5. general_help - General management help or unclear request
 
 RULES:
 - Questions about "having" or "owning" groups/coins should map to list_groups/list_coins
 - Requests to "show", "see", "view" should map to the appropriate list action
+- Group creation requests should map to create_group
 - Focus on the main intent of the message
 
-Respond with ONLY the action name: list_groups, list_coins, add_coin, or general_help`;
+Respond with ONLY the action name: list_groups, list_coins, add_coin, create_group, or general_help`;
 
     try {
       const response = await context.openai.chat.completions.create({
@@ -69,7 +74,7 @@ Respond with ONLY the action name: list_groups, list_coins, add_coin, or general
 
       const action = response.choices[0]?.message?.content?.trim().toLowerCase();
       
-      if (action && ['list_groups', 'list_coins', 'add_coin', 'general_help'].includes(action)) {
+      if (action && ['list_groups', 'list_coins', 'add_coin', 'create_group', 'general_help'].includes(action)) {
         console.log(`[ManagementFlow] Action classified as: ${action}`);
         return action as ManagementAction;
       }
@@ -171,6 +176,33 @@ Respond with ONLY the action name: list_groups, list_coins, add_coin, or general
     
     // Note: The actual coin launch will be handled by CoinLaunchFlow 
     // when user provides coin details in their next message
+  }
+
+  private async handleCreateGroup(context: FlowContext): Promise<void> {
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: `
+        User wants to create a new group (they already have ${context.userState.groups.length} existing groups).
+        
+        Explain that they can create additional groups for different fee splits.
+        Ask for the fee receivers for this new group:
+        - Farcaster usernames (@alice)
+        - ENS names (alice.eth)
+        - Ethereum addresses (0x123...)
+        - Optional percentages like "@alice 30%, @bob 70%"
+        - Or they can say "add everyone" to include all group chat members
+        
+        Be helpful and use your character's personality.
+        Mention this will create a separate group they can launch coins into.
+      `
+    });
+
+    await this.sendResponse(context, response);
+    
+    // Note: The actual group creation will need to be handled by a separate flow
+    // or we need to add group creation logic to ManagementFlow
+    // TODO: Implement group creation for existing users
   }
 
   private async handleGeneralManagement(context: FlowContext): Promise<void> {
