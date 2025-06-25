@@ -1,4 +1,5 @@
 import { FlowContext } from "../types/FlowContext";
+import { isAddress } from "viem";
 
 export abstract class BaseFlow {
   protected name: string;
@@ -53,7 +54,7 @@ export abstract class BaseFlow {
 
   // Helper for validating Ethereum addresses
   protected isValidEthereumAddress(address: string): boolean {
-    return /^0x[a-fA-F0-9]{40}$/.test(address);
+    return isAddress(address);
   }
 
   // Helper for parsing percentages

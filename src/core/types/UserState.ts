@@ -2,6 +2,7 @@ export interface UserState {
   userId: string;
   status: 'new' | 'onboarding' | 'active';
   onboardingProgress?: OnboardingProgress;
+  managementProgress?: ManagementProgress;
   coins: UserCoin[];
   groups: UserGroup[];
   preferences: UserPreferences;
@@ -46,6 +47,8 @@ export interface UserCoin {
   fairLaunchDuration: number;
   fairLaunchPercent: number;
   initialMarketCap: number;
+  chainId: number; // Store which chain this coin was launched on
+  chainName: 'base' | 'base-sepolia'; // Human-readable chain name
   createdAt: Date;
   // Live data from API
   liveData?: {
@@ -66,6 +69,8 @@ export interface UserGroup {
     percentage: number;
   }>;
   coins: string[]; // Array of ticker symbols
+  chainId: number; // Store which chain this group was launched on
+  chainName: 'base' | 'base-sepolia'; // Human-readable chain name
   createdAt: Date;
   updatedAt: Date;
   // Live data from API
@@ -100,4 +105,23 @@ export interface PendingTransaction {
   };
   network: 'base' | 'base-sepolia';
   timestamp: Date;
+}
+
+export interface ManagementProgress {
+  action: 'creating_group' | 'adding_coin';
+  step: 'collecting_fee_receivers' | 'collecting_coin_details' | 'creating_transaction';
+  groupCreationData?: {
+    receivers?: Array<{
+      username: string;
+      resolvedAddress?: string;
+      percentage?: number;
+    }>;
+  };
+  coinCreationData?: {
+    name?: string;
+    ticker?: string;
+    image?: string;
+    targetGroupId?: string;
+  };
+  startedAt: Date;
 } 

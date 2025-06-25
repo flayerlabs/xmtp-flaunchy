@@ -1,3 +1,5 @@
+import { ChainConfig, SUPPORTED_CHAINS } from "../flows/utils/ChainSelection";
+
 export interface GroupData {
   id: string;
   recipients: Array<{
@@ -5,9 +7,8 @@ export interface GroupData {
     recipientShare: string;
   }>;
   holdings: Array<{
-    id: string;
     collectionToken: {
-      id: string;
+      id: string; // Contract address
       name: string;
       symbol: string;
       imageId: string;
@@ -40,7 +41,7 @@ export class GraphQLService {
     }
   }
 
-  async fetchGroupData(groupAddresses: string[]): Promise<GroupData[]> {
+  async fetchGroupData(groupAddresses: string[], chainConfig?: ChainConfig): Promise<GroupData[]> {
     if (groupAddresses.length === 0) {
       return [];
     }
@@ -56,8 +57,7 @@ export class GraphQLService {
             recipientShare
           }
           holdings {
-            id
-            collectionToken{
+            collectionToken {
               id
               name
               symbol
@@ -65,7 +65,7 @@ export class GraphQLService {
               totalHolders
               marketCapUSDC
               priceChangePercentage
-              pool{
+              pool {
                 totalFeesUSDC
               }
             }
@@ -75,17 +75,27 @@ export class GraphQLService {
     `;
 
     try {
+      // Prepare headers
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      // Add chain header if not Base Mainnet
+      if (chainConfig && chainConfig.name !== 'base') {
+        headers['x-chain-id'] = chainConfig.id.toString();
+      }
+
       console.log('🔍 FETCHING GROUP DATA', {
         url: `${this.apiUrl}/graphql`,
         addresses: groupAddresses,
+        chain: chainConfig ? `${chainConfig.displayName} (${chainConfig.id})` : 'Base Mainnet (default)',
+        headers: chainConfig && chainConfig.name !== 'base' ? { 'x-chain-id': headers['x-chain-id'] } : 'none',
         query: query.trim()
       });
 
       const response = await fetch(`${this.apiUrl}/graphql`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ query }),
       });
 
@@ -102,10 +112,10 @@ export class GraphQLService {
 
       console.log('✅ GROUP DATA FETCHED', {
         groupCount: result.data.addressFeeSplitManagers.length,
+        chain: chainConfig ? chainConfig.displayName : 'Base Mainnet',
         groups: result.data.addressFeeSplitManagers.map(g => ({
           id: g.id,
-          holdingsCount: g.holdings.length,
-          recipientsCount: g.recipients.length
+          holdingsCount: g.holdings.length
         }))
       });
 
@@ -116,8 +126,22 @@ export class GraphQLService {
     }
   }
 
-  async fetchSingleGroupData(groupAddress: string): Promise<GroupData | null> {
-    const results = await this.fetchGroupData([groupAddress]);
+  async fetchSingleGroupData(groupAddress: string, chainConfig?: ChainConfig): Promise<GroupData | null> {
+    const results = await this.fetchGroupData([groupAddress], chainConfig);
     return results.length > 0 ? results[0] : null;
+  }
+
+  /**
+   * Fetch groups by chain - returns groups filtered by the specified chain
+   */
+  async fetchGroupsByChain(groupAddresses: string[], chainConfig: ChainConfig): Promise<{ groups: GroupData[], chainInfo: { name: string, displayName: string } }> {
+    const groups = await this.fetchGroupData(groupAddresses, chainConfig);
+    return {
+      groups,
+      chainInfo: {
+        name: chainConfig.name,
+        displayName: chainConfig.displayName
+      }
+    };
   }
 } 

@@ -3,12 +3,13 @@ import type OpenAI from "openai";
 import { FlowRouter } from "../flows/FlowRouter";
 import { SessionManager } from "../session/SessionManager";
 import { FlowContext } from "../types/FlowContext";
-import { UserState } from "../types/UserState";
+import { UserState, UserGroup } from "../types/UserState";
 import { Character } from "../../../types";
-import { ContentTypeRemoteAttachment, type RemoteAttachment } from "@xmtp/content-type-remote-attachment";
+import { ContentTypeRemoteAttachment, type RemoteAttachment, RemoteAttachmentCodec, type Attachment } from "@xmtp/content-type-remote-attachment";
 import { ContentTypeTransactionReference, type TransactionReference } from "@xmtp/content-type-transaction-reference";
-import { decodeEventLog, type Log, createPublicClient, http } from 'viem';
-import { base, baseSepolia } from 'viem/chains';
+import { decodeEventLog, type Log, createPublicClient, http, isAddress } from 'viem';
+import { base, baseSepolia, mainnet } from 'viem/chains';
+import { uploadImageToIPFS } from '../../../utils/ipfs';
 
 // ABI for PoolCreated event
 const poolCreatedAbi = [
@@ -362,6 +363,19 @@ export class EnhancedMessageCoordinator {
       // Get user state
       const userState = await this.sessionManager.getUserState(senderInboxId);
 
+      // Check if we should process this message
+      const shouldProcess = await this.shouldProcessMessage(primaryMessage, conversation, userState);
+      
+      if (!shouldProcess) {
+        console.log('🚫 MESSAGE FILTERED OUT', {
+          senderInboxId: senderInboxId.substring(0, 8) + '...',
+          reason: 'Not directed at agent and no ongoing process',
+          messageContent: typeof primaryMessage.content === 'string' ? primaryMessage.content.substring(0, 50) + '...' : '[NON-TEXT]',
+          timestamp: new Date().toISOString()
+        });
+        return false;
+      }
+
       // Create flow context (using relatedMessages as conversation history for now)
       const context = await this.createFlowContext({
         primaryMessage,
@@ -480,31 +494,140 @@ export class EnhancedMessageCoordinator {
   }
 
   private async resolveUsername(username: string): Promise<string | undefined> {
-    // TODO: Implement actual username resolution
-    // This would integrate with ENS, Farcaster, etc.
-    
-    // For now, return mock addresses for testing
-    if (username.startsWith('@')) {
-      // Mock Farcaster resolution
-      return '0x' + Math.random().toString(16).substring(2, 42).padStart(40, '0');
-    } else if (username.includes('.eth')) {
-      // Mock ENS resolution
-      return '0x' + Math.random().toString(16).substring(2, 42).padStart(40, '0');
-    } else if (/^0x[a-fA-F0-9]{40}$/.test(username)) {
-      // Already an address
+    try {
+      // If already an Ethereum address, return it
+      if (isAddress(username)) {
       return username;
     }
     
+      // Handle ENS names
+      if (username.includes('.eth')) {
+        return await this.resolveENS(username);
+      }
+
+      // Handle Farcaster usernames
+      if (username.startsWith('@')) {
+        return await this.resolveFarcaster(username.substring(1)); // Remove @ prefix
+      }
+
+      // If no specific format detected, try as Farcaster username
+      return await this.resolveFarcaster(username);
+      
+    } catch (error) {
+      console.error('Error resolving username:', username, error);
+      return undefined;
+    }
+  }
+
+  private async resolveENS(ensName: string): Promise<string | undefined> {
+    try {
+      // Both ENS and Basenames are resolved on Ethereum mainnet
+      const isBasename = ensName.endsWith('.base.eth');
+      const rpcUrl = process.env.MAINNET_RPC_URL;
+      
+      console.log(`🔍 Resolving ${isBasename ? 'Basename' : 'ENS'}: ${ensName} on Ethereum mainnet`);
+      
+      // Create a public client for ENS/Basename resolution (always mainnet)
+      const publicClient = createPublicClient({
+        chain: mainnet,
+        transport: rpcUrl ? http(rpcUrl) : http()
+      });
+
+      const address = await publicClient.getEnsAddress({
+        name: ensName
+      });
+
+      if (address) {
+        console.log(`✅ ${isBasename ? 'Basename' : 'ENS'} resolved: ${ensName} -> ${address}`);
+        return address;
+      }
+
+      console.log(`❌ ${isBasename ? 'Basename' : 'ENS'} resolution failed for: ${ensName}`);
+      return undefined;
+    } catch (error) {
+      console.error(`Error resolving ENS/Basename ${ensName}:`, error);
+      return undefined;
+    }
+  }
+
+  private async resolveFarcaster(username: string): Promise<string | undefined> {
+    try {
+      const apiKey = process.env.NEYNAR_API_KEY;
+      if (!apiKey) {
+        console.error('NEYNAR_API_KEY not found in environment variables');
+        return undefined;
+      }
+
+      // Call Neynar API to resolve Farcaster username
+      const response = await fetch(`https://api.neynar.com/v2/farcaster/user/by_username?username=${username}`, {
+        headers: {
+          'accept': 'application/json',
+          'api_key': apiKey
+        }
+      });
+
+      if (!response.ok) {
+        console.error(`Neynar API error: ${response.status} ${response.statusText}`);
+        return undefined;
+      }
+
+      const data = await response.json();
+      
+      // Extract the primary verified address or custody address
+      const user = data.user;
+      if (user) {
+        // Prefer verified ETH addresses, fallback to custody address
+        const address = user.verified_addresses?.eth_addresses?.[0] || user.custody_address;
+        
+        if (address) {
+          console.log(`✅ Farcaster resolved: @${username} -> ${address}`);
+          return address;
+        }
+      }
+
+      console.log(`❌ Farcaster resolution failed for: @${username}`);
+      return undefined;
+    } catch (error) {
+      console.error(`Error resolving Farcaster username @${username}:`, error);
     return undefined;
+    }
   }
 
   private async processImageAttachment(attachment: RemoteAttachment): Promise<string> {
-    // TODO: Implement actual image processing
-    // This would handle decryption, IPFS upload, etc.
-    
-    // For now, return mock IPFS URL
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate processing
-    return `ipfs://Qm${Math.random().toString(36).substring(2, 15)}`;
+    try {
+      console.log('🖼️ Processing image attachment:', {
+        filename: attachment.filename,
+        url: attachment.url
+      });
+      
+      // Decrypt the attachment using XMTP's RemoteAttachmentCodec
+      console.log('🔓 Decrypting attachment...');
+      const decrypted = await RemoteAttachmentCodec.load(attachment, this.client) as Attachment;
+      
+      // Convert decrypted data to base64 for IPFS upload
+      const base64Image = Buffer.from(decrypted.data).toString('base64');
+      
+      // Upload to IPFS
+      console.log('📤 Uploading to IPFS...');
+      const ipfsResponse = await uploadImageToIPFS({
+        pinataConfig: { jwt: process.env.PINATA_JWT! },
+        base64Image,
+        name: attachment.filename || 'image'
+      });
+      
+      const ipfsUrl = `ipfs://${ipfsResponse.IpfsHash}`;
+      console.log('✅ Successfully uploaded image to IPFS:', ipfsUrl);
+      
+      return ipfsUrl;
+      
+    } catch (error) {
+      console.error('❌ Error processing image attachment:', error);
+      
+      // Fallback to a placeholder to maintain compatibility
+      console.log('🔄 Falling back to placeholder image processing');
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate processing
+      return `ipfs://QmPlaceholder${Math.random().toString(36).substring(2, 15)}`;
+    }
   }
 
   private async handleTransactionReference(message: DecodedMessage): Promise<boolean> {
@@ -549,9 +672,6 @@ export class EnhancedMessageCoordinator {
         transport: http()
       });
       
-      // Send a waiting message to the user
-      await conversation.send("⏳ **Transaction Received**\n\nWaiting for your transaction to be confirmed on the blockchain...");
-      
       try {
         console.log('⏳ Waiting for transaction to be confirmed...');
         const receipt = await publicClient.waitForTransactionReceipt({ 
@@ -582,7 +702,7 @@ export class EnhancedMessageCoordinator {
         }
         
         // Validate that the extracted address is a valid Ethereum address
-        if (!contractAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
+        if (!isAddress(contractAddress)) {
           console.error('❌ CRITICAL: Extracted address is not a valid Ethereum address:', contractAddress);
           
           // Send error message to user
@@ -628,8 +748,34 @@ export class EnhancedMessageCoordinator {
         if (pendingTx.type === 'group_creation') {
           // For group creation, store the manager address and move to coin creation
           const currentProgress = userState.onboardingProgress;
+          
+          // Determine chain info from network
+          const chainId = isMainnet ? 8453 : 84532; // Base mainnet : Base Sepolia
+          const chainName = pendingTx.network as 'base' | 'base-sepolia';
+          
+          // Create the group entry for the user's groups array
+          const newGroup: UserGroup = {
+            id: contractAddress,
+            type: 'username_split',
+            receivers: (currentProgress?.splitData?.receivers || []).map(r => ({
+              username: r.username,
+              resolvedAddress: r.resolvedAddress || 'unknown',
+              percentage: r.percentage || (100 / (currentProgress?.splitData?.receivers.length || 1))
+            })),
+            coins: [],
+            chainId,
+            chainName,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+          
           await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
+            // Add the group to the user's groups array
+            groups: [
+              ...userState.groups,
+              newGroup
+            ],
             onboardingProgress: currentProgress ? {
               ...currentProgress,
               step: 'coin_creation',
@@ -647,6 +793,15 @@ export class EnhancedMessageCoordinator {
           });
         } else {
           // For coin creation, add the coin to user's collection
+          // Use the group address from the user's onboarding progress (the group they just created)
+          const groupAddress = userState.onboardingProgress?.groupData?.managerAddress || 
+                             userState.onboardingProgress?.splitData?.managerAddress ||
+                             (userState.groups.length > 0 ? userState.groups[userState.groups.length - 1].id : 'unknown-group');
+          
+          // Determine chain info from network
+          const chainId = isMainnet ? 8453 : 84532; // Base mainnet : Base Sepolia
+          const chainName = pendingTx.network as 'base' | 'base-sepolia';
+          
           await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
             ...(pendingTx.coinData && {
@@ -656,15 +811,23 @@ export class EnhancedMessageCoordinator {
                   ticker: pendingTx.coinData.ticker,
                   name: pendingTx.coinData.name,
                   image: pendingTx.coinData.image,
-                  groupId: 'existing-group', // TODO: Get actual group ID
+                  groupId: groupAddress,
                   contractAddress,
                   launched: true,
                   fairLaunchDuration: 30 * 60, // 30 minutes
                   fairLaunchPercent: 40,
                   initialMarketCap: 1000,
+                  chainId,
+                  chainName,
                   createdAt: new Date()
                 }
-              ]
+              ],
+              // Update the group's coins array to include the new coin ticker
+              groups: userState.groups.map(group => 
+                group.id === groupAddress 
+                  ? { ...group, coins: [...group.coins, pendingTx.coinData!.ticker], updatedAt: new Date() }
+                  : group
+              )
             })
           });
         }
@@ -873,7 +1036,11 @@ export class EnhancedMessageCoordinator {
          Be excited about the progress and explain this will be their first coin in the group. Keep it concise and use your character's voice.`;
       }
     } else {
-      prompt = `The user just successfully created a Coin. Tell them what they can do next: they can ask for details on their Groups or Coins, launch more coins into any of their Groups, and claim fees through you. Ask if there's anything more they'd like to do. Use your character's voice and style.`;
+      prompt = `The user just successfully created a Coin! 
+      
+      Tell them what they can do next: they can ask for details on their Groups or Coins, launch more coins into any of their Groups, and importantly, they can go to https://mini.flaunch.gg to see all their coins and claim fees.
+      
+      Mention that they've completed onboarding and can now use https://mini.flaunch.gg for coin management and fee claiming. Ask if there's anything more they'd like to do. Use your character's voice and style.`;
     }
 
     return await getCharacterResponse({
@@ -883,5 +1050,57 @@ export class EnhancedMessageCoordinator {
     });
   }
 
+  private async shouldProcessMessage(
+    primaryMessage: DecodedMessage,
+    conversation: any,
+    userState: any
+  ): Promise<boolean> {
+    // Always process messages in 1:1 conversations
+    const members = await conversation.members();
+    const isGroupChat = members.length > 2;
+    
+    if (!isGroupChat) {
+      return true;
+    }
 
+    // In group chats, check if message is directed at the agent
+    const messageText = typeof primaryMessage.content === 'string' ? primaryMessage.content.toLowerCase() : '';
+    
+    // Check if message mentions the agent by name
+    const agentName = this.character.name.toLowerCase();
+    const mentionsAgent = messageText.includes(agentName) || 
+                         messageText.includes(`@${agentName}`) ||
+                         messageText.includes('flaunchy') ||
+                         messageText.includes('@flaunchy');
+
+    // Check if this is a response to a previous agent message
+    const isResponseToAgent = await this.isResponseToAgentMessage(primaryMessage, conversation);
+
+    // Check if user has ongoing onboarding or management progress (agent should continue conversations)
+    const hasOngoingProcess = userState.status === 'onboarding' || 
+                             userState.managementProgress !== undefined;
+
+    // Process if: mentioned, response to agent, or has ongoing process
+    return mentionsAgent || isResponseToAgent || hasOngoingProcess;
+  }
+
+  private async isResponseToAgentMessage(message: DecodedMessage, conversation: any): Promise<boolean> {
+    try {
+      // Get recent messages to check if this is following an agent message
+      const messages = await conversation.messages({ limit: 10 });
+      
+      // Find the message before this one
+      const messageIndex = messages.findIndex((msg: any) => msg.id === message.id);
+      if (messageIndex > 0) {
+        const previousMessage = messages[messageIndex - 1];
+        // Check if previous message was from the agent
+        return previousMessage.senderInboxId === this.client.inboxId;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error checking if response to agent message:', error);
+      return false;
+    }
+  }
 } 

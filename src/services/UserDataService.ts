@@ -90,18 +90,20 @@ export class UserDataService {
    */
   private async injectCoinData(coins: UserCoin[], apiDataMap: Map<string, GroupData>): Promise<UserCoin[]> {
     return coins.map(coin => {
-      if (!coin.contractAddress) {
-        return coin;
-      }
-
-      // Find the coin in any group's holdings
+      // Find the coin in any group's holdings by matching contract address (ID)
       for (const [groupId, groupData] of apiDataMap.entries()) {
-        const holding = groupData.holdings.find(h => 
-          h.collectionToken.id.toLowerCase() === coin.contractAddress!.toLowerCase()
-        );
+        const holding = groupData.holdings.find(h => {
+          // Primary match: by contract address (most reliable)
+          if (coin.contractAddress) {
+            return h.collectionToken.id.toLowerCase() === coin.contractAddress.toLowerCase();
+          }
+          // Fallback: by ticker symbol (for coins without contract address yet)
+          return h.collectionToken.symbol.toLowerCase() === coin.ticker.toLowerCase();
+        });
 
         if (holding) {
           console.log(`✅ Injecting data for coin ${coin.ticker}:`, {
+            contractAddress: holding.collectionToken.id,
             marketCapUSDC: holding.collectionToken.marketCapUSDC,
             totalHolders: holding.collectionToken.totalHolders,
             priceChange: holding.collectionToken.priceChangePercentage

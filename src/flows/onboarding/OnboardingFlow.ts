@@ -1,31 +1,25 @@
-import { BaseFlow } from "../../core/flows/BaseFlow";
-import { FlowContext } from "../../core/types/FlowContext";
-import { getCharacterResponse } from "../../../utils/character";
 import { ContentTypeRemoteAttachment } from "@xmtp/content-type-remote-attachment";
 import { ContentTypeWalletSendCalls } from "@xmtp/content-type-wallet-send-calls";
-import { NETWORK_CONFIG } from "../../config/networks";
-import { createLaunchExtractionPrompt, LaunchExtractionResult } from "./launchExtractionTemplate";
 import { 
-  encodeFunctionData, 
   encodeAbiParameters, 
+  encodeFunctionData,
   parseUnits, 
-  zeroAddress, 
-  zeroHash,
-  type Address
+  zeroHash
 } from "viem";
-import { baseSepolia } from "viem/chains";
-import { FlaunchZapAddress, AddressFeeSplitManagerAddress, TreasuryManagerFactoryAddress } from "../../../addresses";
 import { FlaunchZapAbi } from "../../../abi/FlaunchZap";
-import { TreasuryManagerFactoryAbi } from "../../../abi/TreasuryManagerFactory";
-import { generateTokenUri } from "../../../utils/ipfs";
+import { AddressFeeSplitManagerAddress, FlaunchZapAddress } from "../../../addresses";
+import { getCharacterResponse } from "../../../utils/character";
 import { numToHex } from "../../../utils/hex";
-import { createAddressFeeSplitManager } from "../../utils/groupCreation";
+import { generateTokenUri } from "../../../utils/ipfs";
+import { BaseFlow } from "../../core/flows/BaseFlow";
+import { FlowContext } from "../../core/types/FlowContext";
+import { GroupCreationUtils } from "../utils/GroupCreationUtils";
+import { createLaunchExtractionPrompt, LaunchExtractionResult } from "./launchExtractionTemplate";
+import { detectChainFromMessage, getChainDescription, getNetworkName, DEFAULT_CHAIN, ChainConfig } from "../utils/ChainSelection";
+import { ENSResolverService } from "../../services/ENSResolverService";
 
 // Constants for token launch
 const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei
-const chain = baseSepolia; // Force Base Sepolia for onboarding flow
-
-// Using LaunchExtractionResult from launchExtractionTemplate.ts
 
 export class OnboardingFlow extends BaseFlow {
   constructor() {
@@ -133,6 +127,180 @@ export class OnboardingFlow extends BaseFlow {
       return;
     }
 
+    // PRIORITY: Check for pending transaction inquiries using LLM
+    const messageText = this.extractMessageText(context);
+    if (userState.pendingTransaction && messageText) {
+      const transactionResponse = await this.handleTransactionInquiryWithLLM(context, messageText);
+      if (transactionResponse) {
+        await this.sendResponse(context, transactionResponse);
+        return;
+      }
+    }
+
+    // PRIORITY: Check for explicit group creation requests regardless of current step
+    if (messageText && this.isExplicitGroupCreationRequest(messageText)) {
+      this.log('Explicit group creation request detected, switching to group creation', {
+        userId: userState.userId,
+        currentStep: progress.step,
+        messageText: messageText.substring(0, 100)
+      });
+      
+      // Switch to group creation step
+      await context.updateState({
+        onboardingProgress: {
+          ...progress,
+          step: 'group_creation'
+        }
+      });
+      
+      await this.handleGroupCreation(context);
+      return;
+    }
+
+    // If user has pending transaction, check if they want to modify it or create new one
+    if (userState.pendingTransaction && messageText) {
+      const modificationPrompt = `
+        User has a pending group creation transaction and said: "${messageText}"
+        
+        Are they trying to:
+        1. Modify/add to the existing transaction (add someone, change receivers)
+        2. Create a completely new transaction (different group setup)
+        3. Just asking about the existing transaction
+        
+        Return ONLY:
+        "modify" - if they want to add/change receivers in current transaction
+        "new" - if they want to create a completely different group
+        "inquiry" - if they're just asking about current transaction
+      `;
+
+      const modificationResponse = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: modificationPrompt }],
+        temperature: 0.1,
+        max_tokens: 20
+      });
+
+      const userIntent = modificationResponse.choices[0]?.message?.content?.trim();
+      
+      if (userIntent === 'inquiry') {
+        // Let the transaction inquiry handler deal with it
+        const inquiryResponse = await this.handleTransactionInquiryWithLLM(context, messageText);
+        if (inquiryResponse) {
+          await this.sendResponse(context, inquiryResponse);
+          return;
+        }
+      } else if (userIntent === 'modify') {
+        // User wants to modify existing transaction - extract new receivers and combine
+        this.log('User wants to modify existing transaction', {
+          userId: userState.userId,
+          messageText: messageText.substring(0, 100)
+        });
+
+        const existingReceivers = userState.onboardingProgress?.splitData?.receivers || [];
+        const extraction = await this.extractLaunchDetails(context);
+        
+        if (extraction && extraction.feeReceivers && extraction.feeReceivers.receivers) {
+          // Resolve new receivers
+          const newReceivers = await GroupCreationUtils.resolveUsernames(
+            context,
+            extraction.feeReceivers.receivers.map(r => ({
+              username: r.identifier === 'SELF_REFERENCE' ? context.creatorAddress : r.identifier,
+              percentage: r.percentage || undefined
+            }))
+          );
+
+          // Combine existing and new receivers, avoiding duplicates
+          const combinedReceivers = [...existingReceivers];
+          for (const newReceiver of newReceivers) {
+            const exists = combinedReceivers.some(existing => 
+              existing.resolvedAddress?.toLowerCase() === newReceiver.resolvedAddress?.toLowerCase()
+            );
+            if (!exists && newReceiver.resolvedAddress) {
+              combinedReceivers.push(newReceiver);
+            }
+          }
+
+          // Detect chain preference
+          const selectedChain = detectChainFromMessage(messageText);
+
+          // Create new transaction with combined receivers
+          const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+            combinedReceivers,
+            context.creatorAddress,
+            selectedChain,
+            "Create Group"
+          );
+
+          // Update state with combined receivers
+          await context.updateState({
+            onboardingProgress: {
+              ...userState.onboardingProgress!,
+              splitData: {
+                receivers: combinedReceivers,
+                equalSplit: !combinedReceivers.some(r => r.percentage),
+                creatorPercent: 0
+              }
+            },
+            pendingTransaction: {
+              type: 'group_creation',
+              network: getNetworkName(selectedChain),
+              timestamp: new Date()
+            }
+          });
+
+          // Send the wallet transaction
+          await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
+
+          const response = await getCharacterResponse({
+            openai: context.openai,
+            character: context.character,
+            prompt: `
+              Perfect! I've successfully updated your PENDING group creation transaction to include ${combinedReceivers.length} receivers (including the new one you added).
+              
+              This is still a pending transaction - the group hasn't been created yet. You can continue to modify it or sign it to create the group.
+              
+              Sign the transaction to create your group with the updated fee splitting! You can ask questions about it or say "cancel" if needed.
+              
+              Keep it concise and encouraging. Use your character's voice.
+            `
+          });
+
+          await this.sendResponse(context, response);
+          return;
+        } else {
+          // If extraction failed, ask for clarification
+          const response = await getCharacterResponse({
+            openai: context.openai,
+            character: context.character,
+            prompt: `
+              I couldn't understand who you want to add to your group. Please specify:
+              - Farcaster usernames (@alice)
+              - ENS names (alice.eth)
+              - Ethereum addresses (0x123...)
+              - Or say "add everyone" to include all chat members
+              
+              Who would you like to add to your group?
+              
+              Keep it simple and helpful. Use your character's voice.
+            `
+          });
+
+          await this.sendResponse(context, response);
+          return;
+        }
+      }
+      
+      // If not modifying, clear the pending transaction since they're providing new input
+      this.log('Clearing pending transaction due to new user input', {
+        userId: userState.userId,
+        currentNetwork: userState.pendingTransaction.network
+      });
+      
+      await context.updateState({
+        pendingTransaction: undefined
+      });
+    }
+
     switch (progress.step) {
       case 'group_creation':
         await this.handleGroupCreation(context);
@@ -181,9 +349,14 @@ export class OnboardingFlow extends BaseFlow {
       openai: context.openai,
       character: context.character,
       prompt: `
-        Welcome a new user and explain how Groups and Coins work. Context: ${conversationContext}
+        A new user just greeted you! Give them a proper introduction and welcome. Context: ${conversationContext}
         
-        Explain the two-step process:
+        FIRST: Introduce yourself as Flaunchy
+        - You're a cat who helps people create fair token launches
+        - You build groups that split trading fees automatically
+        - You make crypto launches more collaborative and less scammy
+        
+        THEN: Explain how it works with the two-step process:
         
         STEP 1: Create a Group
         - Groups let you split trading fees from any coins launched in that group
@@ -195,14 +368,14 @@ export class OnboardingFlow extends BaseFlow {
         - Once your group is set up, you can launch unlimited coins into it
         - All coins in that group will split trading fees according to your group settings
         
-        Ask who should receive the trading fees for this group:
+        FINALLY: Ask who should receive the trading fees for this group:
         - Farcaster usernames (@alice)
         - ENS names (alice.eth)
         - Ethereum addresses (0x123...)
         - Percentages like "me 80%, @alice 20%" (or equal split)
         - Or just "me 100%" to keep everything
         
-        Be helpful and use your character's voice. Don't be overly excited or cringe.
+        Be welcoming and helpful. Use your character's voice. Don't be overly excited or cringe.
       `
     });
     
@@ -217,6 +390,12 @@ export class OnboardingFlow extends BaseFlow {
       userId: userState.userId,
       messageText: messageText?.substring(0, 100) + '...'
     });
+
+    // Check if user is asking a question about fee receivers or groups
+    if (messageText && this.isAskingAboutFeeReceivers(messageText)) {
+      await this.handleFeeReceiverExplanation(context);
+      return;
+    }
 
     // Check for reset commands
     if (messageText && (
@@ -236,13 +415,127 @@ export class OnboardingFlow extends BaseFlow {
       return;
     }
 
-    // Check for "add everyone" command first
-    if (messageText && messageText.toLowerCase().includes('add everyone')) {
-      await this.handleAddEveryone(context);
-      return;
+    // Check for "add everyone" command first with better pattern detection
+    if (messageText) {
+      const everyonePrompt = `
+        User message: "${messageText}"
+        
+        Is the user requesting to include all group chat members in the fee split?
+        Look for patterns like:
+        - "add everyone"
+        - "for everyone"
+        - "everyone in the chat"
+        - "all chat members"
+        - "include everyone"
+        - "all members"
+        - "everyone here"
+        - "split with everyone"
+        
+        Return ONLY:
+        "yes" - if they want to add all group members
+        "no" - if they're providing specific receivers or other intent
+      `;
+
+      const everyoneResponse = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: everyonePrompt }],
+        temperature: 0.1,
+        max_tokens: 10
+      });
+
+      const isAddEveryone = everyoneResponse.choices[0]?.message?.content?.trim() === 'yes';
+      
+      if (isAddEveryone) {
+        this.log('Detected "add everyone" request via LLM', {
+          userId: userState.userId,
+          messageText: messageText.substring(0, 100)
+        });
+        await this.handleAddEveryone(context);
+        return;
+      }
     }
 
-    // Extract fee receivers AND coin details from the message
+
+
+    // Detect chain preference from user message (this handles all chain detection naturally)
+    const selectedChain = detectChainFromMessage(messageText || '');
+    
+    this.log('Chain detected for onboarding group creation', {
+      userId: userState.userId,
+      chainName: selectedChain.displayName,
+      chainId: selectedChain.id
+    });
+
+    // Check if we have existing split data and the user is just switching chains
+    const existingSplitData = userState.onboardingProgress?.splitData;
+    const chainMentioned = messageText && (
+      messageText.toLowerCase().includes('sepolia') ||
+      messageText.toLowerCase().includes('mainnet') ||
+      messageText.toLowerCase().includes('base')
+    );
+    
+    // If user has existing split data and is just mentioning a chain, use existing data
+    if (existingSplitData && existingSplitData.receivers && existingSplitData.receivers.length > 0 && chainMentioned) {
+      this.log('User switching chains with existing fee receivers, preserving split data', {
+        userId: userState.userId,
+        existingReceivers: existingSplitData.receivers.length,
+        newChain: selectedChain.displayName
+      });
+
+      try {
+        // Create group transaction calls using existing split data
+        const splitData = {
+          receivers: existingSplitData.receivers,
+          equalSplit: existingSplitData.equalSplit,
+          creatorPercent: existingSplitData.creatorPercent || 0
+        };
+
+        const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+          existingSplitData.receivers,
+          context.creatorAddress,
+          selectedChain,
+          "Create Group"
+        );
+
+        // Update onboarding progress and send transaction
+        await context.updateState({
+          onboardingProgress: {
+            ...userState.onboardingProgress!,
+            splitData: existingSplitData // Keep existing split data
+          },
+          pendingTransaction: {
+            type: 'group_creation',
+            network: getNetworkName(selectedChain),
+            timestamp: new Date()
+          }
+        });
+
+        // Send the wallet transaction
+        await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
+
+        // Let user know what's happening
+        const response = await getCharacterResponse({
+          openai: context.openai,
+          character: context.character,
+          prompt: `
+            Perfect! I've preserved your fee receivers and updated the network settings.
+            
+            Sign the transaction to create your group with the same fee splitting setup!
+            
+            Keep it concise and encouraging. Use your character's voice.
+          `
+        });
+
+        await this.sendResponse(context, response);
+        return;
+
+      } catch (error) {
+        this.logError('Failed to create group with existing split data', error);
+        // Fall through to normal extraction if this fails
+      }
+    }
+
+    // Extract coin details from the message for later use
     const extraction = await this.extractLaunchDetails(context);
     
     // Store any coin details found during group creation
@@ -258,65 +551,82 @@ export class OnboardingFlow extends BaseFlow {
       });
     }
     
-    if (extraction && extraction.feeReceivers && extraction.feeReceivers.confidence >= 0.5 && extraction.feeReceivers.receivers) {
-      const { feeReceivers } = extraction;
-      
-      this.log('Fee receivers extracted', {
+    try {
+      // Use shared utility for group creation with selected chain
+      const result = await GroupCreationUtils.createGroupFromMessage(
+        context, 
+        selectedChain,
+        "Create Group"
+      );
+
+      if (result) {
+        this.log('Group creation successful, sending transaction', {
         userId: userState.userId,
-        receivers: feeReceivers.receivers,
-        confidence: feeReceivers.confidence
-      });
+          resolvedReceivers: result.resolvedReceivers,
+          chain: result.chainConfig.displayName
+        });
 
-      // Create the AddressFeeSplitManager deployment transaction
-      const receivers = feeReceivers.receivers!;
-      const splitData = {
-        receivers: receivers.map(r => ({
-          username: r.identifier,
-          resolvedAddress: r.identifier === 'SELF_REFERENCE' ? context.creatorAddress : r.identifier,
-          percentage: r.percentage || 0
-        })),
-        equalSplit: !receivers.some(r => r.percentage),
-        creatorPercent: 0 // Creator gets 0%, all fees go to specified recipients
-      };
-
-      // Update onboarding progress with coin data if found
-      if (extraction.tokenDetails && (extraction.tokenDetails.name || extraction.tokenDetails.ticker || extraction.tokenDetails.image)) {
-        await context.updateState({
-          onboardingProgress: {
-            ...userState.onboardingProgress!,
-            coinData: updatedCoinData
+        // Update onboarding progress with both group data and coin data
+          await context.updateState({
+            onboardingProgress: {
+              ...userState.onboardingProgress!,
+            coinData: updatedCoinData,
+            splitData: {
+              receivers: result.resolvedReceivers,
+              equalSplit: !result.resolvedReceivers.some(r => r.percentage),
+              creatorPercent: 0 // Creator gets 0%, all fees go to specified recipients
+            }
+          },
+          pendingTransaction: {
+            type: 'group_creation',
+            network: getNetworkName(result.chainConfig),
+            timestamp: new Date()
           }
         });
-      }
 
-      // Create group creation transaction
-      await this.createGroupCreationTransaction(context, splitData);
+        // Send the wallet transaction
+        await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
+
+        // Let user know what's happening
+        const response = await getCharacterResponse({
+          openai: context.openai,
+          character: context.character,
+          prompt: `
+            Perfect! Sign the transaction to create your group with the fee splitting you specified.
+            
+            You can ask me questions about the transaction or say "cancel" if you change your mind.
+            
+            Keep it concise and encouraging. Use your character's voice.
+          `
+        });
+
+        await this.sendResponse(context, response);
       
     } else {
-      // Ask for fee receivers with better explanation
+        // Ask for fee receivers if extraction failed
       const response = await getCharacterResponse({
         openai: context.openai,
         character: context.character,
         prompt: `
-          User didn't provide clear fee receiver information. Remind them about the group concept and ask for clarification.
-          
-          Explain:
-          - Groups let you split trading fees from coins launched in that group
-          - They can split with anyone (chat members, friends, collaborators, etc.)
-          - Or keep 100% for themselves if they want
-          
-          Ask them to specify who should receive trading fees:
+            User said "${messageText}" but I need to know who should receive the trading fees for your group.
+            
+            You can specify:
           - Farcaster usernames (@alice)
           - ENS names (alice.eth)
           - Ethereum addresses (0x123...)
-          - Percentages like "me 80%, @alice 20%" (or equal split)
-          - Or just "me 100%" to keep everything
-          
-          Be helpful and use your style.
+            - Optional custom percentages like "@alice 30%, @bob 70%"
+            - Or say "add everyone" to include all chat members
+            
+            Be friendly and ask who should receive the fees. Don't mention chains unless they specifically asked about networks.
+            Use your character's voice and keep it simple.
         `
       });
-
       await this.sendResponse(context, response);
+      }
+
+    } catch (error) {
+      this.logError('Failed to create group', error);
+      await this.sendResponse(context, `failed to create group: ${error instanceof Error ? error.message : 'unknown error'}. please try again.`);
     }
   }
 
@@ -329,40 +639,69 @@ export class OnboardingFlow extends BaseFlow {
     });
 
     try {
-      // TODO: Get all participants from the XMTP conversation
-      // For now, create a mock implementation
-      const allParticipants = [
-        // Mock participants - replace with actual XMTP conversation member extraction
-        { username: 'member1', resolvedAddress: '0x1234567890123456789012345678901234567890' },
-        { username: 'member2', resolvedAddress: '0x2345678901234567890123456789012345678901' },
-        { username: 'member3', resolvedAddress: '0x3456789012345678901234567890123456789012' }
+      // Get all participants from the XMTP conversation
+      // For now, use the creator and a mock member for testing
+      // TODO: Replace with actual XMTP conversation member resolution
+      const groupMembers = [
+        { username: context.creatorAddress, resolvedAddress: context.creatorAddress, percentage: undefined },
+        { username: '0x1234567890123456789012345678901234567890', resolvedAddress: '0x1234567890123456789012345678901234567890', percentage: undefined }
       ];
+
+      if (groupMembers.length === 0) {
+        await this.sendResponse(context, "couldn't find any group members to add. please specify fee receivers manually.");
+        return;
+      }
 
       // Create equal split data for all participants
       const splitData = {
-        receivers: allParticipants,
+        receivers: groupMembers,
         equalSplit: true,
         creatorPercent: 0 // Equal split among all members
       };
 
-      // Move to coin creation step
+      this.log('Creating group with all members', {
+        userId: userState.userId,
+        memberCount: groupMembers.length,
+        members: groupMembers.map(m => ({ username: m.username, address: m.resolvedAddress }))
+      });
+
+      // Detect chain preference (default to base)
+      const selectedChain = detectChainFromMessage(context.messageText || '');
+
+      // Create the group transaction immediately
+      const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+        groupMembers,
+        context.creatorAddress,
+        selectedChain,
+        "Create Group with All Members"
+      );
+
+      // Update onboarding progress and set pending transaction
       await context.updateState({
         onboardingProgress: {
           ...userState.onboardingProgress!,
-          step: 'coin_creation',
           splitData,
-          coinData: { name: undefined, ticker: undefined, image: undefined }
+          coinData: userState.onboardingProgress?.coinData || { name: undefined, ticker: undefined, image: undefined }
+        },
+        pendingTransaction: {
+          type: 'group_creation',
+          network: getNetworkName(selectedChain),
+          timestamp: new Date()
         }
       });
+
+      // Send the wallet transaction
+      await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
 
       const response = await getCharacterResponse({
         openai: context.openai,
         character: context.character,
         prompt: `
-          User said "add everyone" to include all group chat members in the fee split.
-          Confirm that all ${allParticipants.length} group members will receive equal trading fee splits.
-          Now ask for coin details: name, ticker, and image.
-          Be excited about including everyone and use your style!
+          Perfect! I've set up your group with equal fee splitting for all ${groupMembers.length} members.
+          
+          Sign the transaction to create your group! You can ask questions about it or say "cancel" if needed.
+          
+          Keep it concise and encouraging. Use your character's voice.
         `
       });
 
@@ -372,178 +711,6 @@ export class OnboardingFlow extends BaseFlow {
       this.logError('Failed to process "add everyone" command', error);
       await this.sendResponse(context, "couldn't get group members. please specify fee receivers manually.");
     }
-  }
-
-  private async createGroupCreationTransaction(context: FlowContext, splitData: any): Promise<void> {
-    const { userState } = context;
-
-    this.log('Creating group creation transaction', {
-      userId: userState.userId,
-      splitData
-    });
-
-    try {
-      // Create the wallet transaction for AddressFeeSplitManager deployment
-      const walletSendCalls = await this.createGroupDeploymentCalls(splitData, context.creatorAddress);
-
-      // Store split data and set pending transaction state
-      await context.updateState({
-        onboardingProgress: {
-          ...userState.onboardingProgress!,
-          splitData
-        },
-        pendingTransaction: {
-          type: 'group_creation',
-          network: process.env.XMTP_ENV === 'production' ? 'base' : 'base-sepolia',
-          timestamp: new Date()
-        }
-      });
-
-      // Send the wallet transaction for user to sign
-      await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
-
-      // Let user know what's happening
-      const response = await getCharacterResponse({
-        openai: context.openai,
-        character: context.character,
-        prompt: `
-          Perfect! Sign the transaction to start your group!
-          
-          This will set up the fee splitting you specified. Then we can launch coins!
-          
-          Keep it concise and encouraging. Use your character's voice.
-        `
-      });
-
-      await this.sendResponse(context, response);
-
-    } catch (error) {
-      this.logError('Failed to create group creation transaction', error);
-      await this.sendResponse(context, `failed to prepare group creation: ${error instanceof Error ? error.message : 'unknown error'}. please try again.`);
-    }
-  }
-
-  private async createGroupDeploymentCalls(splitData: any, creatorAddress: string): Promise<any> {
-    this.log('Creating group deployment transaction calls', {
-      splitData,
-      creatorAddress
-    });
-
-    // Deduplicate receivers first - combine shares for duplicate addresses
-    const addressShareMap = new Map<Address, bigint>();
-    const totalReceiverPercent = 100; // All 100% goes to recipients
-    
-    this.log('Receivers before deduplication', {
-      receivers: splitData.receivers.map((r: any) => ({
-        username: r.username,
-        resolvedAddress: r.resolvedAddress,
-        percentage: r.percentage
-      }))
-    });
-
-    // Build address share map by combining duplicate addresses (case-insensitive)
-    for (const receiver of splitData.receivers) {
-      const address = (receiver.resolvedAddress as string).toLowerCase() as Address;
-      const sharePercent = receiver.percentage || (totalReceiverPercent / splitData.receivers.length);
-      const share = BigInt(Math.floor(sharePercent * 100000)); // Convert to basis points (100000 = 100%)
-      
-      const currentShare = addressShareMap.get(address) || 0n;
-      addressShareMap.set(address, currentShare + share);
-    }
-
-    this.log('Receivers after deduplication', {
-      uniqueReceivers: Array.from(addressShareMap.entries()).map(([addr, share]) => ({
-        address: addr,
-        share: share.toString(),
-        percentage: (Number(share) / 100000).toFixed(2) + '%'
-      }))
-    });
-
-    // Calculate recipient shares using deduplicated data
-    const recipientShares = Array.from(addressShareMap.entries()).map(([address, share]) => ({
-      recipient: address,
-      share: share
-    }));
-
-    // Create the InitializeParams structure
-    const initializeParamsStruct = {
-      creatorShare: BigInt(0), // Creator always gets 0%
-      recipientShares: recipientShares
-    };
-
-    // Encode the initialize parameters
-    const initializeParams = encodeAbiParameters(
-      [
-        {
-          type: 'tuple',
-          name: '_params',
-          components: [
-            { name: 'creatorShare', type: 'uint256' },
-            {
-              name: 'recipientShares',
-              type: 'tuple[]',
-              components: [
-                { name: 'recipient', type: 'address' },
-                { name: 'share', type: 'uint256' }
-              ]
-            }
-          ]
-        }
-      ],
-      [initializeParamsStruct]
-    );
-
-    // Use actual contract addresses
-    const treasuryManagerFactory = TreasuryManagerFactoryAddress[baseSepolia.id];
-    const addressFeeSplitManagerImplementation = AddressFeeSplitManagerAddress[baseSepolia.id];
-    const flaunchyOwner = creatorAddress as Address; // Use creator as owner
-
-    // Create user-friendly description using deduplicated addresses
-    const receiverList = Array.from(addressShareMap.keys()).map((address) => {
-      // Find the original receiver data for display name (case-insensitive comparison)
-      const originalReceiver = splitData.receivers.find((r: any) => 
-        (r.resolvedAddress as string).toLowerCase() === address.toLowerCase()
-      );
-      
-      if (address.toLowerCase() === creatorAddress.toLowerCase()) {
-        return 'You';
-      } else if (originalReceiver?.username === 'SELF_REFERENCE') {
-        return 'You';
-      } else if (originalReceiver?.username) {
-        return originalReceiver.username.startsWith('0x') ? `${address.slice(0, 6)}...${address.slice(-4)}` : originalReceiver.username;
-      } else {
-        return `${address.slice(0, 6)}...${address.slice(-4)}`;
-      }
-    }).join(', ');
-
-    // Encode the deployment function call
-    const functionData = encodeFunctionData({
-      abi: TreasuryManagerFactoryAbi,
-      functionName: 'deployAndInitializeManager',
-      args: [
-        addressFeeSplitManagerImplementation,
-        flaunchyOwner,
-        initializeParams
-      ]
-    });
-
-    // Return wallet send calls in the correct format
-    return {
-      version: '1.0',
-      from: creatorAddress, // Use creator address as sender
-      chainId: numToHex(baseSepolia.id),
-      calls: [
-        {
-          chainId: baseSepolia.id,
-          to: treasuryManagerFactory,
-          data: functionData,
-          value: '0',
-          metadata: {
-            description: `Create Group for ${receiverList}`
-          }
-        }
-      ]
-    };
   }
 
   private async handleCoinCreation(context: FlowContext): Promise<void> {
@@ -558,6 +725,57 @@ export class OnboardingFlow extends BaseFlow {
       currentCoinData: coinData,
       messageText: messageText
     });
+
+    // Use LLM to detect if user wants to go back to group creation
+    if (messageText) {
+      const groupDetectionPrompt = `
+        User is currently in coin creation step but sent this message: "${messageText}"
+        
+        Are they trying to:
+        1. Create/modify a group or fee split setup
+        2. Add everyone to a group
+        3. Continue with coin creation
+        
+        Return ONLY:
+        "group_creation" - if they want to create/modify group or fee receivers
+        "add_everyone" - if they want to add all group members
+        "coin_creation" - if they're providing coin details or continuing coin creation
+      `;
+
+      const detectionResponse = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: groupDetectionPrompt }],
+        temperature: 0.1,
+        max_tokens: 20
+      });
+
+      const userIntent = detectionResponse.choices[0]?.message?.content?.trim();
+      
+      if (userIntent === 'add_everyone') {
+        this.log('User wants to add everyone during coin creation, redirecting to handleAddEveryone', {
+          userId: userState.userId,
+          messageText: messageText
+        });
+        await this.handleAddEveryone(context);
+        return;
+      } else if (userIntent === 'group_creation') {
+        this.log('User wants group creation during coin creation, redirecting to group creation', {
+          userId: userState.userId,
+          messageText: messageText
+        });
+
+        // Redirect to group creation
+        await context.updateState({
+          onboardingProgress: {
+            ...userState.onboardingProgress!,
+            step: 'group_creation'
+          }
+        });
+
+        await this.handleGroupCreation(context);
+        return;
+      }
+    }
 
     // Check for reset commands
     if (messageText && (
@@ -576,6 +794,142 @@ export class OnboardingFlow extends BaseFlow {
       await this.sendResponse(context, "okay, let's start fresh! what's the name of your coin?");
       return;
     }
+
+    // Check if user is switching chains
+    const chainMentioned = messageText && (
+      messageText.toLowerCase().includes('sepolia') ||
+      messageText.toLowerCase().includes('mainnet') ||
+      messageText.toLowerCase().includes('base') ||
+      messageText.toLowerCase().includes('switch') ||
+      messageText.toLowerCase().includes('change')
+    );
+    
+    // If user is switching chains, check what they want to switch
+    if (chainMentioned) {
+      const selectedChain = detectChainFromMessage(messageText || '');
+      
+      // Check if they have existing group/split data and want to recreate group on new chain
+      const splitData = userState.onboardingProgress!.splitData;
+      if (splitData && splitData.receivers && splitData.receivers.length > 0) {
+        this.log('User switching chains with existing group data, recreating group', {
+          userId: userState.userId,
+          existingSplitData: splitData,
+          newChain: selectedChain.displayName,
+          messageText: messageText
+        });
+
+                 try {
+           // Validate that all receivers have resolved addresses
+           const validReceivers = splitData.receivers.filter(r => r.resolvedAddress);
+           if (validReceivers.length !== splitData.receivers.length) {
+             this.logError('Some receivers missing resolved addresses', {
+               totalReceivers: splitData.receivers.length,
+               validReceivers: validReceivers.length,
+               receivers: splitData.receivers
+             });
+             throw new Error('Some fee receivers are missing resolved addresses');
+           }
+
+           this.log('Creating group deployment calls for chain switch', {
+             userId: userState.userId,
+             receiversCount: validReceivers.length,
+             chainId: selectedChain.id,
+             chainName: selectedChain.name,
+             chainDisplayName: selectedChain.displayName,
+             chainHexId: selectedChain.hexId,
+             fullChainConfig: selectedChain
+           });
+
+           // Recreate the group transaction on the new chain using existing split data
+           const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+             validReceivers,
+             context.creatorAddress,
+             selectedChain,
+             "Create Group"
+           );
+
+          // Update onboarding progress and send transaction
+          await context.updateState({
+            onboardingProgress: {
+              ...userState.onboardingProgress!,
+              splitData: splitData // Keep existing split data
+            },
+            pendingTransaction: {
+              type: 'group_creation',
+              network: getNetworkName(selectedChain),
+              timestamp: new Date()
+            }
+          });
+
+          // Send the wallet transaction
+          await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
+
+          // Let user know what's happening
+          const response = await getCharacterResponse({
+            openai: context.openai,
+            character: context.character,
+            prompt: `
+              Perfect! I've switched to ${selectedChain.displayName} and preserved your fee receivers.
+              
+              Sign the transaction to create your group with the same fee splitting setup on the new chain!
+              
+              Keep it concise and encouraging. Use your character's voice.
+            `
+          });
+
+          await this.sendResponse(context, response);
+          return;
+
+                 } catch (error) {
+           this.logError('Failed to recreate group on new chain', error);
+           
+           // Don't fall through - provide specific error message for chain switching
+           const response = await getCharacterResponse({
+             openai: context.openai,
+             character: context.character,
+             prompt: `
+               There was an error switching chains for the group creation.
+               
+               Error: ${error instanceof Error ? error.message : 'Unknown error'}
+               
+               Ask the user to try again or provide the fee receivers again.
+               Use your character's voice and be helpful.
+             `
+           });
+           
+           await this.sendResponse(context, response);
+           return;
+         }
+      }
+      
+             // If user has complete coin data and is switching chains for coin launch
+       if (coinData.name && coinData.ticker && coinData.image) {
+          this.log('User switching chains with existing coin data, preserving data', {
+            userId: userState.userId,
+            existingCoinData: coinData,
+            messageText: messageText
+          });
+
+          try {
+            // Use existing coin data and split data to launch on new chain
+            const splitDataForCoin = userState.onboardingProgress!.splitData;
+            if (splitDataForCoin && splitDataForCoin.receivers) {
+              this.log('Launching coin with preserved data on new chain', {
+                userId: userState.userId,
+                coinData,
+                splitData: splitDataForCoin,
+                newChain: selectedChain.displayName
+              });
+
+              await this.launchCoin(context, coinData, splitDataForCoin, selectedChain);
+              return;
+            }
+          } catch (error) {
+            this.logError('Failed to launch coin with preserved data', error);
+            // Fall through to normal extraction if this fails
+          }
+        }
+      }
 
     // Try to extract ALL details from the current message (token details AND fee receivers)
     const extraction = await this.extractLaunchDetails(context);
@@ -869,8 +1223,28 @@ export class OnboardingFlow extends BaseFlow {
       const content = response.choices[0]?.message?.content?.trim();
       if (!content) return null;
 
-      // Parse JSON response
-      const result = JSON.parse(content) as LaunchExtractionResult;
+      // Parse JSON response with error handling
+      let result: LaunchExtractionResult;
+      try {
+        // Try to extract JSON from the response (in case there's extra text)
+        let jsonContent = content;
+        
+        // Look for JSON object in the response
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonContent = jsonMatch[0];
+        }
+        
+        result = JSON.parse(jsonContent) as LaunchExtractionResult;
+      } catch (parseError) {
+        this.logError('Failed to parse JSON from LLM response', { content, parseError });
+        
+        // Return minimal result to avoid breaking the flow
+        result = {
+          tokenDetails: { name: null, ticker: null, image: null },
+          feeReceivers: { receivers: null, splitType: null, confidence: 0 }
+        };
+      }
       
       this.log('🔍 LAUNCH EXTRACTION RESULT', {
         messageText: messageText.substring(0, 100) + (messageText.length > 100 ? '...' : ''),
@@ -1001,45 +1375,25 @@ export class OnboardingFlow extends BaseFlow {
     percentage?: number;
     resolvedAddress?: string;
   }>> {
-    const resolved = [];
-
-    for (const receiver of receivers) {
-      let address: string | undefined;
-
-      // Check if it's already an Ethereum address
-      if (this.isValidEthereumAddress(receiver.username)) {
-        address = receiver.username;
-      } else {
-        // Try resolving via context helper
-        try {
-          address = await context.resolveUsername(receiver.username);
-        } catch (error) {
-          this.log(`Failed to resolve username: ${receiver.username}`, error);
-        }
-      }
-
-      resolved.push({
-        username: receiver.username,
-        percentage: receiver.percentage,
-        resolvedAddress: address
-      });
-    }
-
-    return resolved;
+    return GroupCreationUtils.resolveUsernames(context, receivers);
   }
 
-  private async launchCoin(context: FlowContext, coinData: any, splitData: any): Promise<void> {
+  private async launchCoin(context: FlowContext, coinData: any, splitData: any, chainConfig?: ChainConfig): Promise<void> {
     const { userState } = context;
+
+    // Use detected chain or default to Base Mainnet
+    const selectedChain = chainConfig || detectChainFromMessage(context.messageText || '');
 
     this.log('Preparing coin launch transaction', {
       userId: userState.userId,
       coinData,
-      splitData
+      splitData,
+      chain: selectedChain.displayName
     });
 
     try {
       // Create the transaction calls for the user's wallet (no messages, just transaction)
-      const walletSendCalls = await this.createLaunchTransactionCalls(coinData, splitData, context.creatorAddress, context);
+      const walletSendCalls = await this.createLaunchTransactionCalls(coinData, splitData, context.creatorAddress, context, selectedChain);
 
       // Set pending transaction state before sending wallet call
       await context.updateState({
@@ -1050,7 +1404,7 @@ export class OnboardingFlow extends BaseFlow {
             ticker: coinData.ticker,
             image: coinData.image
           },
-          network: process.env.XMTP_ENV === 'production' ? 'base' : 'base-sepolia',
+          network: getNetworkName(selectedChain),
           timestamp: new Date()
         }
       });
@@ -1067,7 +1421,9 @@ export class OnboardingFlow extends BaseFlow {
     }
   }
 
-  private async createLaunchTransactionCalls(coinData: any, splitData: any, creatorAddress: string, context: FlowContext): Promise<any> {
+  private async createLaunchTransactionCalls(coinData: any, splitData: any, creatorAddress: string, context: FlowContext, chainConfig: ChainConfig): Promise<any> {
+    const chain = chainConfig.viemChain;
+    
     // Log the received coin data for debugging
     this.log('🚀 CREATING LAUNCH TRANSACTION - Received coin data', {
       coinData,
@@ -1082,14 +1438,6 @@ export class OnboardingFlow extends BaseFlow {
     if (!pinataJWT) {
       throw new Error('Missing required environment variable: PINATA_JWT');
     }
-
-    this.log('Creating launch transaction for Base Sepolia', {
-      network: NETWORK_CONFIG.CHAIN_NAME,
-      chainId: NETWORK_CONFIG.CHAIN_ID,
-      coinData,
-      splitData,
-      creatorAddress
-    });
 
     try {
       // Convert image URL to base64 if it's a URL
@@ -1155,6 +1503,8 @@ export class OnboardingFlow extends BaseFlow {
         // Deduplicate receivers first - combine shares for duplicate addresses
         const addressShareMap = new Map<string, bigint>();
         const TOTAL_SHARE = 10000000n; // 100% in the format expected by the contract (100.00000)
+        let totalAllocated = 0n;
+        const uniqueAddresses = Array.from(new Set(splitData.receivers.map((r: any) => r.resolvedAddress.toLowerCase())));
         
         this.log('Launch receivers before deduplication', {
           receivers: splitData.receivers.map((r: any) => ({
@@ -1165,13 +1515,30 @@ export class OnboardingFlow extends BaseFlow {
         });
 
         // Build address share map by combining duplicate addresses (case-insensitive)
-        for (const receiver of splitData.receivers) {
+        for (let i = 0; i < splitData.receivers.length; i++) {
+          const receiver = splitData.receivers[i];
           const address = (receiver.resolvedAddress as string).toLowerCase();
-          const sharePercent = receiver.percentage || (100 / splitData.receivers.length);
-          const share = BigInt(Math.round(sharePercent * 100000)); // Convert percentage to share format
+          
+          let share: bigint;
+          if (receiver.percentage) {
+            // Use explicit percentage
+            share = BigInt(Math.floor(receiver.percentage * 100000));
+          } else {
+            // Equal split calculation
+            const baseShare = TOTAL_SHARE / BigInt(uniqueAddresses.length);
+            const isLastReceiver = i === splitData.receivers.length - 1;
+            
+            if (isLastReceiver) {
+              // Last receiver gets remainder to ensure total equals TOTAL_SHARE
+              share = TOTAL_SHARE - totalAllocated;
+            } else {
+              share = baseShare;
+            }
+          }
           
           const currentShare = addressShareMap.get(address) || 0n;
           addressShareMap.set(address, currentShare + share);
+          totalAllocated += share;
         }
 
         totalReceivers = addressShareMap.size;
@@ -1183,6 +1550,14 @@ export class OnboardingFlow extends BaseFlow {
             percentage: (Number(share) / 100000).toFixed(2) + '%'
           }))
         });
+
+        // Validate total shares equal exactly TOTAL_SHARE
+        const calculatedTotal = Array.from(addressShareMap.values()).reduce((sum, share) => sum + share, 0n);
+        if (calculatedTotal !== TOTAL_SHARE) {
+          throw new Error(`Total shares (${calculatedTotal}) do not equal required total (${TOTAL_SHARE})`);
+        }
+
+        this.log('✅ Total shares validation passed:', calculatedTotal.toString());
 
         // Calculate recipient shares using deduplicated data
         recipientShares = Array.from(addressShareMap.entries()).map(([address, share]) => ({
@@ -1356,7 +1731,229 @@ export class OnboardingFlow extends BaseFlow {
     });
   }
 
-  protected isValidEthereumAddress(address: string): boolean {
-    return /^0x[a-fA-F0-9]{40}$/.test(address);
+  private isAskingAboutFeeReceivers(messageText: string): boolean {
+    const lowerMessage = messageText.toLowerCase();
+    
+    // Questions about fee receivers, groups, or basic concepts
+    const feeReceiverQuestions = [
+      'who are the fee receivers',
+      'what are fee receivers',
+      'who should receive',
+      'what is a fee receiver',
+      'how do fee receivers work',
+      'what does fee receiver mean',
+      'who gets the fees',
+      'how does fee splitting work',
+      'what are fees',
+      'what fees',
+      'how does this work',
+      'can you explain',
+      'i don\'t understand',
+      'what does this mean'
+    ];
+    
+    return feeReceiverQuestions.some(question => lowerMessage.includes(question));
+  }
+
+  private async handleFeeReceiverExplanation(context: FlowContext): Promise<void> {
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: `
+        User is asking about fee receivers during onboarding. Explain what fee receivers are in simple terms:
+        
+        - Fee receivers are the people who get paid when your coins are traded
+        - Every time someone buys or sells coins in your group, trading fees are generated
+        - These fees are automatically split among the fee receivers you specify
+        - You can specify friends, collaborators, or yourself - whoever should benefit from the trading activity
+        - You can set custom percentages or equal splits
+        
+        Examples of who you can add:
+        - Farcaster usernames like @alice
+        - ENS names like alice.eth  
+        - Ethereum addresses like 0x123...
+        - Say "add everyone" to include all group chat members
+        - Custom splits like "@alice 30%, @bob 70%"
+        
+        After explaining, ask them who they want as their fee receivers.
+        Be helpful and encouraging. Use your character's voice.
+      `
+    });
+
+    await this.sendResponse(context, response);
+  }
+
+  private isExplicitGroupCreationRequest(messageText: string): boolean {
+    const lowerMessage = messageText.toLowerCase();
+    
+    // Explicit group creation phrases
+    const groupCreationPhrases = [
+      'create a group',
+      'create group',
+      'start a group',
+      'start group',
+      'make a group',
+      'make group',
+      'set up a group',
+      'set up group',
+      'launch a group',
+      'launch group',
+      'new group',
+      'another group',
+      'additional group',
+      'group for',
+      'group with',
+      'i want to create a group',
+      'i want to start a group',
+      'i want to make a group',
+      'i want a group',
+      'let\'s create a group',
+      'let\'s start a group',
+      'let\'s make a group',
+      'can you create a group',
+      'can you start a group',
+      'help me create a group',
+      'help me start a group'
+    ];
+    
+    // Check if message contains explicit group creation phrases
+    const hasGroupCreationPhrase = groupCreationPhrases.some(phrase => lowerMessage.includes(phrase));
+    
+    // Additional check: contains "group" and creation verbs but NOT coin-specific words
+    const hasGroup = lowerMessage.includes('group');
+    const hasCreationVerb = ['create', 'start', 'make', 'launch', 'set up', 'new'].some(verb => lowerMessage.includes(verb));
+    const hasCoinWords = ['coin', 'token', 'ticker', 'symbol'].some(word => lowerMessage.includes(word));
+    
+    return hasGroupCreationPhrase || (hasGroup && hasCreationVerb && !hasCoinWords);
+  }
+
+  private async handleTransactionInquiryWithLLM(context: FlowContext, messageText: string): Promise<string | null> {
+    const { userState, openai, character } = context;
+    
+    if (!userState.pendingTransaction) {
+      return null;
+    }
+
+    // Get transaction context
+    let transactionContext = '';
+    if (userState.pendingTransaction.type === 'group_creation') {
+      const progress = userState.onboardingProgress;
+      if (progress?.splitData?.receivers && progress.splitData.receivers.length > 0) {
+        const receiverList = progress.splitData.receivers
+          .map((r: any) => {
+            // Use resolved address for display if username is an address
+            const displayName = r.username.startsWith('0x') && r.username.length === 42 
+              ? `${r.username.slice(0, 6)}...${r.username.slice(-4)}`
+              : r.username;
+            return `${displayName}${r.percentage ? ` (${r.percentage}%)` : ''}`;
+          })
+          .join(', ');
+        transactionContext = `Group creation transaction with fee receivers: ${receiverList}`;
+      } else {
+        transactionContext = 'Group creation transaction with equal fee splitting among all members';
+      }
+    } else if (userState.pendingTransaction.type === 'coin_creation') {
+      transactionContext = 'Coin launch transaction with previously specified fee receivers';
+    } else {
+      transactionContext = 'Transaction pending in wallet';
+    }
+
+    const prompt = `
+User has a pending ${userState.pendingTransaction.type} transaction.
+Transaction context: ${transactionContext}
+
+User message: "${messageText}"
+
+Is this user asking about their pending transaction OR wanting to cancel it? 
+
+If asking about the transaction, provide a helpful response using the context above.
+If wanting to cancel, return "CANCEL_TRANSACTION".
+If this is NOT about the transaction, return "NOT_TRANSACTION_INQUIRY".
+
+Guidelines for transaction info:
+- Answer directly and naturally about the transaction details
+- Use the transaction context to provide specific details about fee receivers
+- Be concise and conversational, not formal
+- Use the character's voice (casual, encouraging)
+- Don't start with phrases like "It looks like" or "It sounds like"
+- Just answer the question directly
+- For addresses, show them in truncated format (0x1234...5678)
+
+Guidelines for cancellation detection:
+- Look for words like "cancel", "stop", "abort", "don't want", "nevermind", "changed my mind"
+- Be generous in detecting cancellation intent
+
+Return one of:
+1. A direct, helpful response about the transaction
+2. "CANCEL_TRANSACTION" if they want to cancel
+3. "NOT_TRANSACTION_INQUIRY" if neither
+`;
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 200
+      });
+
+      const result = response.choices[0]?.message?.content?.trim() || '';
+      
+      if (result === 'NOT_TRANSACTION_INQUIRY') {
+        return null;
+      }
+
+      if (result === 'CANCEL_TRANSACTION') {
+        await this.handleTransactionCancellation(context);
+        return 'transaction cancelled! you can start fresh whenever you\'re ready.';
+      }
+
+      this.log('Transaction inquiry detected and responded to', {
+        userId: userState.userId,
+        messageText: messageText.substring(0, 100),
+        transactionType: userState.pendingTransaction.type
+      });
+
+      return result;
+    } catch (error) {
+      this.logError('Failed to process transaction inquiry', error);
+      return null;
+    }
+  }
+
+  private async handleTransactionCancellation(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    this.log('Cancelling pending transaction', {
+      userId: userState.userId,
+      transactionType: userState.pendingTransaction?.type
+    });
+
+    // Clear the pending transaction and reset relevant progress
+    const updates: Partial<typeof userState> = {
+      pendingTransaction: undefined
+    };
+
+    // Reset progress based on transaction type
+    if (userState.pendingTransaction?.type === 'group_creation') {
+      // For group creation, reset to the step before transaction creation
+      if (userState.onboardingProgress) {
+        updates.onboardingProgress = {
+          ...userState.onboardingProgress,
+          // Keep the progress but clear any transaction-related data
+          groupData: undefined
+        };
+      }
+    } else if (userState.pendingTransaction?.type === 'coin_creation') {
+      // For coin creation, reset to coin creation step
+      if (userState.onboardingProgress) {
+        updates.onboardingProgress = {
+          ...userState.onboardingProgress,
+          step: 'coin_creation'
+        };
+      }
+    }
+
+    await context.updateState(updates);
   }
 } 

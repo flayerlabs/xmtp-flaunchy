@@ -54,6 +54,10 @@ export class FileStateStorage implements StateStorage {
               ? new Date(userState.onboardingProgress.completedAt) 
               : undefined
           } : undefined,
+          managementProgress: userState.managementProgress ? {
+            ...userState.managementProgress,
+            startedAt: new Date(userState.managementProgress.startedAt)
+          } : undefined,
           coins: userState.coins.map((coin: any) => ({
             ...coin,
             createdAt: new Date(coin.createdAt)
