@@ -207,10 +207,17 @@ Consider the message about the pending transaction if it:
 - Asks about launch parameters or settings
 - Contains phrases like "please update", "change to", "set to", "make it"
 
+FOR GROUP CREATION transactions, ALSO consider it about the transaction if it:
+- Contains words like "add", "include", "append", "remove", "exclude"
+- Mentions adding/removing people, usernames, or addresses
+- References group members or fee receivers
+- Contains phrases like "add @username", "include everyone", "can you add"
+
 ESPECIALLY if the message mentions:
 - "prebuy", "premine", "market cap", "duration", "buyback" with values or percentages
 - "update the [parameter] to [value]"
 - "change [parameter]"
+- "add @username" or "include [person]"
 
 Do NOT consider it about the transaction if it's:
 - Asking about existing/completed groups or coins
@@ -417,7 +424,87 @@ If no parameters are mentioned, return: {}`
       existingReceivers = userState.onboardingProgress.splitData.receivers;
     }
 
-    // Extract new receivers using shared utility
+    // Check if user wants to add everyone from chat
+    const isAddEveryone = await this.isAddEveryone(context, messageText);
+    
+    if (isAddEveryone) {
+      // Add all chat members
+      const chatMembers = await context.conversation.members();
+      const everyoneReceivers = [];
+
+      for (const member of chatMembers) {
+        if (member.inboxId !== context.client.inboxId) {
+          const memberInboxState = await context.client.preferences.inboxStateFromInboxIds([member.inboxId]);
+          if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
+            const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            everyoneReceivers.push({
+              username: memberAddress,
+              resolvedAddress: memberAddress,
+              percentage: undefined
+            });
+          }
+        }
+      }
+
+      // Combine with existing receivers (avoid duplicates)
+      const combinedReceivers = [...existingReceivers];
+      for (const newReceiver of everyoneReceivers) {
+        const exists = combinedReceivers.some(existing => 
+          existing.resolvedAddress?.toLowerCase() === newReceiver.resolvedAddress?.toLowerCase()
+        );
+        if (!exists && newReceiver.resolvedAddress) {
+          combinedReceivers.push(newReceiver);
+        }
+      }
+
+      // Create new transaction with everyone + existing
+      try {
+        const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+          combinedReceivers,
+          context.creatorAddress,
+          getDefaultChain(),
+          "Create Group"
+        );
+
+        // Update state
+        await context.updateState({
+          pendingTransaction: {
+            type: 'group_creation',
+            network: getDefaultChain().name,
+            timestamp: new Date()
+          },
+          managementProgress: {
+            action: 'creating_group',
+            step: 'creating_transaction',
+            groupCreationData: {
+              receivers: combinedReceivers
+            },
+            startedAt: new Date()
+          }
+        });
+
+        // Send transaction
+        if (validateWalletSendCalls(walletSendCalls)) {
+          await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
+          
+          // Create display names for confirmation
+          const displayNames = combinedReceivers.map(r => {
+            if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+              return r.username.startsWith('@') ? r.username : `@${r.username}`;
+            } else {
+              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+            }
+          }).join(', ');
+          
+          return `updated group with ${combinedReceivers.length} members: ${displayNames}. sign to create!`;
+        }
+      } catch (error) {
+        this.logError('Failed to modify group transaction with everyone', error);
+        return 'failed to update transaction. please try again.';
+      }
+    }
+
+    // Extract new receivers using shared utility (for specific usernames)
     const extraction = await GroupCreationUtils.extractFeeReceivers(context);
     
     if (extraction && extraction.receivers.length > 0) {
@@ -450,13 +537,31 @@ If no parameters are mentioned, return: {}`
             type: 'group_creation',
             network: getDefaultChain().name,
             timestamp: new Date()
+          },
+          managementProgress: {
+            action: 'creating_group',
+            step: 'creating_transaction',
+            groupCreationData: {
+              receivers: combinedReceivers
+            },
+            startedAt: new Date()
           }
         });
 
         // Send transaction
         if (validateWalletSendCalls(walletSendCalls)) {
           await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
-          return `updated your group with ${combinedReceivers.length} receivers. sign to create!`;
+          
+          // Create display names for confirmation
+          const displayNames = combinedReceivers.map(r => {
+            if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+              return r.username.startsWith('@') ? r.username : `@${r.username}`;
+            } else {
+              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+            }
+          }).join(', ');
+          
+          return `updated group with ${combinedReceivers.length} members: ${displayNames}. sign to create!`;
         }
       } catch (error) {
         this.logError('Failed to modify group transaction', error);
@@ -973,7 +1078,17 @@ Answer only "yes" or "no".`
       // Send transaction
       if (validateWalletSendCalls(walletSendCalls)) {
         await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
-        await this.sendResponse(context, `sign to create group with all ${feeReceivers.length} members!`);
+        
+        // Create display names for confirmation
+        const displayNames = feeReceivers.map(r => {
+          if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+            return r.username.startsWith('@') ? r.username : `@${r.username}`;
+          } else {
+            return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+          }
+        }).join(', ');
+        
+        await this.sendResponse(context, `creating group with ${feeReceivers.length} members: ${displayNames}. sign to create!`);
       }
 
     } catch (error) {

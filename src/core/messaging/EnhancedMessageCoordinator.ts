@@ -884,7 +884,8 @@ export class EnhancedMessageCoordinator {
           
           // Clear the pending transaction since we can't process it
           await this.sessionManager.updateUserState(senderInboxId, {
-            pendingTransaction: undefined
+            pendingTransaction: undefined,
+            managementProgress: undefined // Clear management progress on system error
           });
           
           return false;
@@ -903,7 +904,8 @@ export class EnhancedMessageCoordinator {
           
           // Clear the pending transaction since we can't process it
           await this.sessionManager.updateUserState(senderInboxId, {
-            pendingTransaction: undefined
+            pendingTransaction: undefined,
+            managementProgress: undefined // Clear management progress on system error
           });
           
           return false;
@@ -991,6 +993,7 @@ export class EnhancedMessageCoordinator {
           
           await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
+            managementProgress: undefined, // Clear management progress when group creation completes
             // Add the group to the user's groups array
             groups: [
               ...userState.groups,
@@ -1028,6 +1031,7 @@ export class EnhancedMessageCoordinator {
           
           const updatedState = await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
+            managementProgress: undefined, // Clear management progress when coin creation completes
             ...(pendingTx.coinData && {
               coins: [
                 ...userState.coins,
@@ -1101,7 +1105,8 @@ export class EnhancedMessageCoordinator {
         // Clear any pending transaction state
         const senderInboxId = message.senderInboxId;
         await this.sessionManager.updateUserState(senderInboxId, {
-          pendingTransaction: undefined
+          pendingTransaction: undefined,
+          managementProgress: undefined // Clear management progress on system error
         });
       } catch (notificationError) {
         console.error('Failed to send error notification to user:', notificationError);

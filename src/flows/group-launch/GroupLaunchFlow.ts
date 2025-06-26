@@ -52,8 +52,11 @@ export class GroupLaunchFlow extends BaseFlow {
 
     // Check if user wants to add everyone from the chat
     const isAddEveryone = await this.detectAddEveryone(context, messageText);
+    
     if (isAddEveryone) {
-      await this.addEveryoneFromChat(context);
+      // Check if there are additional receivers mentioned beyond "everyone"
+      const additionalReceivers = await this.extractAdditionalReceivers(context, messageText);
+      await this.addEveryoneFromChat(context, additionalReceivers);
       return;
     }
 
@@ -89,6 +92,14 @@ export class GroupLaunchFlow extends BaseFlow {
           type: 'group_creation',
           network: result.chainConfig.name,
           timestamp: new Date()
+        },
+        managementProgress: {
+          action: 'creating_group',
+          step: 'creating_transaction',
+          groupCreationData: {
+            receivers: result.resolvedReceivers
+          },
+          startedAt: new Date()
         }
       });
 
@@ -138,9 +149,28 @@ export class GroupLaunchFlow extends BaseFlow {
   }
 
   /**
+   * Extract additional receivers mentioned beyond "everyone"
+   */
+  private async extractAdditionalReceivers(context: FlowContext, messageText: string): Promise<string[]> {
+    if (!messageText) return [];
+
+    const additionalReceivers = [];
+    const words = messageText.split(' ');
+
+    for (const word of words) {
+      if (word.startsWith('@')) {
+        const username = word.slice(1);
+        additionalReceivers.push(username);
+      }
+    }
+
+    return additionalReceivers;
+  }
+
+  /**
    * Add everyone from the current group chat as fee receivers
    */
-  private async addEveryoneFromChat(context: FlowContext): Promise<void> {
+  private async addEveryoneFromChat(context: FlowContext, additionalReceivers: string[] = []): Promise<void> {
     try {
       // Get conversation members
       const members = await context.conversation.members();
@@ -160,14 +190,33 @@ export class GroupLaunchFlow extends BaseFlow {
         }
       }
 
-      if (feeReceivers.length === 0) {
+      // Add additional receivers if any
+      const resolvedAdditionalReceivers = [];
+      for (const username of additionalReceivers) {
+        try {
+          const resolvedAddress = await context.resolveUsername(username);
+          if (resolvedAddress) {
+            resolvedAdditionalReceivers.push({
+              username: username,
+              resolvedAddress: resolvedAddress,
+              percentage: undefined
+            });
+          }
+        } catch (error) {
+          this.log(`Failed to resolve additional receiver: ${username}`, error);
+        }
+      }
+
+      const allReceivers = [...feeReceivers, ...resolvedAdditionalReceivers];
+
+      if (allReceivers.length === 0) {
         await this.sendResponse(context, "couldn't find group members. specify receivers manually.");
         return;
       }
 
       // Create group
       const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
-        feeReceivers,
+        allReceivers,
         context.creatorAddress,
         getDefaultChain(),
         "Create Group with All Members"
@@ -179,13 +228,31 @@ export class GroupLaunchFlow extends BaseFlow {
           type: 'group_creation',
           network: getDefaultChain().name,
           timestamp: new Date()
+        },
+        managementProgress: {
+          action: 'creating_group',
+          step: 'creating_transaction',
+          groupCreationData: {
+            receivers: allReceivers
+          },
+          startedAt: new Date()
         }
       });
 
       // Send transaction
       if (validateWalletSendCalls(walletSendCalls)) {
         await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
-        await this.sendResponse(context, `creating group with ${feeReceivers.length} members from this chat. sign to create!`);
+        
+        // Create display names for confirmation
+        const displayNames = allReceivers.map(r => {
+          if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+            return r.username.startsWith('@') ? r.username : `@${r.username}`;
+          } else {
+            return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+          }
+        }).join(', ');
+        
+        await this.sendResponse(context, `creating group with ${allReceivers.length} members: ${displayNames}. sign to create!`);
       }
 
     } catch (error) {
