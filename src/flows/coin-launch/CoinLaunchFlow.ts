@@ -7,6 +7,7 @@ import { GraphQLService } from "../../services/GraphQLService";
 import { getDefaultChain } from "../utils/ChainSelection";
 import { createFlaunchTransaction } from "../utils/FlaunchTransactionUtils";
 import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "./coinLaunchExtractionTemplate";
+import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 
 interface CoinLaunchData {
   name?: string;
@@ -234,7 +235,7 @@ export class CoinLaunchFlow extends BaseFlow {
       // Send transaction
       await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
 
-      // Confirmation with updated parameters
+      // Confirmation with updated parameters and prebuy suggestion
       const params = [];
       if (coinData.startingMarketCap && coinData.startingMarketCap !== 1000) {
         params.push(`$${coinData.startingMarketCap} market cap`);
@@ -250,7 +251,9 @@ export class CoinLaunchFlow extends BaseFlow {
       }
       
       const paramString = params.length > 0 ? ` with ${params.join(', ')}` : '';
-      await this.sendResponse(context, `updated! sign to launch $${coinData.ticker}${paramString}!`);
+      let confirmationMessage = `updated! sign to launch $${coinData.ticker}${paramString}!`;
+      
+      await this.sendResponse(context, confirmationMessage);
 
     } catch (error) {
       this.logError('Failed to rebuild transaction', error);
@@ -507,6 +510,9 @@ export class CoinLaunchFlow extends BaseFlow {
   private async extractCoinData(context: FlowContext): Promise<CoinLaunchData> {
     const messageText = this.extractMessageText(context);
     
+    // Get existing coin data from context to preserve it
+    const existingCoinData = this.getExistingCoinData(context);
+    
     try {
       // Use LLM-based extraction instead of regex patterns
       const prompt = createCoinLaunchExtractionPrompt({
@@ -520,6 +526,7 @@ export class CoinLaunchFlow extends BaseFlow {
         userId: context.userState.userId,
         messageText: messageText,
         hasAttachment: context.hasAttachment,
+        existingCoinData: existingCoinData,
         promptLength: prompt.length
       });
 
@@ -545,22 +552,28 @@ export class CoinLaunchFlow extends BaseFlow {
         extractedData: extractedData
       });
       
-      // Convert to CoinLaunchData format (null to undefined)
+      // Convert to CoinLaunchData format, preserving existing data when new extraction is null/undefined
       const result: CoinLaunchData = {
-        name: extractedData.tokenDetails.name || undefined,
-        ticker: extractedData.tokenDetails.ticker || undefined,
-        image: extractedData.tokenDetails.image || undefined,
-        targetGroup: extractedData.targetGroup || undefined,
-        startingMarketCap: extractedData.launchParameters.startingMarketCap || undefined,
-        fairLaunchDuration: extractedData.launchParameters.fairLaunchDuration || undefined,
-        premineAmount: extractedData.launchParameters.premineAmount || undefined,
-        buybackPercentage: extractedData.launchParameters.buybackPercentage || undefined
+        name: extractedData.tokenDetails.name || existingCoinData?.name || undefined,
+        ticker: extractedData.tokenDetails.ticker || existingCoinData?.ticker || undefined,
+        image: extractedData.tokenDetails.image || existingCoinData?.image || (context.hasAttachment ? 'attachment_provided' : undefined),
+        targetGroup: extractedData.targetGroup || existingCoinData?.targetGroup || undefined,
+        startingMarketCap: extractedData.launchParameters.startingMarketCap || existingCoinData?.startingMarketCap || undefined,
+        fairLaunchDuration: extractedData.launchParameters.fairLaunchDuration || existingCoinData?.fairLaunchDuration || undefined,
+        premineAmount: extractedData.launchParameters.premineAmount !== null ? extractedData.launchParameters.premineAmount : (existingCoinData?.premineAmount || undefined),
+        buybackPercentage: extractedData.launchParameters.buybackPercentage || existingCoinData?.buybackPercentage || undefined
       };
 
-      this.log('Extracted coin data', {
+      this.log('Extracted coin data with preservation', {
         ...result,
         hasAttachment: context.hasAttachment,
-        messageText: messageText || '(empty)'
+        messageText: messageText || '(empty)',
+        preservedFromExisting: {
+          name: !extractedData.tokenDetails.name && existingCoinData?.name,
+          ticker: !extractedData.tokenDetails.ticker && existingCoinData?.ticker,
+          image: !extractedData.tokenDetails.image && existingCoinData?.image,
+          targetGroup: !extractedData.targetGroup && existingCoinData?.targetGroup
+        }
       });
       
       console.log('✅ FINAL EXTRACTION RESULT:', {
@@ -580,14 +593,73 @@ export class CoinLaunchFlow extends BaseFlow {
       
       this.logError('Failed to extract coin data', error);
       
-      // Fallback to empty result if extraction fails
-      return {
+      // Fallback to existing data if extraction fails
+      return existingCoinData || {
         name: undefined,
         ticker: undefined,
         image: context.hasAttachment ? 'attachment_provided' : undefined,
         targetGroup: undefined
       };
     }
+  }
+
+  /**
+   * Get existing coin data from various sources in the context
+   */
+  private getExistingCoinData(context: FlowContext): CoinLaunchData | null {
+    const { userState } = context;
+    
+    // First check pending transaction (most recent)
+    if (userState.pendingTransaction?.type === 'coin_creation' && userState.pendingTransaction.coinData) {
+      const coinData = userState.pendingTransaction.coinData;
+      const launchParams = userState.pendingTransaction.launchParameters;
+      
+      return {
+        name: coinData.name,
+        ticker: coinData.ticker,
+        image: coinData.image,
+        targetGroup: launchParams?.targetGroupId,
+        startingMarketCap: launchParams?.startingMarketCap,
+        fairLaunchDuration: launchParams?.fairLaunchDuration,
+        premineAmount: launchParams?.premineAmount,
+        buybackPercentage: launchParams?.buybackPercentage
+      };
+    }
+    
+    // Then check coin launch progress
+    if (userState.coinLaunchProgress?.coinData) {
+      const coinData = userState.coinLaunchProgress.coinData;
+      const launchParams = userState.coinLaunchProgress.launchParameters;
+      
+      return {
+        name: coinData.name,
+        ticker: coinData.ticker,
+        image: coinData.image,
+        targetGroup: userState.coinLaunchProgress.targetGroupId,
+        startingMarketCap: launchParams?.startingMarketCap,
+        fairLaunchDuration: launchParams?.fairLaunchDuration,
+        premineAmount: launchParams?.premineAmount,
+        buybackPercentage: launchParams?.buybackPercentage
+      };
+    }
+    
+    // Finally check onboarding progress (for new users)
+    if (userState.onboardingProgress?.coinData) {
+      const coinData = userState.onboardingProgress.coinData;
+      
+      return {
+        name: coinData.name,
+        ticker: coinData.ticker,
+        image: coinData.image,
+        targetGroup: undefined,
+        startingMarketCap: undefined,
+        fairLaunchDuration: undefined,
+        premineAmount: undefined,
+        buybackPercentage: undefined
+      };
+    }
+    
+    return null;
   }
 
   private async determineTargetGroup(context: FlowContext, coinData: CoinLaunchData): Promise<UserGroup | null> {
@@ -617,14 +689,41 @@ export class CoinLaunchFlow extends BaseFlow {
   private findGroup(groups: UserGroup[], identifier: string): UserGroup | null {
     const lowerIdentifier = identifier.toLowerCase();
     
+    // Debug logging
+    console.log('🔍 FIND GROUP DEBUG:', {
+      searchIdentifier: identifier,
+      lowerIdentifier,
+      availableGroups: groups.map(g => ({
+        id: g.id,
+        name: g.name,
+        idLower: g.id.toLowerCase(),
+        nameLower: g.name.toLowerCase()
+      }))
+    });
+    
     // Try exact contract address match
     const exactMatch = groups.find(g => g.id.toLowerCase() === lowerIdentifier);
     if (exactMatch) {
+      console.log('✅ Found exact address match:', exactMatch.name);
       return exactMatch;
     }
     
+    // Try exact group name match
+    const nameMatch = groups.find(g => g.name.toLowerCase() === lowerIdentifier);
+    if (nameMatch) {
+      console.log('✅ Found exact name match:', nameMatch.name);
+      return nameMatch;
+    }
+    
+    // Try partial group name match
+    const partialNameMatch = groups.find(g => g.name.toLowerCase().includes(lowerIdentifier));
+    if (partialNameMatch) {
+      console.log('✅ Found partial name match:', partialNameMatch.name);
+      return partialNameMatch;
+    }
+    
     // Try partial contract address match (for shortened versions like 0xabcd...1234)
-    return groups.find(g => {
+    const partialAddressMatch = groups.find(g => {
       const groupId = g.id.toLowerCase();
       // Check if identifier matches the start and end pattern (0xabcd...1234)
       if (lowerIdentifier.includes('...')) {
@@ -633,7 +732,15 @@ export class CoinLaunchFlow extends BaseFlow {
       }
       // Check if identifier is a substring of the group ID
       return groupId.includes(lowerIdentifier);
-    }) || null;
+    });
+    
+    if (partialAddressMatch) {
+      console.log('✅ Found partial address match:', partialAddressMatch.name);
+      return partialAddressMatch;
+    }
+    
+    console.log('❌ No group found for identifier:', identifier);
+    return null;
   }
 
   private async requestGroupSelection(context: FlowContext, groups: UserGroup[]): Promise<void> {
@@ -641,11 +748,14 @@ export class CoinLaunchFlow extends BaseFlow {
     
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
-      message += `📁 ${group.id}\n`;
-      message += `- coins: ${group.coins.length > 0 ? group.coins.join(', ') : 'none yet'}\n\n`;
+      const groupDisplay = GroupCreationUtils.formatGroupDisplay(group, context.userState, {
+        showClaimable: false,
+        includeEmoji: true // Use folder emoji for selection
+      });
+      message += groupDisplay + '\n';
     }
     
-    message += "specify the contract address (group ID) you want to launch into.";
+    message += "specify either the group name (e.g., \"Zenith Pack 50\") or contract address.";
     await this.sendResponse(context, message);
   }
 
@@ -654,18 +764,30 @@ export class CoinLaunchFlow extends BaseFlow {
     if (!coinData.name) missing.push('coin name');
     if (!coinData.ticker) missing.push('ticker');
     if (!coinData.image) missing.push('image');
-
-    const groupId = `${targetGroup.id.slice(0, 6)}...${targetGroup.id.slice(-4)}`;
-    const response = await getCharacterResponse({
-      openai: context.openai,
-      character: context.character,
-      prompt: `
-        User wants to launch a coin into group ${groupId} but needs: ${missing.join(', ')}.
-        Ask for the missing info. Be brief and encouraging.
-      `
-    });
-
-    await this.sendResponse(context, response);
+    
+    // Check if user is in onboarding (first coin) vs existing user
+    const isFirstCoin = context.userState.status === 'onboarding' || context.userState.coins.length === 0;
+    
+    let message;
+    if (isFirstCoin) {
+      // New user - be extra excited and encouraging
+      if (missing.length === 3) {
+        // They haven't provided anything yet
+        message = "let's launch your first coin!\n\ni need three things to get started:\n• coin name (e.g., \"Flaunchy\")\n• ticker (e.g., \"FLNCHY\")\n• image (upload or link an image)\n\njust send them all in one message and let's make this happen!";
+      } else {
+        // They've provided some info
+        message = `awesome progress on your first coin! just need: ${missing.join(', ')}\n\nsend the missing info and we'll get this live!`;
+      }
+    } else {
+      // Existing user - be more direct but still enthusiastic
+      if (missing.length === 3) {
+        message = `ready for another coin launch! need: ${missing.join(', ')}\n\nsend the details and let's get this one live!`;
+      } else {
+        message = `almost there! still need: ${missing.join(', ')}\n\nprovide the missing info to launch!`;
+      }
+    }
+    
+    await this.sendResponse(context, message);
   }
 
   private async launchCoin(context: FlowContext, coinData: Required<CoinLaunchData>, targetGroup: UserGroup): Promise<void> {
@@ -747,8 +869,15 @@ export class CoinLaunchFlow extends BaseFlow {
       // Send transaction
       await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
 
-      // Confirmation
-      await this.sendResponse(context, `sign to launch $${coinData.ticker}!`);
+      // Confirmation with prebuy suggestion
+      const currentPrebuy = coinData.premineAmount || 0;
+      let confirmationMessage = `ready to launch $${coinData.ticker}! sign the transaction to make it happen.`;
+      
+      if (currentPrebuy === 0) {
+        confirmationMessage += `\n\nby the way, let me know if you want to prebuy a % of the coin supply and we can make that happen before launch!`;
+      }
+      
+      await this.sendResponse(context, confirmationMessage);
 
       // Update state
       await context.updateState({
@@ -758,7 +887,7 @@ export class CoinLaunchFlow extends BaseFlow {
             ticker: coinData.ticker,
             name: coinData.name,
             image: imageUrl,
-            groupId: targetGroup.id,
+            groupId: targetGroup.id.toLowerCase(),
             launched: false,
             fairLaunchDuration: 30 * 60,
             fairLaunchPercent: 10,
@@ -769,7 +898,7 @@ export class CoinLaunchFlow extends BaseFlow {
           }
         ],
         groups: context.userState.groups.map(g => 
-          g.id === targetGroup.id 
+          g.id.toLowerCase() === targetGroup.id.toLowerCase()
             ? { ...g, coins: [...g.coins, coinData.ticker], updatedAt: new Date() }
             : g
         ),
@@ -954,7 +1083,14 @@ export class CoinLaunchFlow extends BaseFlow {
     const progress = userState.coinLaunchProgress;
     
     if (!progress || !progress.coinData) {
-      await this.sendResponse(context, "no coin launch in progress. what coin do you want to launch?");
+      // Check if user is in onboarding (first coin) vs existing user
+      const isFirstCoin = context.userState.status === 'onboarding' || context.userState.coins.length === 0;
+      
+      if (isFirstCoin) {
+        await this.sendResponse(context, "ready to launch your first coin? give me a name, ticker, and image!");
+      } else {
+        await this.sendResponse(context, "ready for another coin launch! what coin do you want to launch?");
+      }
       return;
     }
 
@@ -983,7 +1119,7 @@ export class CoinLaunchFlow extends BaseFlow {
     if (coinData.ticker) statusMessage += `ticker: ${coinData.ticker}\n`;
     if (coinData.image) statusMessage += `image: ${coinData.image}\n`;
     if (progress.targetGroupId && targetGroup) {
-      statusMessage += `target group: ${targetGroup.id}\n`;
+      statusMessage += `target group: "${targetGroup.name}" (${targetGroup.id.slice(0, 8)}...${targetGroup.id.slice(-6)})\n`;
     }
     
     // Show what's missing
@@ -994,10 +1130,13 @@ export class CoinLaunchFlow extends BaseFlow {
       if (missing.some(item => item.includes('target group'))) {
         statusMessage += "available groups:\n\n";
         for (const group of userState.groups) {
-          statusMessage += `${group.id}\n`;
-          statusMessage += `- coins: ${group.coins.length > 0 ? group.coins.join(', ') : 'none yet'}\n\n`;
+          const groupDisplay = GroupCreationUtils.formatGroupDisplay(group, userState, {
+            showClaimable: false,
+            includeEmoji: true
+          });
+          statusMessage += groupDisplay + '\n';
         }
-        statusMessage += "specify the contract address (group ID) you want to launch into.";
+        statusMessage += "specify either the group name (e.g., \"Zenith Pack 50\") or contract address.";
       } else {
         statusMessage += "provide the missing info to continue.";
       }
@@ -1025,7 +1164,14 @@ export class CoinLaunchFlow extends BaseFlow {
     const progress = userState.coinLaunchProgress;
     
     if (!progress || !progress.coinData) {
-      await this.sendResponse(context, "no coin launch in progress. what coin do you want to launch?");
+      // Check if user is in onboarding (first coin) vs existing user
+      const isFirstCoin = context.userState.status === 'onboarding' || context.userState.coins.length === 0;
+      
+      if (isFirstCoin) {
+        await this.sendResponse(context, "ready to launch your first coin? give me a name, ticker, and image! 🚀");
+      } else {
+        await this.sendResponse(context, "ready for another coin launch! what coin do you want to launch?");
+      }
       return;
     }
 

@@ -213,6 +213,7 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
     
     // Prominent ETH value log
     console.log(`🚀 LAUNCHING $${ticker}: Sending ${transactionValue} wei ETH (${(Number(transactionValue) / 1e18).toFixed(6)} ETH) with transaction`);
+    console.log(`💰 Transaction value in hex: 0x${BigInt(transactionValue).toString(16)}`);
     
     // Let's also log what the calculateFee call is actually returning
     if (premineAmount > 0n) {
@@ -286,7 +287,7 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
         chainId: chain.id,
         to: FlaunchZapAddress[chain.id],
         data: functionData,
-        value: transactionValue,
+        value: `0x${BigInt(transactionValue).toString(16)}`,
         metadata: {
           description: `Launch $${ticker} into ${treasuryManagerAddress.slice(0, 6)}...${treasuryManagerAddress.slice(-4)}`,
         },

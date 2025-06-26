@@ -40,6 +40,10 @@ Look for group/contract address references:
 2. Shortened addresses: "0x1234...abcd" format
 3. Group references: "into group 0x...", "launch into 0x...", "use group 0x..."
 4. Direct address mentions: any 0x followed by hex characters
+5. Group names: Look for "into [GroupName]", "launch into [GroupName]", "use [GroupName]"
+   - Examples: "into Zenith Pack 50", "launch into Alpha Squad 247", "use Static Lab 876"
+   - Group names are typically in format: "[Adjective] [Noun] [Number]"
+   - Extract the full group name including spaces and numbers
 
 LAUNCH PARAMETERS EXTRACTION
 
@@ -110,6 +114,14 @@ Token with parameters:
   "tokenDetails": {"name": "DogeCoin", "ticker": "DOGE", "image": null},
   "targetGroup": null,
   "launchParameters": {"startingMarketCap": 5000, "fairLaunchDuration": 45, "premineAmount": null, "buybackPercentage": null}
+}
+
+Token with group name:
+"launch Caps (CAPS) into Zenith Pack 50" →
+{
+  "tokenDetails": {"name": "Caps", "ticker": "CAPS", "image": null},
+  "targetGroup": "Zenith Pack 50",
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Group selection only:

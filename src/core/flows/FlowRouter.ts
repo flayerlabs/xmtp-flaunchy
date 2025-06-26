@@ -86,6 +86,13 @@ export class FlowRouter {
       console.log(`[FlowRouter] ⏭️ P2 SKIP: Not a high-confidence question (questionType=${questionType}, confidence=${intentResult.confidence.toFixed(2)})`);
     }
     
+    // SPECIAL CASE: Management intent with high confidence should override onboarding
+    // for informational queries about existing data
+    if (intentResult.intent === 'management' && intentResult.confidence >= 0.9) {
+      console.log(`[FlowRouter] 🎯 SPECIAL: High-confidence management intent overrides onboarding → management`);
+      return 'management';
+    }
+    
     // =============================================================================
     // PRIORITY 3: ONBOARDING (ONLY FOR NEW/INCOMPLETE USERS)
     // New users or users with incomplete onboarding must complete it first
@@ -98,12 +105,10 @@ export class FlowRouter {
       if (isOnboardingRelated) {
         console.log(`[FlowRouter] ✅ P3 RESULT: Onboarding-related interaction → onboarding`);
         return 'onboarding';
-      } else if (intentResult.confidence > 0.8 && intentResult.intent !== 'onboarding') {
-        // High-confidence non-onboarding intent can override onboarding
-        console.log(`[FlowRouter] ✅ P3 OVERRIDE: High-confidence ${intentResult.intent} intent overrides onboarding → ${this.intentToFlowType(intentResult.intent, userState)}`);
-        return this.intentToFlowType(intentResult.intent, userState);
       } else {
-        console.log(`[FlowRouter] ✅ P3 RESULT: Default to onboarding for incomplete user → onboarding`);
+        // Users who need onboarding should ALWAYS go to onboarding
+        // The onboarding flow can handle any type of message and guide them appropriately
+        console.log(`[FlowRouter] ✅ P3 RESULT: User needs onboarding → onboarding`);
         return 'onboarding';
       }
     } else {
@@ -173,11 +178,14 @@ export class FlowRouter {
   }
 
   private shouldStayInOnboarding(userState: UserState): boolean {
-    // User needs onboarding if:
-    // 1. They're marked as new/onboarding status AND
-    // 2. They have active onboarding progress
-    return (userState.status === 'onboarding' || userState.status === 'new') && 
-           !!userState.onboardingProgress;
+    // User needs onboarding if they don't have both groups AND coins
+    const hasGroupsAndCoins = userState.groups.length > 0 && userState.coins.length > 0;
+    
+    // Stay in onboarding if:
+    // 1. User is marked as new/onboarding, OR
+    // 2. User doesn't have both groups and coins (regardless of status)
+    return (userState.status === 'new' || userState.status === 'onboarding') || 
+           !hasGroupsAndCoins;
   }
 
   private async isOnboardingRelatedInteraction(context: FlowContext, messageText: string): Promise<boolean> {
@@ -305,6 +313,8 @@ export class FlowRouter {
       - Status inquiries: "who are the fee receivers?", "what's my group?", "show fee receivers"
       - Portfolio/balance requests: "my groups", "my coins", "show my portfolio"
       - Data listing: "list groups", "list coins", "show groups", "show coins"
+      - Questions asking about current state: "what do I have?", "show me my...", "what are my..."
+      - Possessive questions: "what groups do I have?", "what coins do I own?", "my groups?"
       
       ACTION REQUESTS (return "none"):
       - Commands to perform actions: "let's start a new group", "create a group", "launch a coin"
@@ -316,6 +326,8 @@ export class FlowRouter {
       - Confirming actions: "yes", "ok", "do it", "go ahead"
       - Responding to specific prompts: directly answering what the bot just asked for
       - Making selections: choosing from options the bot provided
+      
+      IMPORTANT: Questions like "what groups do I have?" are clearly INFORMATIONAL - they ask about existing data.
       
       Return ONLY:
       "capability" - if this is a capability question

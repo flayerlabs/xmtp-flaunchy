@@ -10,15 +10,24 @@ import { CoinLaunchFlow } from "../coin-launch/CoinLaunchFlow";
 import { AddressFeeSplitManagerAbi } from "../../../abi/AddressFeeSplitManager";
 import { getDisplayName } from "../../../utils/ens";
 import { getCharacterResponse } from "../../../utils/character";
+import { GroupStorageService } from "../../services/GroupStorageService";
 
 type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
 
 export class ManagementFlow extends BaseFlow {
   private coinLaunchFlow: CoinLaunchFlow;
+  private groupStorageService?: GroupStorageService;
 
   constructor() {
     super('ManagementFlow');
     this.coinLaunchFlow = new CoinLaunchFlow();
+  }
+
+  private getGroupStorageService(context: FlowContext): GroupStorageService {
+    if (!this.groupStorageService) {
+      this.groupStorageService = new GroupStorageService(context.sessionManager);
+    }
+    return this.groupStorageService;
   }
 
   async processMessage(context: FlowContext): Promise<void> {
@@ -413,7 +422,7 @@ If no parameters are mentioned, return: {}`
     }
   }
   
-  private async modifyGroupTransaction(context: FlowContext, messageText: string): Promise<string> {
+  private async modifyGroupTransaction(context: FlowContext, messageText: string): Promise<string | null> {
     const { userState } = context;
     
     // Get existing receivers
@@ -457,10 +466,17 @@ If no parameters are mentioned, return: {}`
         }
       }
 
+      // Equal split among all receivers
+      const equalPercentage = 100 / combinedReceivers.length;
+      const updatedReceivers = combinedReceivers.map(receiver => ({
+        ...receiver,
+        percentage: equalPercentage
+      }));
+
       // Create new transaction with everyone + existing
       try {
         const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
-          combinedReceivers,
+          updatedReceivers,
           context.creatorAddress,
           getDefaultChain(),
           "Create Group"
@@ -477,7 +493,7 @@ If no parameters are mentioned, return: {}`
             action: 'creating_group',
             step: 'creating_transaction',
             groupCreationData: {
-              receivers: combinedReceivers
+              receivers: updatedReceivers
             },
             startedAt: new Date()
           }
@@ -488,15 +504,15 @@ If no parameters are mentioned, return: {}`
           await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
           
           // Create display names for confirmation
-          const displayNames = combinedReceivers.map(r => {
-            if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
-              return r.username.startsWith('@') ? r.username : `@${r.username}`;
-            } else {
-              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-            }
+          const displayNames = updatedReceivers.map(r => {
+            const displayName = (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x'))
+              ? (r.username.startsWith('@') ? r.username : `@${r.username}`)
+              : `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+            const percentage = r.percentage ? ` (${r.percentage.toFixed(1)}%)` : '';
+            return `${displayName}${percentage}`;
           }).join(', ');
           
-          return `updated group with ${combinedReceivers.length} members: ${displayNames}. sign to create!`;
+          return `updated group with ${updatedReceivers.length} members: ${displayNames}. sign to create!`;
         }
       } catch (error) {
         this.logError('Failed to modify group transaction with everyone', error);
@@ -511,8 +527,20 @@ If no parameters are mentioned, return: {}`
       // Resolve new receivers
       const newReceivers = await GroupCreationUtils.resolveUsernames(context, extraction.receivers);
       
+      // Check for resolution failures
+      const failed = newReceivers.filter(r => !r.resolvedAddress);
+      if (failed.length > 0) {
+        return `couldn't resolve these usernames: ${failed.map(r => r.username).join(', ')}`;
+      }
+      
       // Combine with existing (avoid duplicates)
       const combinedReceivers = [...existingReceivers];
+      
+      // Check if any new receiver has a specified percentage
+      const newReceiversWithPercentage = newReceivers.filter(r => r.percentage !== undefined);
+      const newReceiversWithoutPercentage = newReceivers.filter(r => r.percentage === undefined);
+      
+      // Add new receivers, avoiding duplicates
       for (const newReceiver of newReceivers) {
         const exists = combinedReceivers.some(existing => 
           existing.resolvedAddress?.toLowerCase() === newReceiver.resolvedAddress?.toLowerCase()
@@ -522,10 +550,100 @@ If no parameters are mentioned, return: {}`
         }
       }
 
+      let updatedReceivers;
+      
+      if (newReceiversWithPercentage.length > 0) {
+        // Handle percentage-based addition
+        const totalSpecifiedPercentage = newReceiversWithPercentage.reduce((sum, r) => sum + (r.percentage || 0), 0);
+        
+        if (totalSpecifiedPercentage >= 100) {
+          return "specified percentage is too high. please use a lower percentage to leave room for existing members.";
+        }
+        
+        // Calculate remaining percentage for existing and new non-percentage receivers
+        const remainingPercentage = 100 - totalSpecifiedPercentage;
+        const receiversForEqualSplit = existingReceivers.length + newReceiversWithoutPercentage.length;
+        const equalPercentage = receiversForEqualSplit > 0 ? remainingPercentage / receiversForEqualSplit : 0;
+        
+        updatedReceivers = combinedReceivers.map(receiver => {
+          // If this is a new receiver with specified percentage, use it
+          const newReceiverWithPercentage = newReceiversWithPercentage.find(nr => 
+            nr.resolvedAddress?.toLowerCase() === receiver.resolvedAddress?.toLowerCase()
+          );
+          if (newReceiverWithPercentage) {
+            return {
+              ...receiver,
+              percentage: newReceiverWithPercentage.percentage
+            };
+          }
+          
+          // Otherwise, assign equal share of remaining percentage
+          return {
+            ...receiver,
+            percentage: equalPercentage
+          };
+        });
+      } else {
+        // No percentage specified for new receivers
+        // Check if existing receivers have percentages
+        const existingReceiversWithPercentage = existingReceivers.filter(r => r.percentage !== undefined);
+        
+        if (existingReceiversWithPercentage.length > 0) {
+          // Existing receivers have percentages - new receivers should split the remaining
+          const existingTotalPercentage = existingReceiversWithPercentage.reduce((sum, r) => sum + (r.percentage || 0), 0);
+          const remainingPercentage = 100 - existingTotalPercentage;
+          
+          if (remainingPercentage <= 0) {
+            return "existing receivers already use 100% of fees. please adjust percentages or replace some receivers.";
+          }
+          
+          // New receivers split the remaining percentage equally
+          const newReceiversCount = newReceiversWithoutPercentage.length;
+          const percentagePerNewReceiver = newReceiversCount > 0 ? remainingPercentage / newReceiversCount : 0;
+          
+          updatedReceivers = combinedReceivers.map(receiver => {
+            // If this is an existing receiver with percentage, keep it
+            const existingWithPercentage = existingReceiversWithPercentage.find(er => 
+              er.resolvedAddress?.toLowerCase() === receiver.resolvedAddress?.toLowerCase()
+            );
+            if (existingWithPercentage) {
+              return {
+                ...receiver,
+                percentage: existingWithPercentage.percentage
+              };
+            }
+            
+            // If this is a new receiver, give it share of remaining percentage
+            const isNewReceiver = newReceiversWithoutPercentage.some(nr => 
+              nr.resolvedAddress?.toLowerCase() === receiver.resolvedAddress?.toLowerCase()
+            );
+            if (isNewReceiver) {
+              return {
+                ...receiver,
+                percentage: percentagePerNewReceiver
+              };
+            }
+            
+            // For existing receivers without percentage, give them equal share of remaining
+            return {
+              ...receiver,
+              percentage: percentagePerNewReceiver
+            };
+          });
+        } else {
+          // No existing percentages - do equal split among all receivers
+          const equalPercentage = 100 / combinedReceivers.length;
+          updatedReceivers = combinedReceivers.map(receiver => ({
+            ...receiver,
+            percentage: equalPercentage
+          }));
+        }
+      }
+
       // Create new transaction
       try {
         const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
-          combinedReceivers,
+          updatedReceivers,
           context.creatorAddress,
           getDefaultChain(),
           "Create Group"
@@ -542,7 +660,7 @@ If no parameters are mentioned, return: {}`
             action: 'creating_group',
             step: 'creating_transaction',
             groupCreationData: {
-              receivers: combinedReceivers
+              receivers: updatedReceivers
             },
             startedAt: new Date()
           }
@@ -553,15 +671,15 @@ If no parameters are mentioned, return: {}`
           await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
           
           // Create display names for confirmation
-          const displayNames = combinedReceivers.map(r => {
-            if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
-              return r.username.startsWith('@') ? r.username : `@${r.username}`;
-            } else {
-              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-            }
+          const displayNames = updatedReceivers.map(r => {
+            const displayName = (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x'))
+              ? (r.username.startsWith('@') ? r.username : `@${r.username}`)
+              : `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+            const percentage = r.percentage ? ` (${r.percentage.toFixed(1)}%)` : '';
+            return `${displayName}${percentage}`;
           }).join(', ');
           
-          return `updated group with ${combinedReceivers.length} members: ${displayNames}. sign to create!`;
+          return `updated group with ${updatedReceivers.length} members: ${displayNames}. sign to create!`;
         }
       } catch (error) {
         this.logError('Failed to modify group transaction', error);
@@ -676,23 +794,10 @@ If no parameters are mentioned, return: {}`
         "Create Additional Group"
       );
     } catch (error) {
-      // Handle specific validation errors with user-friendly messages
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
-        // Parse the percentage issue
-        await this.sendResponse(context, "percentages must add up to 100%. try again or let me do equal splits.");
-        return;
-      } else if (errorMessage.includes('Couldn\'t resolve these usernames')) {
-        // Handle username resolution failures
-        await this.sendResponse(context, errorMessage.toLowerCase());
-        return;
-      } else {
-        // Handle other errors
-        this.logError('Group creation error', error);
-        await this.sendResponse(context, "something went wrong creating the group. please try again or contact support.");
-        return;
-      }
+      // Use shared error handling for consistency
+      const errorMessage = GroupCreationUtils.handleGroupCreationError(error);
+      await this.sendResponse(context, errorMessage);
+      return;
     }
 
     if (result) {
@@ -709,7 +814,10 @@ If no parameters are mentioned, return: {}`
       // Send transaction
       if (validateWalletSendCalls(result.walletSendCalls)) {
         await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
-        await this.sendResponse(context, "sign to create your new group!");
+        
+        // Use shared utility for transaction message
+        const message = GroupCreationUtils.createTransactionMessage(result.resolvedReceivers, 'created');
+        await this.sendResponse(context, message);
       }
     } else {
       await this.sendResponse(context, "who should receive trading fees? tag usernames or say 'everyone'.");
@@ -717,48 +825,35 @@ If no parameters are mentioned, return: {}`
   }
 
   private async classifyAction(messageText: string, context: FlowContext): Promise<ManagementAction> {
-    if (!messageText.trim()) {
-      return 'general_help';
-    }
-
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `Classify this user message into ONE of these exact actions:
+          content: `Classify this message into one of these actions: "${messageText}"
 
-Actions:
-- list_groups: User wants to see their groups (what groups, show groups, my groups, etc.)
-- list_coins: User wants to see their coins (what coins, show coins, my coins, etc.)
-- add_coin: User wants to launch/create a coin
-- claim_fees: User wants to claim fees
-- check_fees: User wants to check available/claimable fees (how much fees, available fees, claimable balance, etc.)
-- cancel_transaction: User wants to cancel a transaction
-- general_help: User is asking what the bot can do or general capabilities
-- answer_question: User is asking a specific question that needs a direct answer (not requesting an action)
+          Actions:
+          - list_groups: Show user's groups, group info, "my groups", "show groups"
+          - list_coins: Show user's coins, coin info, "my coins", "show coins"  
+          - add_coin: Launch/create new coin, "launch coin", "create coin"
+          - claim_fees: Claim/withdraw fees, "claim fees", "withdraw"
+          - check_fees: Check fee balances, "how much fees", "check balance"
+          - cancel_transaction: Cancel pending transaction, "cancel", "stop transaction"
+          - general_help: General help requests, "help", "what can you do"
+          - answer_question: Answer questions about the system, explain features
 
-User message: "${messageText}"
-
-Respond with ONLY the action name (e.g., "list_coins")`
+          Answer with just the action name.`
         }],
         temperature: 0.1,
         max_tokens: 20
       });
 
       const action = response.choices[0]?.message?.content?.trim() as ManagementAction;
-      
-      // Validate the response is a valid action
-      const validActions: ManagementAction[] = ['list_groups', 'list_coins', 'add_coin', 'claim_fees', 'check_fees', 'cancel_transaction', 'general_help', 'answer_question'];
-      if (validActions.includes(action)) {
-        return action;
-      }
+      return action || 'answer_question';
     } catch (error) {
-      this.logError('Failed to classify action with LLM', error);
+      this.logError('Failed to classify action', error);
+      return 'answer_question';
     }
-
-    // Fallback to general help if LLM fails
-    return 'general_help';
   }
 
   private async handleAction(context: FlowContext, action: ManagementAction): Promise<void> {
@@ -782,6 +877,9 @@ Respond with ONLY the action name (e.g., "list_coins")`
         await this.cancelTransaction(context);
         await this.sendResponse(context, "transaction cancelled!");
         break;
+      case 'general_help':
+        await this.generalHelp(context);
+        break;
       case 'answer_question':
         await this.answerQuestion(context);
         break;
@@ -804,30 +902,17 @@ Respond with ONLY the action name (e.g., "list_coins")`
     }
 
     try {
-      // Get detailed information for each group
-      const groupDetails = await Promise.all(
-        currentNetworkGroups.map(async (group) => {
-          const balance = await this.getGroupBalance(group, context.creatorAddress);
-          const coinCount = this.getGroupCoinCount(group, userState);
-          const receivers = await this.formatGroupReceivers(group);
-          
-          return {
-            id: group.id,
-            receivers,
-            coinCount,
-            balance
-          };
-        })
-      );
-
-      // Format the response
+      // Format the response using standardized display
       let message = `your ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}:\n\n`;
       
-      for (const group of groupDetails) {
-        message += `• Group ID: ${group.id}\n`;
-        message += `  Fee receivers: ${group.receivers}\n`;
-        message += `  Coins: ${group.coinCount}\n`;
-        message += `  Claimable: ${group.balance.toFixed(6)} ETH\n\n`;
+      for (const group of currentNetworkGroups) {
+        const balance = await this.getGroupBalance(group, context.creatorAddress);
+        const groupDisplay = GroupCreationUtils.formatGroupDisplay(group, userState, {
+          showClaimable: true,
+          claimableAmount: balance,
+          includeEmoji: false // Use bullet points for list format
+        });
+        message += groupDisplay + '\n';
       }
       
       message += `manage at https://mini.flaunch.gg`;
@@ -913,23 +998,21 @@ Respond with ONLY the action name (e.g., "list_coins")`
     const currentNetworkGroups = userState.groups.filter(group => group.chainName === currentChain.name);
     
     if (currentNetworkGroups.length === 0) {
-      await this.sendResponse(context, `no groups on ${currentChain.displayName} yet. create a group first to start earning fees!`);
+      await this.sendResponse(context, `no groups on ${currentChain.displayName} to check fees for.`);
       return;
     }
 
     try {
-      // Check fee balances for current network groups
-      const totalFees = await this.checkFeeBalances(currentNetworkGroups, context.creatorAddress);
+      const totalBalance = await this.checkFeeBalances(currentNetworkGroups, context.creatorAddress);
       
-      if (totalFees > 0) {
-        await this.sendResponse(context, `you have ${totalFees.toFixed(6)} ETH in claimable fees across ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''}. claim at https://mini.flaunch.gg`);
+      if (totalBalance > 0) {
+        await this.sendResponse(context, `you have ${totalBalance.toFixed(6)} ETH in claimable fees across ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}.`);
       } else {
-        await this.sendResponse(context, `no claimable fees yet across ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''}. fees accumulate from coin trading!`);
+        await this.sendResponse(context, `no claimable fees available on ${currentChain.displayName}.`);
       }
-      
     } catch (error) {
-      this.logError('Failed to check fee balances', error);
-      await this.sendResponse(context, `couldn't check fee balances right now. view at https://mini.flaunch.gg`);
+      this.logError('Failed to check fees', error);
+      await this.sendResponse(context, "couldn't check fee balances. please try again.");
     }
   }
 
@@ -1079,16 +1162,8 @@ Answer only "yes" or "no".`
       if (validateWalletSendCalls(walletSendCalls)) {
         await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
         
-        // Create display names for confirmation
-        const displayNames = feeReceivers.map(r => {
-          if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
-            return r.username.startsWith('@') ? r.username : `@${r.username}`;
-          } else {
-            return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-          }
-        }).join(', ');
-        
-        await this.sendResponse(context, `creating group with ${feeReceivers.length} members: ${displayNames}. sign to create!`);
+        // No confirmation message - just create the transaction silently
+        return;
       }
 
     } catch (error) {
@@ -1159,16 +1234,26 @@ Answer only "yes" or "no".`
 
   private getGroupCoinCount(group: UserGroup, userState: any): number {
     // Count coins that belong to this group and are launched
-    return userState.coins.filter((coin: any) => 
-      coin.groupId === group.id && coin.launched
-    ).length;
-  }
-
-  private async formatGroupReceivers(group: UserGroup): Promise<string> {
-    const receiverCount = group.receivers?.length || 0;
-    if (receiverCount === 0) return "no fee receivers";
-    if (receiverCount === 1) return "1 fee receiver";
-    return `${receiverCount} fee receivers`;
+    const groupCoins = userState.coins.filter((coin: any) => 
+      coin.groupId?.toLowerCase() === group.id.toLowerCase() && coin.launched
+    );
+    
+    // Debug logging
+    console.log('🔍 GROUP COIN COUNT DEBUG:', {
+      groupId: group.id,
+      groupIdLower: group.id.toLowerCase(),
+      totalCoins: userState.coins.length,
+      coinsWithGroupId: userState.coins.map((coin: any) => ({
+        ticker: coin.ticker,
+        groupId: coin.groupId,
+        groupIdLower: coin.groupId?.toLowerCase(),
+        launched: coin.launched,
+        matches: coin.groupId?.toLowerCase() === group.id.toLowerCase()
+      })),
+      matchingCoins: groupCoins.length
+    });
+    
+    return groupCoins.length;
   }
 
   /**

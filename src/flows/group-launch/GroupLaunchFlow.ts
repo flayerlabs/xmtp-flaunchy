@@ -69,20 +69,10 @@ export class GroupLaunchFlow extends BaseFlow {
         "Create Group"
       );
     } catch (error) {
-      // Handle specific validation errors with user-friendly messages
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
-        await this.sendResponse(context, "percentages need to add up to 100%. try again with equal splits or percentages that total 100%.");
-        return;
-      } else if (errorMessage.includes('Couldn\'t resolve these usernames')) {
-        await this.sendResponse(context, errorMessage.toLowerCase());
-        return;
-      } else {
-        this.logError('Group creation error', error);
-        await this.sendResponse(context, "something went wrong creating the group. please try again or contact support.");
-        return;
-      }
+      // Use shared error handling for consistency
+      const errorMessage = GroupCreationUtils.handleGroupCreationError(error);
+      await this.sendResponse(context, errorMessage);
+      return;
     }
 
     if (result) {
@@ -106,7 +96,10 @@ export class GroupLaunchFlow extends BaseFlow {
       // Send transaction
       if (validateWalletSendCalls(result.walletSendCalls)) {
         await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
-        await this.sendResponse(context, "sign to create your new group!");
+        
+        // Use shared utility for transaction message
+        const message = GroupCreationUtils.createTransactionMessage(result.resolvedReceivers, 'created');
+        await this.sendResponse(context, message);
       }
     } else {
       // Ask for fee receivers

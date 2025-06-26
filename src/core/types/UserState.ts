@@ -63,6 +63,8 @@ export interface UserCoin {
 
 export interface UserGroup {
   id: string; // This is the contract address
+  name: string; // Generated fun name for the group
+  createdBy: string; // Address of the user who created this group
   type: 'username_split' | 'staking_split';
   receivers: Array<{
     username: string;

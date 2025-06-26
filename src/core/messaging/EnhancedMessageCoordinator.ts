@@ -11,6 +11,7 @@ import { decodeEventLog, decodeAbiParameters, type Log, createPublicClient, http
 import { base, baseSepolia, mainnet } from 'viem/chains';
 import { uploadImageToIPFS } from '../../../utils/ipfs';
 import { getDefaultChain } from '../../flows/utils/ChainSelection';
+import { GroupStorageService } from "../../services/GroupStorageService";
 
 // ABI for PoolCreated event
 const poolCreatedAbi = [
@@ -200,6 +201,8 @@ export class EnhancedMessageCoordinator {
   // Thread timeout - if no activity for 30 minutes, consider thread inactive
   private readonly THREAD_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
   
+  private groupStorageService: GroupStorageService;
+  
   constructor(
     private client: Client<any>,
     private openai: OpenAI,
@@ -210,6 +213,7 @@ export class EnhancedMessageCoordinator {
   ) {
     this.messageQueue = new Map();
     this.waitTimeMs = waitTimeMs;
+    this.groupStorageService = new GroupStorageService(this.sessionManager);
   }
 
   async processMessage(message: DecodedMessage): Promise<boolean> {
@@ -958,47 +962,60 @@ export class EnhancedMessageCoordinator {
           }
           
           // Send confirmation message using CORRECT receiver data
-          const receiverNames = receivers.map(r => {
-            // Format receiver display name
+          const receiverNames = await Promise.all(receivers.map(async r => {
+            // Format receiver display name with improved username resolution
             if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
-              return r.username;
+              // Username is already resolved (e.g., @javery)
+              return r.username.startsWith('@') ? r.username : `@${r.username}`;
             } else {
-              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+              // Try to resolve the address to a username
+              const resolvedUsername = await this.resolveUsername(r.resolvedAddress);
+              if (resolvedUsername && resolvedUsername !== r.resolvedAddress) {
+                return resolvedUsername.startsWith('@') ? resolvedUsername : `@${resolvedUsername}`;
+              } else {
+                // Fallback to shortened address
+                return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+              }
             }
-          }).join(', ');
+          }));
           
-          await conversation.send(`group created for ${receiverNames}!`);
-          
-          // For onboarding, move to next step
-          if (userState.status === 'onboarding') {
-            const coinData = userState.onboardingProgress?.coinData;
-            if (coinData && (coinData.name || coinData.ticker)) {
-              await conversation.send("now let's launch your coin!");
-            } else {
-              await conversation.send("what coin do you want to launch?");
-            }
-          }
-          
-          // Create the group entry for the user's groups array
-          const newGroup: UserGroup = {
-            id: contractAddress,
-            type: 'username_split',
-            receivers,
-            coins: [],
+          // Store the group for all receivers using the GroupStorageService
+          // This will handle generating the group name and storing it for all participants
+          const groupName = await this.groupStorageService.storeGroupForAllReceivers(
+            senderInboxId,
+            contractAddress,
+            receivers.map(r => ({
+              username: r.username,
+              resolvedAddress: r.resolvedAddress,
+              percentage: r.percentage
+            })),
             chainId,
             chainName,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          };
+            txHash
+          );
           
+          // Generate a badass introduction message for the new group
+          const { GroupCreationUtils } = await import('../../flows/utils/GroupCreationUtils');
+          const introMessage = await GroupCreationUtils.generateGroupIntroduction(
+            groupName,
+            receivers.map(r => ({
+              username: r.username,
+              resolvedAddress: r.resolvedAddress,
+              percentage: r.percentage
+            })),
+            this.openai,
+            userState.status === 'onboarding' // Include coin prompt for onboarding users
+          );
+          
+          await conversation.send(introMessage);
+          
+          // For onboarding, the coin prompt is now included in the intro message
+          // No need for separate messages
+          
+          // Update the creator's state (group was already added by GroupStorageService)
           await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
             managementProgress: undefined, // Clear management progress when group creation completes
-            // Add the group to the user's groups array
-            groups: [
-              ...userState.groups,
-              newGroup
-            ],
             onboardingProgress: currentProgress ? {
               ...currentProgress,
               step: 'coin_creation',
@@ -1017,7 +1034,7 @@ export class EnhancedMessageCoordinator {
         } else {
           // Coin creation success
           const networkPath = network === 'baseSepolia' ? 'base-sepolia' : 'base';
-          await conversation.send(`🎉 coin created! CA: ${contractAddress}\n\ntrack your coin's progress: https://mini.flaunch.gg\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`);
+          await conversation.send(`coin created! CA: ${contractAddress}\n\ntrack your coin's progress: https://mini.flaunch.gg\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`);
           // For coin creation, add the coin to user's collection
           // Use the group address from the user's onboarding progress (the group they just created)
           const groupAddress = userState.onboardingProgress?.groupData?.managerAddress || 
@@ -1039,7 +1056,7 @@ export class EnhancedMessageCoordinator {
                   ticker: pendingTx.coinData.ticker,
                   name: pendingTx.coinData.name,
                   image: pendingTx.coinData.image,
-                  groupId: groupAddress,
+                  groupId: groupAddress.toLowerCase(), // Normalize to lowercase for consistent matching
                   contractAddress,
                   launched: true,
                   fairLaunchDuration: 30 * 60, // 30 minutes
@@ -1052,7 +1069,7 @@ export class EnhancedMessageCoordinator {
               ],
               // Update the group's coins array to include the new coin ticker
               groups: userState.groups.map(group => 
-                group.id === groupAddress 
+                group.id.toLowerCase() === groupAddress.toLowerCase()
                   ? { ...group, coins: [...group.coins, pendingTx.coinData!.ticker], updatedAt: new Date() }
                   : group
               )
@@ -1063,9 +1080,9 @@ export class EnhancedMessageCoordinator {
           if (userState.status === 'onboarding') {
             await this.sessionManager.completeOnboarding(senderInboxId);
             
-            // Send completion message with mini.flaunch.gg link
-            const completionMessage = `🎉 onboarding complete! track your coin's progress and manage your group at https://mini.flaunch.gg`;
-            await conversation.send(completionMessage);
+            // Onboarding completion message removed per user request
+            // const completionMessage = `onboarding complete! track your coin's progress and manage your group at https://mini.flaunch.gg`;
+            // await conversation.send(completionMessage);
           }
         }
 

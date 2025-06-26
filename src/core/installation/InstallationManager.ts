@@ -241,29 +241,17 @@ export class InstallationManager {
       try {
         console.log(`📦 Building XMTP client from existing installation (attempt ${attempt}/${retryAttempts})...`);
         
-        // Try Client.build() first for existing installations
-        try {
-          const client = await (Client as any).build(signer, {
-            env,
-            codecs,
-            dbPath,
-            dbEncryptionKey,
-          });
-          console.log("✅ XMTP client built successfully from existing installation!");
-          return client;
-        } catch (buildError: any) {
-          console.log("⚠️ Client.build() not available or failed, falling back to Client.create()");
-          
-          // Fallback to create if build doesn't work
-          const client = await Client.create(signer, {
-            env,
-            codecs,
-            dbPath,
-            dbEncryptionKey,
-          });
-          console.log("✅ XMTP client created successfully!");
-          return client;
-        }
+        // Use Client.create() with same database path and encryption key to reuse existing installation
+        // XMTP will automatically reuse the existing installation if the database already exists
+        const client = await Client.create(signer, {
+          env,
+          codecs,
+          dbPath,
+          dbEncryptionKey,
+        });
+        
+        console.log("✅ XMTP client created successfully (reused existing installation)!");
+        return client;
 
       } catch (error: any) {
         lastError = error;
