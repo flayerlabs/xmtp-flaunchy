@@ -190,6 +190,16 @@ export class EnhancedMessageCoordinator {
   
   private waitTimeMs: number;
   
+  // Track active conversation threads where the agent is engaged
+  private activeThreads: Map<string, { // conversationId -> thread state
+    lastAgentMessageTime: Date;
+    participatingUsers: Set<string>; // users who have responded to agent in this thread
+    threadStartTime: Date;
+  }> = new Map();
+  
+  // Thread timeout - if no activity for 30 minutes, consider thread inactive
+  private readonly THREAD_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+  
   constructor(
     private client: Client<any>,
     private openai: OpenAI,
@@ -361,8 +371,8 @@ export class EnhancedMessageCoordinator {
       const inboxState = await this.client.preferences.inboxStateFromInboxIds([senderInboxId]);
       const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || '';
 
-      // Get user state
-      const userState = await this.sessionManager.getUserState(senderInboxId);
+      // Get user state and clean up legacy data
+      let userState = await this.sessionManager.getUserState(senderInboxId);
 
       // Check if we should process this message
       const shouldProcess = await this.shouldProcessMessage(primaryMessage, conversation, userState);
@@ -477,6 +487,8 @@ export class EnhancedMessageCoordinator {
       // Helper functions
       sendResponse: async (message: string) => {
         await conversation.send(message);
+        // Update thread state when agent sends a message
+        this.updateThreadWithAgentMessage(conversation.id);
       },
 
       updateState: async (updates: Partial<UserState>) => {
@@ -1027,7 +1039,7 @@ export class EnhancedMessageCoordinator {
                   contractAddress,
                   launched: true,
                   fairLaunchDuration: 30 * 60, // 30 minutes
-                  fairLaunchPercent: 40,
+                  fairLaunchPercent: 10,
                   initialMarketCap: 1000,
                   chainId,
                   chainName,
@@ -1300,45 +1312,247 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    // In group chats, check if message is directed at the agent
-    const messageText = typeof primaryMessage.content === 'string' ? primaryMessage.content.toLowerCase() : '';
+    const messageText = typeof primaryMessage.content === 'string' ? primaryMessage.content : '';
+    const senderInboxId = primaryMessage.senderInboxId;
+    const conversationId = primaryMessage.conversationId;
     
-    // Check if message mentions the agent by name
-    const agentName = this.character.name.toLowerCase();
-    const mentionsAgent = messageText.includes(agentName) || 
-                         messageText.includes(`@${agentName}`) ||
-                         messageText.includes('flaunchy') ||
-                         messageText.includes('@flaunchy');
-
-    // Check if this is a response to a previous agent message
-    const isResponseToAgent = await this.isResponseToAgentMessage(primaryMessage, conversation);
-
-    // Check if user has ongoing onboarding or management progress (agent should continue conversations)
-    const hasOngoingProcess = userState.status === 'onboarding' || 
-                             userState.managementProgress !== undefined;
-
-    // Process if: mentioned, response to agent, or has ongoing process
-    return mentionsAgent || isResponseToAgent || hasOngoingProcess;
+    // Check for explicit @ mentions of the agent
+    const hasMention = this.detectAgentMention(messageText);
+    
+    if (hasMention) {
+      console.log('🎯 AGENT MENTIONED - processing message', {
+        senderInboxId: senderInboxId.slice(0, 8) + '...',
+        conversationId: conversationId.slice(0, 8) + '...',
+        messageText: messageText.substring(0, 100) + '...'
+      });
+      
+      // Start/update active thread when mentioned
+      await this.updateActiveThread(conversationId, senderInboxId, primaryMessage);
+      return true;
+    }
+    
+    // Check if this is part of an active conversation thread
+    const isActiveThread = await this.isInActiveThread(conversationId, senderInboxId, primaryMessage);
+    
+    if (isActiveThread) {
+      console.log('🔄 ACTIVE THREAD - continuing conversation', {
+        senderInboxId: senderInboxId.slice(0, 8) + '...',
+        conversationId: conversationId.slice(0, 8) + '...'
+      });
+      
+      // Update thread activity
+      await this.updateThreadActivity(conversationId, senderInboxId);
+      return true;
+    }
+    
+    // Check if user has critical ongoing processes that require attention
+    const hasCriticalProcess = this.hasCriticalOngoingProcess(userState);
+    
+    if (hasCriticalProcess) {
+      console.log('⚠️ CRITICAL PROCESS - processing message', {
+        senderInboxId: senderInboxId.slice(0, 8) + '...',
+        status: userState.status,
+        hasOnboarding: !!userState.onboardingProgress,
+        hasManagement: !!userState.managementProgress,
+        hasPendingTx: !!userState.pendingTransaction
+      });
+      
+      return true;
+    }
+    
+    console.log('⏭️ IGNORING GROUP MESSAGE - no mention or active thread', {
+      senderInboxId: senderInboxId.slice(0, 8) + '...',
+      conversationId: conversationId.slice(0, 8) + '...',
+      messageText: messageText.substring(0, 50) + '...'
+    });
+    
+    return false;
   }
 
-  private async isResponseToAgentMessage(message: DecodedMessage, conversation: any): Promise<boolean> {
+  /**
+   * Detect if message contains @ mention of the agent
+   */
+  private detectAgentMention(messageText: string): boolean {
+    if (!messageText || typeof messageText !== 'string') {
+      return false;
+    }
+    
+    const lowerText = messageText.toLowerCase();
+    const agentName = this.character.name.toLowerCase(); // "flaunchy"
+    
+    // Check for various mention patterns
+    const mentionPatterns = [
+      `@${agentName}`,           // @flaunchy
+      `@ ${agentName}`,          // @ flaunchy  
+      `@${agentName} `,          // @flaunchy (with space after)
+      ` @${agentName}`,          // (space before) @flaunchy
+      ` @${agentName} `,         // (spaces around) @flaunchy
+    ];
+    
+    // Check exact @ mention patterns first (most reliable)
+    for (const pattern of mentionPatterns) {
+      if (lowerText.includes(pattern)) {
+        return true;
+      }
+    }
+    
+    // Check for @ at start of message followed by agent name
+    if (lowerText.startsWith(`@${agentName}`) || lowerText.startsWith(`@ ${agentName}`)) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Check if message is part of an active conversation thread
+   */
+  private async isInActiveThread(conversationId: string, senderInboxId: string, message: DecodedMessage): Promise<boolean> {
+    const thread = this.activeThreads.get(conversationId);
+    
+    if (!thread) {
+      return false;
+    }
+    
+    // Check if thread has timed out
+    const now = new Date();
+    const timeSinceLastActivity = now.getTime() - thread.lastAgentMessageTime.getTime();
+    
+    if (timeSinceLastActivity > this.THREAD_TIMEOUT_MS) {
+      // Thread has timed out, remove it
+      this.activeThreads.delete(conversationId);
+      console.log('🕐 THREAD TIMEOUT - removing inactive thread', {
+        conversationId: conversationId.slice(0, 8) + '...',
+        timeoutMinutes: Math.round(timeSinceLastActivity / (60 * 1000))
+      });
+      return false;
+    }
+    
+    // Check if this user is participating in the thread
+    const isParticipating = thread.participatingUsers.has(senderInboxId);
+    
+    // Also check if this message is a direct response to recent agent activity
+    const isRecentResponse = await this.isRecentResponseToAgent(message, thread.lastAgentMessageTime);
+    
+    return isParticipating || isRecentResponse;
+  }
+
+  /**
+   * Check if message is a recent response to agent activity
+   */
+  private async isRecentResponseToAgent(message: DecodedMessage, lastAgentTime: Date): Promise<boolean> {
     try {
-      // Get recent messages to check if this is following an agent message
+      const conversation = await this.client.conversations.getConversationById(message.conversationId);
+      if (!conversation) return false;
+      
+      // Get recent messages to check sequence
       const messages = await conversation.messages({ limit: 10 });
       
-      // Find the message before this one
-      const messageIndex = messages.findIndex((msg: any) => msg.id === message.id);
-      if (messageIndex > 0) {
-        const previousMessage = messages[messageIndex - 1];
-        // Check if previous message was from the agent
-        return previousMessage.senderInboxId === this.client.inboxId;
+      // Find messages between the last agent activity and now
+      const messageTime = new Date(message.sentAt);
+      const timeSinceAgent = messageTime.getTime() - lastAgentTime.getTime();
+      
+      // Consider it a recent response if within 5 minutes of agent activity
+      if (timeSinceAgent > 0 && timeSinceAgent < (5 * 60 * 1000)) {
+        // Check if there are mostly user messages since agent activity
+        const recentMessages = messages.filter((msg: any) => {
+          const msgTime = new Date(msg.sentAt);
+          return msgTime.getTime() > lastAgentTime.getTime();
+        });
+        
+        const agentMessagesCount = recentMessages.filter((msg: any) => msg.senderInboxId === this.client.inboxId).length;
+        const userMessagesCount = recentMessages.length - agentMessagesCount;
+        
+        // If mostly user messages since agent activity, consider it a response
+        return userMessagesCount >= agentMessagesCount;
       }
       
       return false;
+      
     } catch (error) {
-      console.error('Error checking if response to agent message:', error);
+      console.error('Error checking recent response:', error);
       return false;
     }
+  }
+
+  /**
+   * Update active thread when agent is mentioned or responds
+   */
+  private async updateActiveThread(conversationId: string, mentioningUserId: string, message: DecodedMessage): Promise<void> {
+    const now = new Date();
+    let thread = this.activeThreads.get(conversationId);
+    
+    if (!thread) {
+      thread = {
+        lastAgentMessageTime: now,
+        participatingUsers: new Set(),
+        threadStartTime: now
+      };
+      this.activeThreads.set(conversationId, thread);
+    }
+    
+    // Add the mentioning user to participating users
+    thread.participatingUsers.add(mentioningUserId);
+    
+    console.log('🧵 THREAD UPDATED', {
+      conversationId: conversationId.slice(0, 8) + '...',
+      participatingUsers: thread.participatingUsers.size,
+      mentioningUser: mentioningUserId.slice(0, 8) + '...'
+    });
+  }
+
+  /**
+   * Update thread activity when user responds in active thread
+   */
+  private async updateThreadActivity(conversationId: string, userId: string): Promise<void> {
+    const thread = this.activeThreads.get(conversationId);
+    if (thread) {
+      thread.participatingUsers.add(userId);
+    }
+  }
+
+  /**
+   * Call this when agent sends a message to update thread state
+   */
+  private updateThreadWithAgentMessage(conversationId: string): void {
+    const thread = this.activeThreads.get(conversationId);
+    if (thread) {
+      thread.lastAgentMessageTime = new Date();
+      
+      console.log('🤖 AGENT MESSAGE SENT - thread updated', {
+        conversationId: conversationId.slice(0, 8) + '...',
+        timestamp: thread.lastAgentMessageTime.toISOString()
+      });
+    }
+  }
+
+  /**
+   * Check if user has critical ongoing processes that require attention
+   */
+  private hasCriticalOngoingProcess(userState: any): boolean {
+    // Only consider truly critical processes that need immediate attention
+    return (
+      // User is in onboarding and has made progress
+      (userState.status === 'onboarding' && userState.onboardingProgress) ||
+      // User has a pending transaction that needs processing
+      (userState.pendingTransaction !== undefined) ||
+      // User has active management progress with recent activity
+      (userState.managementProgress !== undefined && this.isRecentManagementActivity(userState.managementProgress))
+    );
+  }
+
+  /**
+   * Check if management progress is recent (within last 10 minutes)
+   */
+  private isRecentManagementActivity(managementProgress: any): boolean {
+    if (!managementProgress?.startedAt) return false;
+    
+    const now = new Date();
+    const startTime = new Date(managementProgress.startedAt);
+    const timeDiff = now.getTime() - startTime.getTime();
+    
+    // Consider recent if within last 10 minutes
+    return timeDiff < (10 * 60 * 1000);
   }
 
   /**

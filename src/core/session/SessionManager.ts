@@ -103,7 +103,7 @@ export class SessionManager {
       groups: [],
       preferences: {
         defaultMarketCap: 1000,
-        defaultFairLaunchPercent: 40,
+        defaultFairLaunchPercent: 10,
         defaultFairLaunchDuration: 30 * 60, // 30 minutes
         notificationSettings: {
           launchUpdates: true,

@@ -22,6 +22,7 @@ import { OnboardingFlow } from "./flows/onboarding/OnboardingFlow";
 import { QAFlow } from "./flows/qa/QAFlow";
 import { ManagementFlow } from "./flows/management/ManagementFlow";
 import { CoinLaunchFlow } from "./flows/coin-launch/CoinLaunchFlow";
+import { GroupLaunchFlow } from "./flows/group-launch/GroupLaunchFlow";
 import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoordinator";
 import { InstallationManager } from "./core/installation/InstallationManager";
 
@@ -113,7 +114,8 @@ async function main() {
     onboarding: new OnboardingFlow(),
     qa: new QAFlow(),
     management: new ManagementFlow(),
-    coin_launch: new CoinLaunchFlow()
+    coin_launch: new CoinLaunchFlow(),
+    group_launch: new GroupLaunchFlow()
   };
   
   // 3. Create flow router

@@ -9,8 +9,9 @@ import { getDefaultChain } from "../utils/ChainSelection";
 import { CoinLaunchFlow } from "../coin-launch/CoinLaunchFlow";
 import { AddressFeeSplitManagerAbi } from "../../../abi/AddressFeeSplitManager";
 import { getDisplayName } from "../../../utils/ens";
+import { getCharacterResponse } from "../../../utils/character";
 
-type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'create_group' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
+type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
 
 export class ManagementFlow extends BaseFlow {
   private coinLaunchFlow: CoinLaunchFlow;
@@ -29,13 +30,16 @@ export class ManagementFlow extends BaseFlow {
       messageText: messageText?.substring(0, 100)
     });
 
+    // Clear any conflicting pending transactions from other flows (but not our own)
+    await this.clearCrossFlowTransactions(context);
+
     // Handle pending transactions
     if (userState.pendingTransaction && messageText) {
       const transactionResponse = await this.handlePendingTransaction(context, messageText);
       if (transactionResponse) {
         await this.sendResponse(context, transactionResponse);
-        return;
       }
+      return;
     }
 
     // Handle ongoing management progress
@@ -52,23 +56,346 @@ export class ManagementFlow extends BaseFlow {
   private async handlePendingTransaction(context: FlowContext, messageText: string): Promise<string | null> {
     const { userState } = context;
     
-    // Simple intent detection for pending transactions
-    const lowerMessage = messageText.toLowerCase();
-    
-    if (lowerMessage.includes('cancel') || lowerMessage.includes('stop')) {
-      await this.cancelTransaction(context);
-      return 'transaction cancelled!';
+    // Add comprehensive logging for debugging
+    if (!userState.pendingTransaction) {
+      this.log('No pending transaction found', {
+        userId: userState.userId,
+        messageText: messageText.substring(0, 100)
+      });
+      console.log('🚫 No pending transaction found for user:', userState.userId);
+      return null;
     }
     
-    if (lowerMessage.includes('add') || lowerMessage.includes('include')) {
-      return await this.modifyTransaction(context, messageText);
+    // Log pending transaction details
+    const pendingTx = userState.pendingTransaction;
+    this.log('Found pending transaction', {
+      userId: userState.userId,
+      transactionType: pendingTx.type,
+      pendingTransaction: pendingTx,
+      messageText: messageText.substring(0, 100)
+    });
+    
+    console.log('💳 PENDING TRANSACTION DETAILS:', {
+      userId: userState.userId,
+      type: pendingTx.type,
+      coinData: pendingTx.coinData,
+      launchParameters: pendingTx.launchParameters,
+      network: pendingTx.network,
+      timestamp: pendingTx.timestamp,
+      messageText: messageText
+    });
+    
+    // Use LLM to determine if the message is about the pending transaction
+    const isTransactionRelated = await this.isMessageAboutPendingTransaction(context, messageText, userState.pendingTransaction?.type || 'unknown');
+    
+    console.log('🤖 TRANSACTION RELATION CHECK:', {
+      userId: userState.userId,
+      messageText,
+      isTransactionRelated,
+      transactionType: pendingTx.type
+    });
+    
+    // If message is not transaction-related, don't handle it here
+    if (!isTransactionRelated) {
+      this.log('Message not about pending transaction, passing through', {
+        userId: userState.userId,
+        messageText: messageText.substring(0, 100)
+      });
+      console.log('⏭️ Message not transaction-related, passing to normal flow');
+      return null;
     }
     
-    // Transaction inquiry
-    return await this.handleTransactionInquiry(context, messageText);
+    console.log('✅ Message IS transaction-related, handling...');
+    
+    // Use LLM to classify the transaction-related intent
+    const transactionIntent = await this.classifyTransactionIntent(context, messageText);
+    
+    console.log('🎯 TRANSACTION INTENT:', {
+      userId: userState.userId,
+      intent: transactionIntent,
+      messageText
+    });
+    
+    switch (transactionIntent) {
+      case 'cancel':
+        console.log('🚫 CANCELLING TRANSACTION');
+        await this.cancelTransaction(context);
+        return 'transaction cancelled.';
+        
+      case 'modify':
+        console.log('🔧 MODIFYING TRANSACTION');
+        const modifyResult = await this.modifyTransaction(context, messageText);
+        console.log('🔧 MODIFY RESULT:', { modifyResult, isNull: modifyResult === null });
+        return modifyResult;
+        
+      case 'inquiry':
+        console.log('❓ HANDLING INQUIRY');
+        return await this.handleTransactionInquiry(context, messageText);
+        
+      default:
+        console.log('❓ DEFAULT TO INQUIRY');
+        return await this.handleTransactionInquiry(context, messageText);
+    }
   }
 
-  private async modifyTransaction(context: FlowContext, messageText: string): Promise<string> {
+  private async isMessageAboutPendingTransaction(context: FlowContext, messageText: string, transactionType: string): Promise<boolean> {
+    const { userState } = context;
+    const pendingTx = userState.pendingTransaction;
+    
+    if (!pendingTx) return false;
+    
+    // Build comprehensive transaction context
+    let transactionContext = `The user has a pending ${transactionType} transaction with the following details:\n\n`;
+    
+    if (pendingTx.type === 'coin_creation' && pendingTx.coinData) {
+      transactionContext += `Coin Details:\n`;
+      transactionContext += `- Name: ${pendingTx.coinData.name}\n`;
+      transactionContext += `- Ticker: ${pendingTx.coinData.ticker}\n`;
+      transactionContext += `- Image: ${pendingTx.coinData.image}\n\n`;
+      
+      if (pendingTx.launchParameters) {
+        transactionContext += `Launch Parameters:\n`;
+        transactionContext += `- Starting Market Cap: $${pendingTx.launchParameters.startingMarketCap || 1000}\n`;
+        transactionContext += `- Fair Launch Duration: ${pendingTx.launchParameters.fairLaunchDuration || 30} minutes\n`;
+        transactionContext += `- Premine Amount: ${pendingTx.launchParameters.premineAmount || 0}%\n`;
+        transactionContext += `- Buyback Percentage: ${pendingTx.launchParameters.buybackPercentage || 0}%\n`;
+        if (pendingTx.launchParameters.targetGroupId) {
+          transactionContext += `- Target Group: ${pendingTx.launchParameters.targetGroupId}\n`;
+        }
+        transactionContext += `\n`;
+      }
+    } else if (pendingTx.type === 'group_creation') {
+      // Get group creation details from progress
+      let receivers: any[] = [];
+      if (userState.managementProgress?.groupCreationData?.receivers) {
+        receivers = userState.managementProgress.groupCreationData.receivers;
+      } else if (userState.onboardingProgress?.splitData?.receivers) {
+        receivers = userState.onboardingProgress.splitData.receivers;
+      }
+      
+      if (receivers.length > 0) {
+        transactionContext += `Group Creation Details:\n`;
+        transactionContext += `- Fee Receivers: ${receivers.length}\n`;
+        receivers.forEach((r, i) => {
+          const displayName = r.username || `${r.resolvedAddress?.slice(0, 6)}...${r.resolvedAddress?.slice(-4)}`;
+          transactionContext += `  ${i + 1}. ${displayName}${r.percentage ? ` (${r.percentage}%)` : ''}\n`;
+        });
+        transactionContext += `\n`;
+      }
+    }
+    
+    transactionContext += `Network: ${pendingTx.network}\n`;
+    transactionContext += `Created: ${new Date(pendingTx.timestamp).toLocaleString()}\n\n`;
+    
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `${transactionContext}Is this message about that pending transaction?
+
+Message: "${messageText}"
+
+Consider the message about the pending transaction if it:
+- Asks about transaction status or details
+- Asks about specific parameters (market cap, duration, premine, buybacks, etc.)
+- Wants to modify/update the transaction
+- Wants to cancel the transaction
+- References signing or confirming
+- Asks about coin details that are part of the transaction
+- Asks about launch parameters or settings
+
+Do NOT consider it about the transaction if it's:
+- Asking about existing/completed groups or coins
+- General questions about capabilities
+- Completely unrelated requests
+
+Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+    } catch (error) {
+      this.logError('Failed to determine if message is about pending transaction', error);
+      // Conservative fallback - assume it's not about the transaction
+      return false;
+    }
+  }
+
+  private async classifyTransactionIntent(context: FlowContext, messageText: string): Promise<'cancel' | 'modify' | 'inquiry'> {
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Classify this transaction-related message:
+
+Message: "${messageText}"
+
+Categories:
+- cancel: User wants to cancel/stop the transaction
+- modify: User wants to add/change/update transaction details
+- inquiry: User is asking about transaction status/details
+
+Respond with only: cancel, modify, or inquiry`
+        }],
+        temperature: 0.1,
+        max_tokens: 10
+      });
+
+      const intent = response.choices[0]?.message?.content?.trim().toLowerCase();
+      if (intent && ['cancel', 'modify', 'inquiry'].includes(intent)) {
+        return intent as 'cancel' | 'modify' | 'inquiry';
+      }
+    } catch (error) {
+      this.logError('Failed to classify transaction intent', error);
+    }
+
+    // Default to inquiry
+    return 'inquiry';
+  }
+
+  private async modifyTransaction(context: FlowContext, messageText: string): Promise<string | null> {
+    const { userState } = context;
+    const pendingTx = userState.pendingTransaction;
+    
+    if (!pendingTx) {
+      return "no pending transaction to modify.";
+    }
+    
+    // Handle coin creation transaction modifications
+    if (pendingTx.type === 'coin_creation') {
+      return await this.modifyCoinTransaction(context, messageText);
+    }
+    
+    // Handle group creation transaction modifications
+    if (pendingTx.type === 'group_creation') {
+      return await this.modifyGroupTransaction(context, messageText);
+    }
+    
+    return "couldn't determine transaction type to modify.";
+  }
+  
+  private async modifyCoinTransaction(context: FlowContext, messageText: string): Promise<string | null> {
+    const { userState } = context;
+    const pendingTx = userState.pendingTransaction!;
+    
+    // Use LLM to extract parameter changes from the message
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Extract coin launch parameter changes from this message:
+
+Message: "${messageText}"
+
+Current parameters:
+- Starting Market Cap: $${pendingTx.launchParameters?.startingMarketCap || 1000}
+- Fair Launch Duration: ${pendingTx.launchParameters?.fairLaunchDuration || 30} minutes
+- Premine Amount: ${pendingTx.launchParameters?.premineAmount || 0}%
+- Buyback Percentage: ${pendingTx.launchParameters?.buybackPercentage || 0}%
+
+Return ONLY a JSON object with any changed parameters:
+{
+  "startingMarketCap": number (if mentioned),
+  "fairLaunchDuration": number (if mentioned, in minutes),
+  "premineAmount": number (if mentioned, as percentage),
+  "buybackPercentage": number (if mentioned, as percentage)
+}
+
+If no parameters are mentioned, return: {}`
+        }],
+        temperature: 0.1,
+        max_tokens: 100
+      });
+
+      const content = response.choices[0]?.message?.content?.trim();
+      if (!content) {
+        return "couldn't understand what parameters to change.";
+      }
+
+      let parameterChanges;
+      try {
+        parameterChanges = JSON.parse(content);
+      } catch (error) {
+        return "couldn't understand what parameters to change.";
+      }
+
+      if (Object.keys(parameterChanges).length === 0) {
+        return "couldn't understand what parameters to change.";
+      }
+
+      // Validate parameter ranges
+      if (parameterChanges.startingMarketCap !== undefined) {
+        if (parameterChanges.startingMarketCap < 100 || parameterChanges.startingMarketCap > 10000) {
+          return "starting market cap must be between $100 and $10,000.";
+        }
+      }
+      
+      if (parameterChanges.fairLaunchDuration !== undefined) {
+        if (parameterChanges.fairLaunchDuration < 1 || parameterChanges.fairLaunchDuration > 1440) {
+          return "fair launch duration must be between 1 minute and 24 hours (1440 minutes).";
+        }
+      }
+      
+      if (parameterChanges.premineAmount !== undefined) {
+        if (parameterChanges.premineAmount < 0 || parameterChanges.premineAmount > 50) {
+          return "premine amount must be between 0% and 50%.";
+        }
+      }
+      
+      if (parameterChanges.buybackPercentage !== undefined) {
+        if (parameterChanges.buybackPercentage < 0 || parameterChanges.buybackPercentage > 100) {
+          return "buyback percentage must be between 0% and 100%.";
+        }
+      }
+
+      // Update the pending transaction with new parameters
+      const updatedLaunchParameters = {
+        ...pendingTx.launchParameters,
+        ...parameterChanges
+      };
+
+      // Find the target group
+      const targetGroupId = updatedLaunchParameters.targetGroupId || pendingTx.launchParameters?.targetGroupId;
+      const targetGroup = userState.groups.find(g => g.id === targetGroupId);
+      
+      if (!targetGroup) {
+        return "couldn't find the target group for your coin launch.";
+      }
+
+      // Rebuild the transaction with updated parameters
+      const coinData = pendingTx.coinData!;
+      
+      // Import the CoinLaunchFlow to use its rebuild method
+      if (this.coinLaunchFlow) {
+        await this.coinLaunchFlow.rebuildAndSendTransaction(context, {
+          name: coinData.name,
+          ticker: coinData.ticker,
+          image: coinData.image,
+          targetGroup: targetGroup.id,
+          startingMarketCap: updatedLaunchParameters.startingMarketCap || 1000,
+          fairLaunchDuration: updatedLaunchParameters.fairLaunchDuration || 30,
+          premineAmount: updatedLaunchParameters.premineAmount || 0,
+          buybackPercentage: updatedLaunchParameters.buybackPercentage || 0
+        } as any, targetGroup);
+        
+        // CoinLaunchFlow already sends a response, so we don't need to send another one
+        return null; // Return null to indicate no additional response needed
+      }
+      
+      return "couldn't update transaction parameters.";
+      
+    } catch (error) {
+      this.logError('Failed to modify coin transaction', error);
+      return "failed to update transaction parameters.";
+    }
+  }
+  
+  private async modifyGroupTransaction(context: FlowContext, messageText: string): Promise<string> {
     const { userState } = context;
     
     // Get existing receivers
@@ -121,7 +448,7 @@ export class ManagementFlow extends BaseFlow {
           return `updated your group with ${combinedReceivers.length} receivers. sign to create!`;
         }
       } catch (error) {
-        this.logError('Failed to modify transaction', error);
+        this.logError('Failed to modify group transaction', error);
         return 'failed to update transaction. please try again.';
       }
     }
@@ -134,27 +461,68 @@ export class ManagementFlow extends BaseFlow {
     
     if (!userState.pendingTransaction) return null;
 
-    // Get transaction details
-    let receivers: any[] = [];
-    if (userState.managementProgress?.groupCreationData?.receivers) {
-      receivers = userState.managementProgress.groupCreationData.receivers;
-    } else if (userState.onboardingProgress?.splitData?.receivers) {
-      receivers = userState.onboardingProgress.splitData.receivers;
+    const pendingTx = userState.pendingTransaction;
+    
+    // Use LLM to generate a comprehensive response about the transaction
+    let transactionDetails = '';
+    
+    if (pendingTx.type === 'coin_creation' && pendingTx.coinData) {
+      transactionDetails += `Your ${pendingTx.coinData.name} ($${pendingTx.coinData.ticker}) launch transaction:\n\n`;
+      
+      if (pendingTx.launchParameters) {
+        transactionDetails += `Launch Parameters:\n`;
+        transactionDetails += `• Starting Market Cap: $${pendingTx.launchParameters.startingMarketCap || 1000}\n`;
+        transactionDetails += `• Fair Launch Duration: ${pendingTx.launchParameters.fairLaunchDuration || 30} minutes\n`;
+        
+        // Calculate fair launch supply (40% of total supply by default)
+        const fairLaunchPercent = 10; // This is the default from the system
+        const totalSupply = 100; // 100 tokens total supply
+        const fairLaunchSupply = (totalSupply * fairLaunchPercent) / 100;
+        transactionDetails += `• Fair Launch Supply: ${fairLaunchSupply} ${pendingTx.coinData.ticker} (${fairLaunchPercent}% of total)\n`;
+        
+        if (pendingTx.launchParameters.premineAmount && pendingTx.launchParameters.premineAmount > 0) {
+          transactionDetails += `• Premine: ${pendingTx.launchParameters.premineAmount}%\n`;
+        }
+        if (pendingTx.launchParameters.buybackPercentage && pendingTx.launchParameters.buybackPercentage > 0) {
+          transactionDetails += `• Buybacks: ${pendingTx.launchParameters.buybackPercentage}%\n`;
+        }
+        if (pendingTx.launchParameters.targetGroupId) {
+          // Find the group name
+          const targetGroup = userState.groups.find(g => g.id === pendingTx.launchParameters?.targetGroupId);
+          const groupDisplay = targetGroup ? 
+            `${pendingTx.launchParameters.targetGroupId.slice(0, 6)}...${pendingTx.launchParameters.targetGroupId.slice(-4)}` :
+            pendingTx.launchParameters.targetGroupId;
+          transactionDetails += `• Target Group: ${groupDisplay}\n`;
+        }
+      }
+      
+      transactionDetails += `\nready to sign and launch!`;
+      
+    } else if (pendingTx.type === 'group_creation') {
+      // Get group creation details
+      let receivers: any[] = [];
+      if (userState.managementProgress?.groupCreationData?.receivers) {
+        receivers = userState.managementProgress.groupCreationData.receivers;
+      } else if (userState.onboardingProgress?.splitData?.receivers) {
+        receivers = userState.onboardingProgress.splitData.receivers;
+      }
+
+      if (receivers.length > 0) {
+        const receiverList = receivers
+          .map((r: any) => {
+            const displayName = (r.username && r.username.startsWith('0x') && r.username.length === 42)
+              ? `${r.username.slice(0, 6)}...${r.username.slice(-4)}`
+              : (r.username || `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`);
+            return `${displayName}${r.percentage ? ` (${r.percentage}%)` : ''}`;
+          })
+          .join(', ');
+        transactionDetails = `your group creation transaction with ${receivers.length} fee receivers: ${receiverList}\n\nready to sign and create!`;
+      } else {
+        transactionDetails = 'your group creation transaction is ready to sign.';
+      }
     }
 
-    if (receivers.length > 0) {
-      const receiverList = receivers
-        .map((r: any) => {
-          const displayName = (r.username && r.username.startsWith('0x') && r.username.length === 42)
-            ? `${r.username.slice(0, 6)}...${r.username.slice(-4)}`
-            : (r.username || `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`);
-          return `${displayName}${r.percentage ? ` (${r.percentage}%)` : ''}`;
-        })
-        .join(', ');
-      return `your group has ${receivers.length} fee receivers: ${receiverList}`;
-    }
-
-    return 'your group creation transaction is ready to sign.';
+    return transactionDetails || 'transaction ready to sign.';
   }
 
   private async cancelTransaction(context: FlowContext): Promise<void> {
@@ -178,17 +546,38 @@ export class ManagementFlow extends BaseFlow {
     const messageText = this.extractMessageText(context);
     
     // Check for "add everyone"
-    if (await this.isAddEveryone(messageText)) {
+    if (await this.isAddEveryone(context, messageText)) {
       await this.addEveryoneFromChat(context);
       return;
     }
 
     // Use shared utility for group creation
-    const result = await GroupCreationUtils.createGroupFromMessage(
-      context,
-      getDefaultChain(),
-      "Create Additional Group"
-    );
+    let result;
+    try {
+      result = await GroupCreationUtils.createGroupFromMessage(
+        context,
+        getDefaultChain(),
+        "Create Additional Group"
+      );
+    } catch (error) {
+      // Handle specific validation errors with user-friendly messages
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
+        // Parse the percentage issue
+        await this.sendResponse(context, "percentages must add up to 100%. try again or let me do equal splits.");
+        return;
+      } else if (errorMessage.includes('Couldn\'t resolve these usernames')) {
+        // Handle username resolution failures
+        await this.sendResponse(context, errorMessage.toLowerCase());
+        return;
+      } else {
+        // Handle other errors
+        this.logError('Group creation error', error);
+        await this.sendResponse(context, "something went wrong creating the group. please try again or contact support.");
+        return;
+      }
+    }
 
     if (result) {
       // Clear management progress and set pending transaction
@@ -226,7 +615,6 @@ export class ManagementFlow extends BaseFlow {
 Actions:
 - list_groups: User wants to see their groups (what groups, show groups, my groups, etc.)
 - list_coins: User wants to see their coins (what coins, show coins, my coins, etc.)
-- create_group: User wants to create a new group
 - add_coin: User wants to launch/create a coin
 - claim_fees: User wants to claim fees
 - check_fees: User wants to check available/claimable fees (how much fees, available fees, claimable balance, etc.)
@@ -245,7 +633,7 @@ Respond with ONLY the action name (e.g., "list_coins")`
       const action = response.choices[0]?.message?.content?.trim() as ManagementAction;
       
       // Validate the response is a valid action
-      const validActions: ManagementAction[] = ['list_groups', 'list_coins', 'add_coin', 'create_group', 'claim_fees', 'check_fees', 'cancel_transaction', 'general_help', 'answer_question'];
+      const validActions: ManagementAction[] = ['list_groups', 'list_coins', 'add_coin', 'claim_fees', 'check_fees', 'cancel_transaction', 'general_help', 'answer_question'];
       if (validActions.includes(action)) {
         return action;
       }
@@ -264,9 +652,6 @@ Respond with ONLY the action name (e.g., "list_coins")`
         break;
       case 'list_coins':
         await this.listCoins(context);
-        break;
-      case 'create_group':
-        await this.createGroup(context);
         break;
       case 'add_coin':
         await this.addCoin(context);
@@ -378,7 +763,7 @@ Respond with ONLY the action name (e.g., "list_coins")`
     const messageText = this.extractMessageText(context);
     
     // Check for "add everyone" in the message
-    if (await this.isAddEveryone(messageText)) {
+    if (await this.isAddEveryone(context, messageText)) {
       await this.addEveryoneFromChat(context);
       return;
     }
@@ -437,54 +822,98 @@ Respond with ONLY the action name (e.g., "list_coins")`
   }
 
   private async answerQuestion(context: FlowContext): Promise<void> {
+    const { userState } = context;
     const messageText = this.extractMessageText(context);
+    
+    // Check if this is a question about pending transactions
+    const isTransactionStatusQuestion = await this.isTransactionStatusQuestion(context, messageText);
+    
+    if (isTransactionStatusQuestion) {
+      if (userState.pendingTransaction) {
+        // User has a pending transaction, provide details
+        const transactionDetails = await this.handleTransactionInquiry(context, messageText);
+        if (transactionDetails) {
+          await this.sendResponse(context, transactionDetails);
+          return;
+        }
+      } else {
+        // User has no pending transaction
+        await this.sendResponse(context, "no pending transactions. you're all set!");
+        return;
+      }
+    }
+    
+    // For other questions, try to answer with character knowledge
+    try {
+      // For now, just provide a simple fallback since we don't have character context here
+      await this.sendResponse(context, "i can help you list coins/groups, launch coins, create groups, and show claimable balances.");
+    } catch (error) {
+      this.logError('Failed to get character response', error);
+      await this.sendResponse(context, "i can't help with that, i'm focused on coin launches and groups.");
+    }
+  }
+  
+  private async isTransactionStatusQuestion(context: FlowContext, messageText: string): Promise<boolean> {
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Is this message asking about transaction status or pending transactions?
+
+Message: "${messageText}"
+
+Look for questions like:
+- "do I have a pending transaction?"
+- "do I have an existing transaction?"
+- "what's my transaction status?"
+- "is there a transaction waiting?"
+- "any pending transactions?"
+- "transaction status?"
+
+Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+    } catch (error) {
+      this.logError('Failed to determine if message is transaction status question', error);
+      return false;
+    }
+  }
+
+  private async isAddEveryone(context: FlowContext, messageText: string): Promise<boolean> {
+    if (!messageText) return false;
     
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `User asked: "${messageText}"
-
-You are a Flaunch bot with these specific capabilities:
-- List user's coins and groups
-- Launch new coins into existing groups  
-- Create new groups for fee splitting
-- Show claimable fee balances from trading
-
-Analyze the user's question and respond appropriately:
-
-1. If they're asking about something you CAN do, explain briefly how.
-
-2. If they're asking about a reasonable feature that would improve Flaunch (like setting defaults, preferences, advanced settings, automation, etc.), respond with: "no, but that's a great idea! i'll pass it to the team."
-
-3. If they're asking about something completely unrelated to Flaunch or crypto/token launching, respond with: "i can't help with that, i'm focused on coin launches and groups."
-
-4. If they're asking about something you can't do but it's not a reasonable feature request (like asking you to do impossible things), respond with: "i can't do that."
-
-Keep your response short and conversational. Use lowercase and be helpful.`
+          content: `Does this message request to include all group chat members? "${messageText}"
+          
+          Look for requests like:
+          - "everyone"
+          - "for everyone"
+          - "all members"
+          - "include everyone"
+          - "everyone in the chat"
+          - "add everyone"
+          - "all"
+          
+          Answer only "yes" or "no".`
         }],
         temperature: 0.1,
-        max_tokens: 150
+        max_tokens: 5
       });
 
-      const answer = response.choices[0]?.message?.content?.trim();
-      if (answer) {
-        await this.sendResponse(context, answer);
-      } else {
-        await this.sendResponse(context, "i can help you list coins/groups, launch coins, create groups, and show claimable balances.");
-      }
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
     } catch (error) {
-      this.logError('Failed to answer question', error);
-      await this.sendResponse(context, "i can help you list coins/groups, launch coins, create groups, and show claimable balances.");
+      this.logError('Failed to detect add everyone intent', error);
+      return false;
     }
-  }
-
-  private async isAddEveryone(messageText: string): Promise<boolean> {
-    if (!messageText) return false;
-    
-    const lowerMessage = messageText.toLowerCase();
-    return lowerMessage.includes('everyone') || lowerMessage.includes('all members') || lowerMessage.includes('all');
   }
 
   private async addEveryoneFromChat(context: FlowContext): Promise<void> {
@@ -610,31 +1039,38 @@ Keep your response short and conversational. Use lowercase and be helpful.`
   }
 
   private async formatGroupReceivers(group: UserGroup): Promise<string> {
-    try {
-      const receiverNames = await Promise.all(
-        group.receivers.map(async (receiver) => {
-          try {
-            // Try to get display name (ENS or formatted address)
-            const displayName = await getDisplayName(receiver.resolvedAddress);
-            return displayName || `${receiver.resolvedAddress.slice(0, 6)}...${receiver.resolvedAddress.slice(-4)}`;
-          } catch (error) {
-            // Fall back to username or formatted address
-            if (receiver.username && !receiver.username.startsWith('0x')) {
-              return receiver.username;
-            }
-            return `${receiver.resolvedAddress.slice(0, 6)}...${receiver.resolvedAddress.slice(-4)}`;
-          }
-        })
-      );
+    const receiverCount = group.receivers?.length || 0;
+    if (receiverCount === 0) return "no fee receivers";
+    if (receiverCount === 1) return "1 fee receiver";
+    return `${receiverCount} fee receivers`;
+  }
+
+  /**
+   * Clear pending transactions from other flows when starting management operations
+   * Only clears coin_creation transactions since management handles group_creation
+   */
+  private async clearCrossFlowTransactions(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    // Only clear coin_creation transactions, since management flow handles group_creation
+    if (userState.pendingTransaction && userState.pendingTransaction.type === 'coin_creation') {
+      const pendingTx = userState.pendingTransaction;
       
-      return receiverNames.join(', ');
-    } catch (error) {
-      this.logError('Failed to format group receivers', error);
-      return group.receivers.map(r => 
-        r.username && !r.username.startsWith('0x') 
-          ? r.username 
-          : `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`
-      ).join(', ');
+      this.log('Clearing cross-flow pending transaction', {
+        userId: userState.userId,
+        transactionType: pendingTx.type,
+        reason: 'User explicitly started management operation'
+      });
+
+      // Clear the pending transaction and related progress SILENTLY
+      await context.updateState({
+        pendingTransaction: undefined,
+        // Clear coin launch progress if it exists (user switching from coin launch to management)
+        coinLaunchProgress: undefined
+      });
+
+      // NO USER MESSAGE - clearing should be invisible to the user
+      // They just want their management action completed, not to hear about technical cleanup
     }
   }
 } 

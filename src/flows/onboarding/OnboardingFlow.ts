@@ -16,7 +16,7 @@ export class OnboardingFlow extends BaseFlow {
 
   async processMessage(context: FlowContext): Promise<void> {
     const { userState } = context;
-      const messageText = this.extractMessageText(context);
+    const messageText = this.extractMessageText(context);
       
     this.log('Processing onboarding message', {
           userId: userState.userId,
@@ -24,6 +24,9 @@ export class OnboardingFlow extends BaseFlow {
       hasGroups: userState.groups.length > 0,
       messageText: messageText?.substring(0, 100)
     });
+
+    // Clear any conflicting pending transactions from other flows
+    await this.clearCrossFlowTransactions(context);
 
     // Handle pending transaction inquiries
     if (userState.pendingTransaction && messageText) {
@@ -94,11 +97,41 @@ export class OnboardingFlow extends BaseFlow {
     }
 
     // Try to create group from message using shared utility
-    const result = await GroupCreationUtils.createGroupFromMessage(
-      context,
-      getDefaultChain(),
-      "Create Group"
-    );
+    let result;
+    try {
+      result = await GroupCreationUtils.createGroupFromMessage(
+        context,
+        getDefaultChain(),
+        "Create Group"
+      );
+    } catch (error) {
+      // Handle specific validation errors with user-friendly messages
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
+        // Parse the percentage issue
+        const response = await getCharacterResponse({
+          openai: context.openai,
+          character: context.character,
+          prompt: `
+            The user provided percentages that don't add up to 100%. 
+            Briefly explain they need to specify percentages that total 100%, or let the system do equal splits.
+            Be helpful and concise.
+          `
+        });
+        await this.sendResponse(context, response);
+        return;
+      } else if (errorMessage.includes('Couldn\'t resolve these usernames')) {
+        // Handle username resolution failures
+        await this.sendResponse(context, errorMessage.toLowerCase());
+        return;
+      } else {
+        // Handle other errors
+        this.logError('Group creation error', error);
+        await this.sendResponse(context, "something went wrong creating the group. please try again or contact support.");
+        return;
+      }
+    }
 
     if (result) {
       // Update onboarding progress
@@ -166,24 +199,22 @@ export class OnboardingFlow extends BaseFlow {
   private async detectAddEveryone(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;
 
-    // Simple pattern check for obvious cases
-    const lowerMessage = messageText.toLowerCase().trim();
-    const obviousPatterns = [
-      'everyone', 'everyone!', 'for everyone', 'all', 'all members',
-      'include everyone', 'everyone in the chat', 'everyone here'
-    ];
-
-    if (obviousPatterns.some(pattern => lowerMessage === pattern || lowerMessage.includes(pattern))) {
-      return true;
-    }
-
-    // Use LLM for more complex cases
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `Does this message request to include all group chat members? "${messageText}" Answer only "yes" or "no".`
+          content: `Does this message request to include all group chat members? "${messageText}" 
+          
+          Look for requests like:
+          - "everyone"
+          - "for everyone" 
+          - "all members"
+          - "include everyone"
+          - "everyone in the chat"
+          - "add everyone"
+          
+          Answer only "yes" or "no".`
         }],
         temperature: 0.1,
         max_tokens: 5
@@ -224,12 +255,25 @@ export class OnboardingFlow extends BaseFlow {
 
       // Create group with all members
       const defaultChain = getDefaultChain();
-      const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
-        feeReceivers,
-        context.creatorAddress,
-        defaultChain,
-        "Create Group with All Members"
-      );
+      let walletSendCalls;
+      try {
+        walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+          feeReceivers,
+          context.creatorAddress,
+          defaultChain,
+          "Create Group with All Members"
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
+          await this.sendResponse(context, "error creating group with all members - percentages don't add up. please specify receivers manually.");
+          return;
+        } else {
+          this.logError('Group deployment error', error);
+          await this.sendResponse(context, "couldn't add everyone. please specify fee receivers manually.");
+          return;
+        }
+      }
 
       // Update state
           await context.updateState({
@@ -271,23 +315,22 @@ export class OnboardingFlow extends BaseFlow {
   private async detectAddToExistingGroup(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;
 
-    // Simple pattern check for adding to existing
-    const lowerMessage = messageText.toLowerCase().trim();
-    const addPatterns = [
-      'add', 'include', 'also add', 'can you add', 'please add', 'and add'
-    ];
-
-    if (addPatterns.some(pattern => lowerMessage.includes(pattern))) {
-      return true;
-    }
-
-    // Use LLM for more complex cases
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `Does this message request to ADD someone to an existing group? "${messageText}" Answer only "yes" or "no".`
+          content: `Does this message request to ADD someone to an existing group? "${messageText}" 
+          
+          Look for requests like:
+          - "add [name]"
+          - "include [name]" 
+          - "also add [name]"
+          - "can you add [name]"
+          - "please add [name]"
+          - "and add [name]"
+          
+          Answer only "yes" or "no".`
         }],
         temperature: 0.1,
         max_tokens: 5
@@ -303,11 +346,29 @@ export class OnboardingFlow extends BaseFlow {
   private async addToExistingGroup(context: FlowContext, messageText: string): Promise<void> {
     try {
       // Extract new receivers from the message
-      const result = await GroupCreationUtils.createGroupFromMessage(
-        context,
-        getDefaultChain(),
-        "Add to Group"
-      );
+      let result;
+      try {
+        result = await GroupCreationUtils.createGroupFromMessage(
+          context,
+          getDefaultChain(),
+          "Add to Group"
+        );
+      } catch (error) {
+        // Handle specific validation errors
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        
+        if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
+          await this.sendResponse(context, "percentages must add up to 100%. try again or let me do equal splits.");
+          return;
+        } else if (errorMessage.includes('Couldn\'t resolve these usernames')) {
+          await this.sendResponse(context, errorMessage.toLowerCase());
+          return;
+        } else {
+          this.logError('Add to group error', error);
+          await this.sendResponse(context, "couldn't add to group. please try again.");
+          return;
+        }
+      }
 
       if (result && result.resolvedReceivers.length > 0) {
         const existingReceivers = context.userState.onboardingProgress?.splitData?.receivers || [];
@@ -333,12 +394,25 @@ export class OnboardingFlow extends BaseFlow {
         }));
 
         // Create new group deployment with combined receivers
-        const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
-          updatedReceivers,
-          context.creatorAddress,
-          getDefaultChain(),
-          "Create Group with Added Members"
-        );
+        let walletSendCalls;
+        try {
+          walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+            updatedReceivers,
+            context.creatorAddress,
+            getDefaultChain(),
+            "Create Group with Added Members"
+          );
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes('Total shares') && errorMessage.includes('do not equal required total')) {
+            await this.sendResponse(context, "error combining receivers - percentages don't add up to 100%. please try again.");
+            return;
+          } else {
+            this.logError('Group deployment error', error);
+            await this.sendResponse(context, "couldn't create group deployment. please try again.");
+            return;
+          }
+        }
 
         // Update state with combined receivers
       await context.updateState({
@@ -383,16 +457,34 @@ export class OnboardingFlow extends BaseFlow {
   private async handlePendingTransactionInquiry(context: FlowContext, messageText: string): Promise<string | null> {
     const { userState } = context;
     
-    // Check if user is asking about the pending transaction
-    const lowerMessage = messageText.toLowerCase();
-    const isTransactionInquiry = lowerMessage.includes('address') || 
-                                lowerMessage.includes('receiver') || 
-                                lowerMessage.includes('group') ||
-                                lowerMessage.includes('who') ||
-                                lowerMessage.includes('what') ||
-                                lowerMessage.includes('which');
-    
-    if (!isTransactionInquiry) return null;
+    // Check if user is asking about the pending transaction using LLM
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Is this message asking about transaction details, group members, or fee receivers? "${messageText}"
+          
+          Look for questions about:
+          - "who are the receivers?"
+          - "what addresses are in the group?"
+          - "who gets the fees?"
+          - "what percentage does each get?"
+          - "show me the transaction details"
+          - "who is included?"
+          
+          Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      const isTransactionInquiry = response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      if (!isTransactionInquiry) return null;
+    } catch (error) {
+      this.logError('Failed to detect transaction inquiry', error);
+      return null;
+    }
 
     // Get transaction details from onboarding progress
     let receivers: any[] = [];
@@ -413,5 +505,33 @@ export class OnboardingFlow extends BaseFlow {
     }
 
     return 'your group creation transaction is ready to sign.';
+  }
+
+  /**
+   * Clear pending transactions from other flows when starting onboarding
+   * This prevents conflicts when users switch between different actions
+   */
+  private async clearCrossFlowTransactions(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    if (userState.pendingTransaction && userState.pendingTransaction.type !== 'group_creation') {
+      const pendingTx = userState.pendingTransaction;
+      
+      this.log('Clearing cross-flow pending transaction', {
+        userId: userState.userId,
+        transactionType: pendingTx.type,
+        reason: 'User explicitly started onboarding'
+      });
+
+      // Clear the pending transaction and related progress SILENTLY
+      await context.updateState({
+        pendingTransaction: undefined,
+        // Clear coin launch progress if it exists (user switching from coin launch to onboarding)
+        coinLaunchProgress: undefined
+      });
+
+      // NO USER MESSAGE - clearing should be invisible to the user
+      // They just want to complete onboarding, not to hear about technical cleanup
+    }
   }
 } 

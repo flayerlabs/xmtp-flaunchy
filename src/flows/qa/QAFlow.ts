@@ -16,29 +16,60 @@ export class QAFlow extends BaseFlow {
       message: messageText.substring(0, 100) + '...'
     });
 
-    // If user is in onboarding, check for coin details and store them
+    // If user is in onboarding, check for coin details and fee receivers and store them
     if (context.userState.status === 'onboarding' && context.userState.onboardingProgress) {
       const extraction = await this.extractLaunchDetails(context);
-      if (extraction && extraction.tokenDetails && (extraction.tokenDetails.name || extraction.tokenDetails.ticker || extraction.tokenDetails.image)) {
-        const currentCoinData = context.userState.onboardingProgress.coinData || { name: undefined, ticker: undefined, image: undefined };
-        const updatedCoinData = {
-          name: extraction.tokenDetails.name || currentCoinData.name,
-          ticker: extraction.tokenDetails.ticker || currentCoinData.ticker,
-          image: extraction.tokenDetails.image || currentCoinData.image
-        };
+      if (extraction) {
+        let hasUpdates = false;
+        let updatedProgress = { ...context.userState.onboardingProgress };
 
-        this.log('Coin details detected in QA flow, storing for onboarding', {
-          userId: context.userState.userId,
-          coinData: updatedCoinData
-        });
+        // Store coin details if found
+        if (extraction.tokenDetails && (extraction.tokenDetails.name || extraction.tokenDetails.ticker || extraction.tokenDetails.image)) {
+          const currentCoinData = context.userState.onboardingProgress.coinData || { name: undefined, ticker: undefined, image: undefined };
+          const updatedCoinData = {
+            name: extraction.tokenDetails.name || currentCoinData.name,
+            ticker: extraction.tokenDetails.ticker || currentCoinData.ticker,
+            image: extraction.tokenDetails.image || currentCoinData.image
+          };
 
-        // Update onboarding progress with coin details
-        await context.updateState({
-          onboardingProgress: {
-            ...context.userState.onboardingProgress,
+          this.log('Coin details detected in QA flow, storing for onboarding', {
+            userId: context.userState.userId,
             coinData: updatedCoinData
-          }
-        });
+          });
+
+          updatedProgress.coinData = updatedCoinData;
+          hasUpdates = true;
+        }
+
+        // Store fee receiver data if found
+        if (extraction.feeReceivers && extraction.feeReceivers.receivers && extraction.feeReceivers.receivers.length > 0) {
+          this.log('Fee receivers detected in QA flow, storing for onboarding', {
+            userId: context.userState.userId,
+            receivers: extraction.feeReceivers.receivers,
+            splitType: extraction.feeReceivers.splitType
+          });
+
+          // Convert extraction format to onboarding progress format
+          const convertedReceivers = extraction.feeReceivers.receivers.map(receiver => ({
+            username: receiver.type === 'self' ? context.creatorAddress : receiver.identifier,
+            resolvedAddress: receiver.type === 'self' ? context.creatorAddress : undefined,
+            percentage: receiver.percentage || undefined
+          }));
+
+          updatedProgress.splitData = {
+            receivers: convertedReceivers,
+            equalSplit: extraction.feeReceivers.splitType === 'equal',
+            creatorPercent: 0
+          };
+          hasUpdates = true;
+        }
+
+        // Update state if we found any data
+        if (hasUpdates) {
+          await context.updateState({
+            onboardingProgress: updatedProgress
+          });
+        }
       }
     }
 

@@ -30,6 +30,25 @@ export class CoinLaunchFlow extends BaseFlow {
 
   async processMessage(context: FlowContext): Promise<void> {
     const { userState } = context;
+    const messageText = this.extractMessageText(context);
+    
+    this.log('Processing coin launch message', { 
+      userId: userState.userId,
+      messageText: messageText?.substring(0, 100),
+      hasProgress: !!userState.coinLaunchProgress,
+      step: userState.coinLaunchProgress?.step
+    });
+
+    // Clear any conflicting pending transactions from other flows
+    await this.clearCrossFlowTransactions(context);
+
+    // Check for pending transaction first
+    if (userState.pendingTransaction?.type === 'coin_creation') {
+      const handled = await this.handlePendingTransactionUpdate(context);
+      if (handled) {
+        return; // Transaction was rebuilt and sent, we're done
+      }
+    }
     
     // Check if user is asking about status/progress
     if (await this.isStatusInquiry(context)) {
@@ -61,26 +80,11 @@ export class CoinLaunchFlow extends BaseFlow {
       return;
     }
     
-    // Check if there's a pending coin creation transaction that might need updating
-    if (userState.pendingTransaction?.type === 'coin_creation') {
-      const shouldRebuild = await this.handlePendingTransactionUpdate(context);
-      if (shouldRebuild) {
-        return; // Transaction was rebuilt and sent
-      }
-    }
-    
     // Ensure user has groups
     if (userState.groups.length === 0) {
       await this.sendResponse(context, "create a group first before launching coins.");
       return;
     }
-
-    this.log('Processing coin launch message', {
-      userId: userState.userId,
-      groupCount: userState.groups.length,
-      messageText: context.messageText?.substring(0, 100),
-      hasProgress: !!userState.coinLaunchProgress
-    });
 
     // Continue from progress or start new
     if (userState.coinLaunchProgress) {
@@ -157,7 +161,7 @@ export class CoinLaunchFlow extends BaseFlow {
     return false; // No changes, continue with normal flow
   }
 
-  private async rebuildAndSendTransaction(context: FlowContext, coinData: Required<CoinLaunchData>, targetGroup: UserGroup): Promise<void> {
+  public async rebuildAndSendTransaction(context: FlowContext, coinData: Required<CoinLaunchData>, targetGroup: UserGroup): Promise<void> {
     this.log('Rebuilding transaction with updated parameters', {
       userId: context.userState.userId,
       coinData,
@@ -201,7 +205,7 @@ export class CoinLaunchFlow extends BaseFlow {
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
         fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds
-        fairLaunchPercent: 40, // Keep default for now
+        fairLaunchPercent: 10, // Keep default for now
         creatorFeeAllocationPercent,
         preminePercentage: coinData.premineAmount || 0
       });
@@ -251,6 +255,34 @@ export class CoinLaunchFlow extends BaseFlow {
     } catch (error) {
       this.logError('Failed to rebuild transaction', error);
       await this.sendResponse(context, `failed to update transaction: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Clear pending transactions from other flows when starting coin launch
+   * This prevents conflicts when users switch between different actions
+   */
+  private async clearCrossFlowTransactions(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    if (userState.pendingTransaction && userState.pendingTransaction.type !== 'coin_creation') {
+      const pendingTx = userState.pendingTransaction;
+      
+      this.log('Clearing cross-flow pending transaction', {
+        userId: userState.userId,
+        transactionType: pendingTx.type,
+        reason: 'User explicitly started coin launch'
+      });
+
+      // Clear the pending transaction and related progress SILENTLY
+      await context.updateState({
+        pendingTransaction: undefined,
+        // Clear management progress if it exists (user switching from group creation to coin launch)
+        managementProgress: undefined
+      });
+
+      // NO USER MESSAGE - clearing should be invisible to the user
+      // They just want their coin launched, not to hear about technical cleanup
     }
   }
 
@@ -320,6 +352,14 @@ export class CoinLaunchFlow extends BaseFlow {
     if (parameterUpdates.length > 0) {
       const updateMessage = `got it! updated ${parameterUpdates.join(' and ')}.`;
       await this.sendResponse(context, updateMessage);
+      
+      // Debug log to show preserved data
+      console.log('🔄 PARAMETER UPDATE - PRESERVED DATA:', {
+        userId: context.userState.userId,
+        preservedCoinData: progress.coinData,
+        preservedTargetGroup: progress.targetGroupId,
+        updatedParameters: parameterUpdates
+      });
     }
 
     // Check if we have all required data
@@ -343,7 +383,9 @@ export class CoinLaunchFlow extends BaseFlow {
       }
     }
 
-    // Still missing data
+    // Still missing data - use complete coin data from progress, not partial currentData
+    const completeCoinData = progress.coinData || {};
+    
     if (!progress.targetGroupId) {
       // If only one group, auto-select it
       if (userState.groups.length === 1) {
@@ -351,11 +393,10 @@ export class CoinLaunchFlow extends BaseFlow {
         await context.updateState({ coinLaunchProgress: progress });
         
         // Now check if we can launch or need more data
-        const coinData = progress.coinData || {};
-        if (coinData.name && coinData.ticker && coinData.image) {
+        if (completeCoinData.name && completeCoinData.ticker && completeCoinData.image) {
           // Merge coin data with launch parameters from progress
           const fullCoinData = {
-            ...coinData,
+            ...completeCoinData,
             startingMarketCap: progress.launchParameters?.startingMarketCap,
             fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
             premineAmount: progress.launchParameters?.premineAmount,
@@ -366,12 +407,22 @@ export class CoinLaunchFlow extends BaseFlow {
           await this.launchCoin(context, fullCoinData, userState.groups[0]);
           return;
         } else {
-          await this.requestMissingData(context, coinData, userState.groups[0]);
+          await this.requestMissingData(context, completeCoinData, userState.groups[0]);
           return;
         }
       }
       
-      const targetGroup = await this.determineTargetGroup(context, coinData);
+      // Create a complete data object for group determination
+      const completeDataForGroupSelection = {
+        ...completeCoinData,
+        targetGroup: currentData.targetGroup, // Only use new targetGroup if provided
+        startingMarketCap: progress.launchParameters?.startingMarketCap,
+        fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
+        premineAmount: progress.launchParameters?.premineAmount,
+        buybackPercentage: progress.launchParameters?.buybackPercentage
+      };
+      
+      const targetGroup = await this.determineTargetGroup(context, completeDataForGroupSelection);
       if (targetGroup) {
         progress.targetGroupId = targetGroup.id;
         await context.updateState({ coinLaunchProgress: progress });
@@ -382,13 +433,13 @@ export class CoinLaunchFlow extends BaseFlow {
     // Request missing coin data
     const targetGroup = userState.groups.find(g => g.id === progress.targetGroupId);
     if (targetGroup) {
-      await this.requestMissingData(context, coinData, targetGroup);
+      await this.requestMissingData(context, completeCoinData, targetGroup);
     } else {
       // Target group not found - show available groups
       const missing = [];
-      if (!coinData.name) missing.push('coin name');
-      if (!coinData.ticker) missing.push('ticker');  
-      if (!coinData.image) missing.push('image');
+      if (!completeCoinData.name) missing.push('coin name');
+      if (!completeCoinData.ticker) missing.push('ticker');  
+      if (!completeCoinData.image) missing.push('image');
       missing.push('target group');
       
       let message = `still need: ${missing.join(', ')}\n\n`;
@@ -406,10 +457,26 @@ export class CoinLaunchFlow extends BaseFlow {
   private async startNewCoinLaunch(context: FlowContext): Promise<void> {
     // Extract coin data from message
     const extractedData = await this.extractCoinData(context);
-    // Initialize progress
+    
+    // Separate coin data from launch parameters
+    const coinData = {
+      name: extractedData.name,
+      ticker: extractedData.ticker,
+      image: extractedData.image
+    };
+    
+    const launchParameters = {
+      startingMarketCap: extractedData.startingMarketCap,
+      fairLaunchDuration: extractedData.fairLaunchDuration,
+      premineAmount: extractedData.premineAmount,
+      buybackPercentage: extractedData.buybackPercentage
+    };
+    
+    // Initialize progress with separated data
     const progress: any = {
       step: 'collecting_coin_data' as const,
-      coinData: extractedData,
+      coinData,
+      launchParameters,
       startedAt: new Date()
     };
 
@@ -418,18 +485,27 @@ export class CoinLaunchFlow extends BaseFlow {
     if (targetGroup) {
       progress.targetGroupId = targetGroup.id;
     }
+    
     // Save progress
     await context.updateState({ coinLaunchProgress: progress });
+    
     // Check if we have everything
-    if (extractedData.name && extractedData.ticker && extractedData.image && targetGroup) {
-      await this.launchCoin(context, extractedData as Required<CoinLaunchData>, targetGroup);
+    if (coinData.name && coinData.ticker && coinData.image && targetGroup) {
+      // Merge coin data with launch parameters for launch
+      const fullCoinData = {
+        ...coinData,
+        ...launchParameters,
+        targetGroup: targetGroup.id
+      } as Required<CoinLaunchData>;
+      
+      await this.launchCoin(context, fullCoinData, targetGroup);
     } else if (targetGroup) {
-      await this.requestMissingData(context, extractedData, targetGroup);
+      await this.requestMissingData(context, coinData, targetGroup);
     }
   }
 
   private async extractCoinData(context: FlowContext): Promise<CoinLaunchData> {
-    const messageText = context.messageText || '';
+    const messageText = this.extractMessageText(context);
     
     try {
       // Use LLM-based extraction instead of regex patterns
@@ -440,6 +516,13 @@ export class CoinLaunchFlow extends BaseFlow {
         imageUrl: undefined // We'll handle image URLs separately if needed
       });
 
+      console.log('🔍 COIN EXTRACTION DEBUG:', {
+        userId: context.userState.userId,
+        messageText: messageText,
+        hasAttachment: context.hasAttachment,
+        promptLength: prompt.length
+      });
+
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
@@ -447,7 +530,20 @@ export class CoinLaunchFlow extends BaseFlow {
         max_tokens: 500
       });
 
-      const extractedData = JSON.parse(response.choices[0]?.message?.content || '{}') as CoinLaunchExtractionResult;
+      const rawResponse = response.choices[0]?.message?.content || '{}';
+      console.log('🤖 LLM EXTRACTION RESPONSE:', {
+        userId: context.userState.userId,
+        messageText: messageText,
+        rawResponse: rawResponse
+      });
+
+      const extractedData = JSON.parse(rawResponse) as CoinLaunchExtractionResult;
+      
+      console.log('📊 PARSED EXTRACTION DATA:', {
+        userId: context.userState.userId,
+        messageText: messageText,
+        extractedData: extractedData
+      });
       
       // Convert to CoinLaunchData format (null to undefined)
       const result: CoinLaunchData = {
@@ -467,8 +563,21 @@ export class CoinLaunchFlow extends BaseFlow {
         messageText: messageText || '(empty)'
       });
       
+      console.log('✅ FINAL EXTRACTION RESULT:', {
+        userId: context.userState.userId,
+        messageText: messageText,
+        result: result
+      });
+      
       return result;
     } catch (error) {
+      console.error('❌ COIN EXTRACTION ERROR:', {
+        userId: context.userState.userId,
+        messageText: messageText,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      
       this.logError('Failed to extract coin data', error);
       
       // Fallback to empty result if extraction fails
@@ -609,7 +718,7 @@ export class CoinLaunchFlow extends BaseFlow {
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
         fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds
-        fairLaunchPercent: 40, // Keep default for now
+        fairLaunchPercent: 10, // Keep default for now
         creatorFeeAllocationPercent,
         preminePercentage: coinData.premineAmount || 0
       });
@@ -652,7 +761,7 @@ export class CoinLaunchFlow extends BaseFlow {
             groupId: targetGroup.id,
             launched: false,
             fairLaunchDuration: 30 * 60,
-            fairLaunchPercent: 40,
+            fairLaunchPercent: 10,
             initialMarketCap: 1000,
             chainId: selectedChain.id,
             chainName: selectedChain.name,
@@ -674,7 +783,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isLaunchOptionsInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = context.messageText || '';
+    const messageText = this.extractMessageText(context);
     
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -719,7 +828,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isFutureFeatureInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = context.messageText || '';
+    const messageText = this.extractMessageText(context);
     
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -761,7 +870,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isLaunchDefaultsInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = context.messageText || '';
+    const messageText = this.extractMessageText(context);
     
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -814,7 +923,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isStatusInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = context.messageText || '';
+    const messageText = this.extractMessageText(context);
     
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -900,7 +1009,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isLaunchCommand(context: FlowContext): Promise<boolean> {
-    const messageText = context.messageText?.toLowerCase().trim() || '';
+    const messageText = this.extractMessageText(context).toLowerCase().trim();
     
     // Simple check for launch commands
     return messageText === 'launch' || 

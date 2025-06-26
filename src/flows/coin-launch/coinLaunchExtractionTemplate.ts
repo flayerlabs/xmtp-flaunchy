@@ -52,8 +52,8 @@ Duration:
 - Look for: "fair launch duration", "launch time", "30 minutes", "1 hour", etc.
 - Convert hours to minutes, clamp between 1-60 minutes
 
-Premine:
-- Look for: "premine", "prebuy", "pre-buy" with percentages
+Prebuy:
+- Look for: "prebuy", "premine", "pre-buy" with percentages
 - Extract percentage values, clamp between 0-100%
 
 Buybacks:

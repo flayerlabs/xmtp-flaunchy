@@ -4,6 +4,7 @@ import { UserState } from "../types/UserState";
 export type MessageIntent = 
   | 'onboarding'      // First group creation, new user setup
   | 'coin_launch'     // Launch coin into existing group
+  | 'group_launch'    // Create additional groups (for existing users)
   | 'management'      // Query/manage existing groups/coins
   | 'qa'              // General questions, help, conversation
   | 'confirmation';   // Confirming previous agent request
@@ -38,16 +39,7 @@ export class IntentClassifier {
       };
     }
 
-    // Pre-check for explicit group creation keywords to avoid misclassification
-    const explicitGroupCreation = this.isExplicitGroupCreation(message);
-    if (explicitGroupCreation) {
-      const hasGroups = userState.groups.length > 0;
-      return {
-        intent: hasGroups ? 'management' : 'onboarding',
-        confidence: 0.95,
-        reasoning: `Explicit group creation request detected: "${message}" - routing to ${hasGroups ? 'management (additional group)' : 'onboarding (first group)'}`
-      };
-    }
+    // Note: Removed explicit group creation pre-check to let LLM handle question vs action distinction
 
     const prompt = this.buildClassificationPrompt(message, userState, hasAttachment);
     
@@ -92,10 +84,8 @@ CONVERSATIONAL FLOW CONTINUATION (HIGHEST PRIORITY):
 
 ONBOARDING CONTINUATION SIGNALS:
 - User has onboardingProgress AND provides: usernames, addresses, ENS names, "me and X", fee split info → onboarding
-- User has onboardingProgress AND mentions chain preference: "on sepolia", "use mainnet", "switch to base" → onboarding
 - User has onboardingProgress AND provides coin details: coin names, tickers, images → onboarding (NOT coin_launch!)
 - Examples: "split between me and alice", "me and @bob 50/50", "alice.eth and charlie.eth", "0x123... and 0x456..."
-- Chain switching examples: "actually let's launch on sepolia", "use base mainnet", "switch to testnet"
 - Coin details examples: "Token TOKIE", "launch MyCoin (MCN)", "create DOGE with image.jpg" → onboarding if user is in onboarding
 
 INFORMATIONAL QUERIES (HIGHEST PRIORITY):
@@ -116,40 +106,67 @@ INTENT OPTIONS:
    Examples: "create a group", "launch a group", "set up a group", "launch a group for me and @alice", "launch a group for everyone here", "help me get started"
    CONTINUATION: If user is in onboarding and provides fee receivers, coin details, or continues the process → onboarding
    GROUP CREATION: If user mentions "group" + "everyone", this is group creation with "add everyone" functionality
+   CRITICAL: If user has existing groups (Groups > 0), group creation is MANAGEMENT, not onboarding
    
 2. coin_launch - User wants to launch a coin into an existing group  
    Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group"
    IMAGE ONLY: If user uploads an image attachment with minimal/no text, this is coin launch information
    
-3. management - User wants to view/manage existing groups/coins OR create ADDITIONAL groups (when they already have groups)
-   Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "create another group", "who are the fee receivers?", "what's my group?", "show fee receivers"
+3. group_launch - User wants to create ADDITIONAL groups (when they already have groups)
+   Examples: "start a new group", "create a group for everyone", "let's create another group", "launch a group", "launch a group and add everyone"
+   CRITICAL: If user has Groups > 0, ALL group creation requests are group_launch, not onboarding
    
-4. qa - General questions, help, or conversation
+4. management - User wants to view/manage existing groups/coins (but NOT create new groups)
+   Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "who are the fee receivers?", "what's my group?", "show fee receivers"
+   
+5. qa - General questions, help, conversation, capability questions, or hypothetical scenarios
    Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy"
+   CAPABILITY/HYPOTHETICAL QUESTIONS: "can I create a group with different fee splits?", "do you support custom splits?", "is it possible to have unequal splits?", "can I make a group where one person gets more?", "what about groups with custom percentages?", "do you allow different fee structures?"
+   CHAIN QUESTIONS: "can I switch chains?", "do you support other networks?", "can I launch on sepolia?", "what about ethereum mainnet?" → These are capability questions about unsupported features
+   IMPORTANT: Any question seeking information about capabilities or asking "what if" scenarios should be qa, NOT action flows
    
-5. confirmation - Confirming a previous request
+6. confirmation - Confirming a previous request
    Examples: "yes", "ok", "do it", "yep", "sure", "go ahead", "let's do it"
 
 CLASSIFICATION PRIORITY ORDER:
-1. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
-2. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
-3. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
-4. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
+1. CAPABILITY/HYPOTHETICAL QUESTIONS - Questions about what's possible, supported features, or hypothetical scenarios → qa
+2. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
+3. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
+4. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
+5. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
 
-CHAIN SWITCHING DETECTION (VERY IMPORTANT):
-- If user is in active onboarding/management AND mentions chains → CONTINUE CURRENT FLOW
-- Chain keywords: "sepolia", "mainnet", "base", "testnet", "ethereum"
-- Chain switching phrases: "let's launch on X", "use X network", "switch to X", "actually X", "on X instead"
-- These are NOT coin launches - they are chain preferences during existing flows!
+CRITICAL: DISTINGUISH QUESTIONS FROM ACTIONS
+- QUESTIONS seek information/understanding: "can I...", "do you support...", "is it possible...", "what about...", "how about..."
+- ACTIONS request execution: "create...", "make...", "start...", "launch...", "i want to..."
+- Questions with group-related words are STILL QUESTIONS → qa
+- Only clear action statements should trigger group creation flows
 
-CRITICAL EXAMPLES:
+
+
+CRITICAL EXAMPLES - QUESTIONS VS ACTIONS:
+QUESTIONS (seeking information) → qa:
+- "can I create a group with different fee splits for each receiver?" = qa (asking about capability)
+- "do you support custom fee splits?" = qa (asking about features)
+- "is it possible to have unequal splits?" = qa (asking about possibility)
+- "can I make a group where one person gets more?" = qa (asking what's allowed)
+- "what about groups with custom percentages?" = qa (asking about options)
+- "do you allow different fee structures?" = qa (asking about support)
+- "can I switch chains?" = qa (asking about unsupported feature)
+- "do you support sepolia?" = qa (asking about unsupported network)
+- "what about ethereum mainnet?" = qa (asking about unsupported network)
+
+ACTIONS (requesting execution) → onboarding/group_launch/management/coin_launch:
+- "create a group with different fee splits" = onboarding (if 0 groups) OR group_launch (if has groups)
+- "make a group" = onboarding (if 0 groups) OR group_launch (if has groups)
+- "start a group" = onboarding (if 0 groups) OR group_launch (if has groups)
+- "i want to create a group" = onboarding (if 0 groups) OR group_launch (if has groups)
 - User in onboarding + "split between me and alice" = onboarding (continuing fee receiver setup)
 - User in onboarding + "MyCoin (MCN)" = onboarding (providing coin details)  
 - User in onboarding + "launch Token TOKIE into that group" = onboarding (providing coin details during onboarding!)
-- User in onboarding + "actually let's launch on sepolia" = onboarding (chain switching, NOT coin launch!)
-- User in onboarding + "switch to base sepolia and launch there" = onboarding (chain switching during onboarding!)
-- User in onboarding + "oh launch on base sepolia <3" = onboarding (chain switching during group creation, NOT coin launch!)
 - User with 0 groups + "create group" = onboarding (first group)
+- User with groups + "create group" = group_launch (additional group)
+- User with groups + "start a new group for everyone" = group_launch (additional group creation)
+- User with groups + "launch a group and add everyone" = group_launch (additional group creation)
 - User with groups + "show my groups" = management (viewing existing)
 - User in onboarding + "who are the fee receivers?" = management (asking about existing group info, NOT continuing onboarding)
 - User in onboarding + "what's my group?" = management (asking about existing group info)
@@ -161,7 +178,7 @@ CRITICAL EXAMPLES:
 
 Respond ONLY with this JSON format:
 {
-  "intent": "onboarding|coin_launch|management|qa|confirmation",
+  "intent": "onboarding|coin_launch|group_launch|management|qa|confirmation",
   "confidence": 0.1-1.0,
   "reasoning": "brief explanation focusing on flow continuation vs new intent"
 }`;
@@ -227,7 +244,7 @@ Respond ONLY with this JSON format:
       const parsed = JSON.parse(content);
       
       // Validate the response
-      const validIntents: MessageIntent[] = ['onboarding', 'coin_launch', 'management', 'qa', 'confirmation'];
+      const validIntents: MessageIntent[] = ['onboarding', 'coin_launch', 'group_launch', 'management', 'qa', 'confirmation'];
       if (!validIntents.includes(parsed.intent)) {
         console.warn('Invalid intent returned:', parsed.intent);
         return this.getFallbackIntent(userState);
@@ -264,47 +281,5 @@ Respond ONLY with this JSON format:
     };
   }
 
-  private isExplicitGroupCreation(message: string): boolean {
-    const lowerMessage = message.toLowerCase();
-    
-    // Explicit group creation phrases
-    const groupCreationPhrases = [
-      'create a group',
-      'create group',
-      'start a group',
-      'start group',
-      'make a group',
-      'make group',
-      'set up a group',
-      'set up group',
-      'launch a group',
-      'launch group',
-      'new group',
-      'another group',
-      'additional group',
-      'group for',
-      'group with',
-      'i want to create a group',
-      'i want to start a group',
-      'i want to make a group',
-      'i want a group',
-      'let\'s create a group',
-      'let\'s start a group',
-      'let\'s make a group',
-      'can you create a group',
-      'can you start a group',
-      'help me create a group',
-      'help me start a group'
-    ];
-    
-    // Check if message contains explicit group creation phrases
-    const hasGroupCreationPhrase = groupCreationPhrases.some(phrase => lowerMessage.includes(phrase));
-    
-    // Additional check: contains "group" and creation verbs but NOT coin-specific words
-    const hasGroup = lowerMessage.includes('group');
-    const hasCreationVerb = ['create', 'start', 'make', 'launch', 'set up', 'new'].some(verb => lowerMessage.includes(verb));
-    const hasCoinWords = ['coin', 'token', 'ticker', 'symbol'].some(word => lowerMessage.includes(word));
-    
-    return hasGroupCreationPhrase || (hasGroup && hasCreationVerb && !hasCoinWords);
-  }
+
 } 
