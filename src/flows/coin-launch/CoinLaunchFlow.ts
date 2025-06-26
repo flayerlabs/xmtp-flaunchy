@@ -243,7 +243,7 @@ export class CoinLaunchFlow extends BaseFlow {
         params.push(`${coinData.fairLaunchDuration}min fair launch`);
       }
       if (coinData.premineAmount && coinData.premineAmount > 0) {
-        params.push(`${coinData.premineAmount}% premine`);
+        params.push(`${coinData.premineAmount}% prebuy`);
       }
       if (coinData.buybackPercentage && coinData.buybackPercentage > 0) {
         params.push(`${coinData.buybackPercentage}% buybacks`);
@@ -329,7 +329,7 @@ export class CoinLaunchFlow extends BaseFlow {
     }
     if (currentData.premineAmount && currentData.premineAmount !== progress.launchParameters.premineAmount) {
       progress.launchParameters.premineAmount = currentData.premineAmount;
-      parameterUpdates.push(`premine to ${currentData.premineAmount}%`);
+      parameterUpdates.push(`prebuy to ${currentData.premineAmount}%`);
       updated = true;
     }
     if (currentData.buybackPercentage && currentData.buybackPercentage !== progress.launchParameters.buybackPercentage) {
@@ -817,7 +817,7 @@ export class CoinLaunchFlow extends BaseFlow {
 
         1. Starting market cap: $100 to $10,000
         2. Fair launch duration: 1 to 60 minutes  
-        3. Premine amount: 0% to 100% (prebuy coins before launch)
+        3. Prebuy amount: 0% to 100% (prebuy coins before launch)
         4. Automated buybacks: 0% to 100% of fees go to automated buybacks
 
         Be brief and clear. Don't overwhelm with details. Use your character voice.
@@ -909,7 +909,7 @@ export class CoinLaunchFlow extends BaseFlow {
         Starting market cap: $1,000 USD
         Fair launch: 10% of supply 
         Fair launch duration: 30 minutes
-        Premine: 0% (no prebuy)
+        Prebuy: 0% (no prebuy)
         Creator fees: 100% (creator gets all fees)
         Automated buybacks: 0% (no buybacks)
 

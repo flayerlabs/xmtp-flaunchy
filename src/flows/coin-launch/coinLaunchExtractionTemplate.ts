@@ -52,13 +52,19 @@ Duration:
 - Look for: "fair launch duration", "launch time", "30 minutes", "1 hour", etc.
 - Convert hours to minutes, clamp between 1-60 minutes
 
-Prebuy:
-- Look for: "prebuy", "premine", "pre-buy" with percentages
+Prebuy/Premine:
+- Look for: "prebuy", "premine", "pre-buy", "pre-mine" with percentages
+- These refer to tokens bought at launch (costs ETH)
 - Extract percentage values, clamp between 0-100%
+- Map to premineAmount field
 
 Buybacks:
-- Look for: "buyback", "buy back", "automated buybacks" with percentages
+- Look for: "buyback", "buy back", "automated buybacks", "auto buyback" with percentages  
+- These refer to automated buybacks from trading fees (affects fee allocation)
 - Extract percentage values, clamp between 0-100%
+- Map to buybackPercentage field
+
+IMPORTANT: "prebuy" and "premine" always refer to tokens bought at launch, NOT buybacks!
 
 INPUT DATA
 Current Message: {{message}}

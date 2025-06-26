@@ -110,7 +110,9 @@ INTENT OPTIONS:
    
 2. coin_launch - User wants to launch a coin into an existing group  
    Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group"
+   COIN SPECIFICATIONS: Token specifications with parameters: "Banana (BNAA) with $100 market cap and 0.77% premine", "MyCoin (MCN) $5000 market cap", "DOGE token with 10% prebuy", "create Token (TOK) with $1000 starting cap"
    IMAGE ONLY: If user uploads an image attachment with minimal/no text, this is coin launch information
+   LAUNCH PARAMETERS: Messages containing market cap, premine/prebuy percentages, launch parameters
    
 3. group_launch - User wants to create ADDITIONAL groups (when they already have groups)
    Examples: "start a new group", "create a group for everyone", "let's create another group", "launch a group", "launch a group and add everyone"
@@ -175,6 +177,9 @@ ACTIONS (requesting execution) → onboarding/group_launch/management/coin_launc
 - User in onboarding + "create a group for everyone" = onboarding (group creation with add everyone)
 - User with groups + uploads image with no/minimal text = coin_launch (image-only coin launch information)
 - User with groups + "" (empty message) with image attachment = coin_launch (providing coin image)
+- User with groups + "Banana (BNAA) with $100 market cap and 0.77% premine" = coin_launch (coin specification with parameters)
+- User with groups + "MyCoin (MCN) $5000 market cap" = coin_launch (coin specification with market cap)
+- User with groups + "DOGE token with 10% prebuy" = coin_launch (coin specification with prebuy)
 
 Respond ONLY with this JSON format:
 {

@@ -1,8 +1,26 @@
-import { encodeFunctionData, encodeAbiParameters, parseUnits, zeroHash } from 'viem';
+import { encodeFunctionData, encodeAbiParameters, parseUnits, zeroHash, createPublicClient, http } from 'viem';
 import { numToHex } from '../../../utils/hex';
 import { FlaunchZapAbi } from '../../../abi/FlaunchZap';
-import { FlaunchZapAddress } from '../../../addresses';
+import { FlaunchPositionManagerAbi } from '../../../abi/FlaunchPositionManager';
+import { FlaunchZapAddress, FlaunchPositionManagerAddress } from '../../../addresses';
 import { generateTokenUri } from '../../../utils/ipfs';
+
+/**
+ * Calculate the premine amount based on percentage
+ * Matches the calculatePremineAmount function from the frontend
+ */
+function calculatePremineAmount(preminePercentage?: number): bigint {
+  if (!preminePercentage || preminePercentage <= 0) {
+    return 0n;
+  }
+  
+  const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100B tokens
+  
+  // Convert percentage to basis points (10000ths) to handle decimals
+  // e.g., 0.877% becomes 877 basis points out of 1,000,000 (100%)
+  const basisPoints = Math.round(preminePercentage * 10000);
+  return (TOTAL_SUPPLY * BigInt(basisPoints)) / 1000000n;
+}
 
 export interface FlaunchTransactionParams {
   // Core token details
@@ -119,8 +137,8 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
 
   // Launch parameters
   const fairLaunchInBps = BigInt(fairLaunchPercent * 100);
-  const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
-  const premineAmount = (TOTAL_SUPPLY * BigInt(preminePercentage * 100)) / 10000n;
+  const creatorFeeAllocationInBps = Math.round(creatorFeeAllocationPercent * 100);
+  const premineAmount = calculatePremineAmount(preminePercentage);
 
   const initialTokenFairLaunch = (TOTAL_SUPPLY * fairLaunchInBps) / 10000n;
   const ethAmount = parseUnits(startingMarketCapUSD.toString(), 6);
@@ -131,6 +149,85 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
     ],
     [ethAmount, initialTokenFairLaunch]
   );
+
+  // Calculate ETH value to send with transaction
+  let transactionValue = '0';
+  
+  try {
+    // Create public client to interact with contracts
+    const publicClient = createPublicClient({
+      transport: http(chain.viemChain.rpcUrls.default.http[0]),
+      chain: chain.viemChain,
+    });
+
+    // Get the base flaunching fee (always required)
+    const fee = await publicClient.readContract({
+      abi: FlaunchPositionManagerAbi,
+      address: FlaunchPositionManagerAddress[chain.id],
+      functionName: 'getFlaunchingFee',
+      args: [initialPriceParams],
+    });
+
+    let totalCost = fee;
+
+    // If there's a premine, add the premine cost
+    let cost = 0n; // Declare cost variable outside the if block
+    if (premineAmount > 0n) {
+      cost = await publicClient.readContract({
+        abi: FlaunchZapAbi,
+        address: FlaunchZapAddress[chain.id],
+        functionName: 'calculateFee',
+        args: [premineAmount, 0n, initialPriceParams],
+      });
+      totalCost = fee + cost;
+    }
+
+    // Bump by 10% to account for oracle fluctuations (any extra is refunded)
+    const finalCost = (totalCost * 110n) / 100n;
+    transactionValue = finalCost.toString();
+    
+    // Debug logging
+    console.log('💰 Coin Launch Transaction Value:', {
+      ticker,
+      name,
+      startingMarketCapUSD,
+      preminePercentage,
+      premineAmount: premineAmount.toString(),
+      baseFeeETH: fee.toString(),
+      premineHasCost: premineAmount > 0n,
+      premineCalculateCost: premineAmount > 0n ? cost.toString() : 'N/A',
+      totalCostETH: totalCost.toString(),
+      finalCostWithBufferETH: finalCost.toString(),
+      transactionValueETH: transactionValue,
+      chainId: chain.id,
+      // Additional debug info
+      conversionCheck: {
+        baseFeeInETH: (Number(fee) / 1e18).toFixed(18),
+        premineCalculateCostInETH: premineAmount > 0n ? (Number(cost) / 1e18).toFixed(18) : 'N/A',
+        totalCostInETH: (Number(totalCost) / 1e18).toFixed(18),
+        finalCostInETH: (Number(finalCost) / 1e18).toFixed(18),
+        ethAmountFromInitialPrice: ethAmount.toString(),
+        ethAmountFromInitialPriceAsETH: (Number(ethAmount) / 1e6).toFixed(6) + ' USD'
+      }
+    });
+    
+    // Prominent ETH value log
+    console.log(`🚀 LAUNCHING $${ticker}: Sending ${transactionValue} wei ETH (${(Number(transactionValue) / 1e18).toFixed(6)} ETH) with transaction`);
+    
+    // Let's also log what the calculateFee call is actually returning
+    if (premineAmount > 0n) {
+      console.log('🔍 CALCULATE FEE DEBUG:', {
+        premineAmountInput: premineAmount.toString(),
+        slippageInput: '0',
+        initialPriceParamsInput: initialPriceParams,
+        calculateFeeOutput: cost.toString(),
+        calculateFeeOutputInETH: (Number(cost) / 1e18).toFixed(18)
+      });
+    }
+  } catch (error) {
+    console.error('Failed to calculate transaction value:', error);
+    // Fallback to 0 if calculation fails - transaction may fail but won't throw here
+  }
 
   // Flaunch parameters
   const flaunchParams = {
@@ -189,7 +286,7 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
         chainId: chain.id,
         to: FlaunchZapAddress[chain.id],
         data: functionData,
-        value: '0',
+        value: transactionValue,
         metadata: {
           description: `Launch $${ticker} into ${treasuryManagerAddress.slice(0, 6)}...${treasuryManagerAddress.slice(-4)}`,
         },

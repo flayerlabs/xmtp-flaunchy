@@ -485,7 +485,7 @@ export class FlowRouter {
       - Launch options questions: "what launch options do I have?", "what can I configure?"
       - Launch defaults questions: "what are the defaults?", "what are default settings?"
       - Future feature questions about launches: "can I do airdrops?", "what about whitelists?"
-      - Launch parameter adjustments: market cap, duration, premine, buybacks
+      - Launch parameter adjustments: market cap, duration, prebuy, buybacks
       
       DIFFERENT INTENT (return "no"):
       - Group creation: "create a group", "start a new group", "launch a group", "launch a group and add everyone"

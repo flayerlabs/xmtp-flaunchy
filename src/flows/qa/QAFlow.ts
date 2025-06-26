@@ -2,6 +2,7 @@ import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
 import { getCharacterResponse } from "../../../utils/character";
 import { createLaunchExtractionPrompt, LaunchExtractionResult } from "../onboarding/launchExtractionTemplate";
+import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "../coin-launch/coinLaunchExtractionTemplate";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -15,6 +16,59 @@ export class QAFlow extends BaseFlow {
       userId: context.userState.userId,
       message: messageText.substring(0, 100) + '...'
     });
+
+    // Check if user with existing groups is trying to launch a coin
+    if (context.userState.groups.length > 0) {
+      const extraction = await this.extractCoinLaunchDetails(context);
+      if (extraction && extraction.tokenDetails && 
+          (extraction.tokenDetails.name || extraction.tokenDetails.ticker || context.hasAttachment)) {
+        
+        this.log('Coin launch detected in QA flow, redirecting to coin launch', {
+          userId: context.userState.userId,
+          tokenDetails: extraction.tokenDetails,
+          launchParameters: extraction.launchParameters,
+          hasAttachment: context.hasAttachment
+        });
+
+        // Start coin launch flow by initializing progress
+        const coinData = {
+          name: extraction.tokenDetails.name || undefined,
+          ticker: extraction.tokenDetails.ticker || undefined,
+          image: extraction.tokenDetails.image || (context.hasAttachment ? 'attachment_provided' : undefined)
+        };
+
+        const launchParameters = {
+          startingMarketCap: extraction.launchParameters.startingMarketCap || undefined,
+          fairLaunchDuration: extraction.launchParameters.fairLaunchDuration || undefined,
+          premineAmount: extraction.launchParameters.premineAmount || undefined,
+          buybackPercentage: extraction.launchParameters.buybackPercentage || undefined
+        };
+
+        await context.updateState({
+          coinLaunchProgress: {
+            step: 'collecting_coin_data',
+            coinData,
+            launchParameters,
+            startedAt: new Date()
+          }
+        });
+
+        // Show groups for selection if user has multiple groups
+        if (context.userState.groups.length === 1) {
+          const group = context.userState.groups[0];
+          await this.sendResponse(context, `launching ${extraction.tokenDetails.name || 'coin'} into your group ${group.id.slice(0, 6)}...${group.id.slice(-4)}. what details are missing?`);
+        } else {
+          let message = `launching ${extraction.tokenDetails.name || 'coin'}! choose a group:\n\n`;
+          for (const group of context.userState.groups) {
+            message += `${group.id}\n`;
+            message += `- coins: ${group.coins.length > 0 ? group.coins.join(', ') : 'none yet'}\n\n`;
+          }
+          message += "specify the contract address (group ID) you want to launch into.";
+          await this.sendResponse(context, message);
+        }
+        return;
+      }
+    }
 
     // If user is in onboarding, check for coin details and fee receivers and store them
     if (context.userState.status === 'onboarding' && context.userState.onboardingProgress) {
@@ -99,6 +153,51 @@ export class QAFlow extends BaseFlow {
     });
 
     await this.sendResponse(context, response);
+  }
+
+  private async extractCoinLaunchDetails(context: FlowContext): Promise<CoinLaunchExtractionResult | null> {
+    const messageText = this.extractMessageText(context);
+    
+    // Allow extraction even with empty message if there's an attachment
+    if (!messageText && !context.hasAttachment) {
+      return null;
+    }
+
+    try {
+      const extractionPrompt = createCoinLaunchExtractionPrompt({ 
+        message: messageText || '',
+        hasAttachment: context.hasAttachment,
+        attachmentType: context.hasAttachment ? 'image' : undefined,
+        imageUrl: undefined
+      });
+      
+      const completion = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: extractionPrompt }],
+        temperature: 0.1,
+        max_tokens: 500
+      });
+
+      const response = completion.choices[0]?.message?.content;
+      if (!response) {
+        return null;
+      }
+
+      const result = JSON.parse(response) as CoinLaunchExtractionResult;
+      
+      this.log('🔍 COIN LAUNCH EXTRACTION RESULT', {
+        messageText: messageText || '(empty with attachment)',
+        hasAttachment: context.hasAttachment,
+        tokenDetails: result.tokenDetails,
+        launchParameters: result.launchParameters,
+        timestamp: new Date().toISOString()
+      });
+
+      return result;
+    } catch (error) {
+      this.logError('Failed to extract coin launch details', error);
+      return null;
+    }
   }
 
   private async extractLaunchDetails(context: FlowContext): Promise<LaunchExtractionResult | null> {

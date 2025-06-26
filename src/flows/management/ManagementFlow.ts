@@ -38,8 +38,9 @@ export class ManagementFlow extends BaseFlow {
       const transactionResponse = await this.handlePendingTransaction(context, messageText);
       if (transactionResponse) {
         await this.sendResponse(context, transactionResponse);
+        return;
       }
-      return;
+      // If transactionResponse is null, continue to normal flow as fallback
     }
 
     // Handle ongoing management progress
@@ -157,7 +158,7 @@ export class ManagementFlow extends BaseFlow {
         transactionContext += `Launch Parameters:\n`;
         transactionContext += `- Starting Market Cap: $${pendingTx.launchParameters.startingMarketCap || 1000}\n`;
         transactionContext += `- Fair Launch Duration: ${pendingTx.launchParameters.fairLaunchDuration || 30} minutes\n`;
-        transactionContext += `- Premine Amount: ${pendingTx.launchParameters.premineAmount || 0}%\n`;
+        transactionContext += `- Prebuy Amount: ${pendingTx.launchParameters.premineAmount || 0}%\n`;
         transactionContext += `- Buyback Percentage: ${pendingTx.launchParameters.buybackPercentage || 0}%\n`;
         if (pendingTx.launchParameters.targetGroupId) {
           transactionContext += `- Target Group: ${pendingTx.launchParameters.targetGroupId}\n`;
@@ -197,13 +198,19 @@ export class ManagementFlow extends BaseFlow {
 Message: "${messageText}"
 
 Consider the message about the pending transaction if it:
+- Contains words like "update", "change", "modify", "set", "adjust", "fix"
+- Mentions specific transaction parameters (market cap, duration, prebuy, premine, buyback, etc.)
 - Asks about transaction status or details
-- Asks about specific parameters (market cap, duration, premine, buybacks, etc.)
-- Wants to modify/update the transaction
 - Wants to cancel the transaction
 - References signing or confirming
 - Asks about coin details that are part of the transaction
 - Asks about launch parameters or settings
+- Contains phrases like "please update", "change to", "set to", "make it"
+
+ESPECIALLY if the message mentions:
+- "prebuy", "premine", "market cap", "duration", "buyback" with values or percentages
+- "update the [parameter] to [value]"
+- "change [parameter]"
 
 Do NOT consider it about the transaction if it's:
 - Asking about existing/completed groups or coins
@@ -295,15 +302,19 @@ Message: "${messageText}"
 Current parameters:
 - Starting Market Cap: $${pendingTx.launchParameters?.startingMarketCap || 1000}
 - Fair Launch Duration: ${pendingTx.launchParameters?.fairLaunchDuration || 30} minutes
-- Premine Amount: ${pendingTx.launchParameters?.premineAmount || 0}%
+- Prebuy Amount: ${pendingTx.launchParameters?.premineAmount || 0}%
 - Buyback Percentage: ${pendingTx.launchParameters?.buybackPercentage || 0}%
+
+IMPORTANT TERMINOLOGY:
+- "prebuy", "premine", "pre-buy", "pre-mine" → refers to premineAmount (tokens bought at launch, costs ETH)
+- "buyback", "buy back", "automated buybacks" → refers to buybackPercentage (fee allocation for buybacks)
 
 Return ONLY a JSON object with any changed parameters:
 {
   "startingMarketCap": number (if mentioned),
   "fairLaunchDuration": number (if mentioned, in minutes),
-  "premineAmount": number (if mentioned, as percentage),
-  "buybackPercentage": number (if mentioned, as percentage)
+  "premineAmount": number (if mentioned, as percentage for prebuy/premine),
+  "buybackPercentage": number (if mentioned, as percentage for buybacks)
 }
 
 If no parameters are mentioned, return: {}`
@@ -343,7 +354,7 @@ If no parameters are mentioned, return: {}`
       
       if (parameterChanges.premineAmount !== undefined) {
         if (parameterChanges.premineAmount < 0 || parameterChanges.premineAmount > 50) {
-          return "premine amount must be between 0% and 50%.";
+          return "prebuy amount must be between 0% and 50%.";
         }
       }
       
@@ -481,7 +492,7 @@ If no parameters are mentioned, return: {}`
         transactionDetails += `• Fair Launch Supply: ${fairLaunchSupply} ${pendingTx.coinData.ticker} (${fairLaunchPercent}% of total)\n`;
         
         if (pendingTx.launchParameters.premineAmount && pendingTx.launchParameters.premineAmount > 0) {
-          transactionDetails += `• Premine: ${pendingTx.launchParameters.premineAmount}%\n`;
+          transactionDetails += `• Prebuy: ${pendingTx.launchParameters.premineAmount}%\n`;
         }
         if (pendingTx.launchParameters.buybackPercentage && pendingTx.launchParameters.buybackPercentage > 0) {
           transactionDetails += `• Buybacks: ${pendingTx.launchParameters.buybackPercentage}%\n`;
