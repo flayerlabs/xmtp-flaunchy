@@ -55,14 +55,15 @@ export class QAFlow extends BaseFlow {
         - Has ${context.userState.coins.length} coins
         - Has ${context.userState.groups.length} groups
         
-        Provide a helpful response based on your knowledge about:
+        CRITICAL: Keep your response concise.
+        
+        Provide a helpful but concise response based on your knowledge about:
         - Group creation and management
         - Coin launching with Flaunch
         - Fee splitting mechanisms
         - Trading and fair launches
         
-        If you don't know something specific, acknowledge it and suggest they can ask more questions.
-        Use your character's personality and style.
+        Use your character's voice but prioritize brevity above all else.
       `
     });
 
@@ -72,12 +73,17 @@ export class QAFlow extends BaseFlow {
   private async extractLaunchDetails(context: FlowContext): Promise<LaunchExtractionResult | null> {
     const messageText = this.extractMessageText(context);
     
-    if (!messageText) {
+    // Allow extraction even with empty message if there's an attachment
+    if (!messageText && !context.hasAttachment) {
       return null;
     }
 
     try {
-      const extractionPrompt = createLaunchExtractionPrompt({ message: messageText });
+      const extractionPrompt = createLaunchExtractionPrompt({ 
+        message: messageText || '',
+        hasAttachment: context.hasAttachment,
+        attachmentType: context.hasAttachment ? 'image' : undefined
+      });
       
       const completion = await context.openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
@@ -94,7 +100,8 @@ export class QAFlow extends BaseFlow {
       const result = JSON.parse(response) as LaunchExtractionResult;
       
       this.log('🔍 LAUNCH EXTRACTION RESULT', {
-        messageText,
+        messageText: messageText || '(empty with attachment)',
+        hasAttachment: context.hasAttachment,
         tokenDetails: result.tokenDetails,
         feeReceivers: result.feeReceivers,
         timestamp: new Date().toISOString()

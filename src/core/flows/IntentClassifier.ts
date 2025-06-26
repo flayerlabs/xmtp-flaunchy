@@ -17,7 +17,18 @@ export interface IntentResult {
 export class IntentClassifier {
   constructor(private openai: OpenAI) {}
 
-  async classifyIntent(message: string, userState: UserState): Promise<IntentResult> {
+  async classifyIntent(message: string, userState: UserState, hasAttachment: boolean = false): Promise<IntentResult> {
+    // Early detection for image-only coin launches (but not during onboarding)
+    if (hasAttachment && userState.groups.length > 0 && (!message || message.trim().length < 20) && 
+        userState.status !== 'onboarding' && !userState.onboardingProgress) {
+      // User has groups and uploaded an image with minimal text - likely coin launch
+      return {
+        intent: 'coin_launch',
+        confidence: 0.9,
+        reasoning: 'Image attachment with minimal text detected - likely coin launch information'
+      };
+    }
+
     // First check if user has ongoing management progress
     if (userState.managementProgress && userState.managementProgress.action === 'creating_group') {
       return {
@@ -38,7 +49,7 @@ export class IntentClassifier {
       };
     }
 
-    const prompt = this.buildClassificationPrompt(message, userState);
+    const prompt = this.buildClassificationPrompt(message, userState, hasAttachment);
     
     try {
       const response = await this.openai.chat.completions.create({
@@ -60,7 +71,7 @@ export class IntentClassifier {
     }
   }
 
-  private buildClassificationPrompt(message: string, userState: UserState): string {
+  private buildClassificationPrompt(message: string, userState: UserState, hasAttachment: boolean = false): string {
     const userContext = this.buildUserContext(userState);
     
     return `
@@ -69,17 +80,17 @@ You are classifying user messages in an ongoing conversation with a crypto token
 USER CONTEXT:
 ${userContext}
 
-USER MESSAGE: "${message}"
+USER MESSAGE: "${message}"${hasAttachment ? '\nHAS IMAGE ATTACHMENT: true' : ''}
 
 CRITICAL CONTEXT RULES (READ CAREFULLY):
 
-🔄 **CONVERSATIONAL FLOW CONTINUATION** (HIGHEST PRIORITY):
+CONVERSATIONAL FLOW CONTINUATION (HIGHEST PRIORITY):
 - If user is actively in a flow (onboarding/management progress exists), assume they are responding to the bot's request
 - If bot just asked for fee receivers and user provides usernames/addresses → CONTINUE CURRENT FLOW
 - If bot just asked for coin details and user provides name/ticker → CONTINUE CURRENT FLOW  
 - If bot just asked for confirmation and user confirms → CONTINUE CURRENT FLOW
 
-📋 **ONBOARDING CONTINUATION SIGNALS**:
+ONBOARDING CONTINUATION SIGNALS:
 - User has onboardingProgress AND provides: usernames, addresses, ENS names, "me and X", fee split info → onboarding
 - User has onboardingProgress AND mentions chain preference: "on sepolia", "use mainnet", "switch to base" → onboarding
 - User has onboardingProgress AND provides coin details: coin names, tickers, images → onboarding (NOT coin_launch!)
@@ -87,17 +98,17 @@ CRITICAL CONTEXT RULES (READ CAREFULLY):
 - Chain switching examples: "actually let's launch on sepolia", "use base mainnet", "switch to testnet"
 - Coin details examples: "Token TOKIE", "launch MyCoin (MCN)", "create DOGE with image.jpg" → onboarding if user is in onboarding
 
-📋 **INFORMATIONAL QUERIES** (HIGHEST PRIORITY):
+INFORMATIONAL QUERIES (HIGHEST PRIORITY):
 - Questions about existing groups/coins: "who are fee receivers?", "show my groups", "what's my group?", "show fee receivers"
 - These are ALWAYS management, even if user is in active onboarding/management flows
 - Override any active flow when user asks for information about existing data
 
-📋 **GROUP CREATION SIGNALS** (HIGH PRIORITY):
+GROUP CREATION SIGNALS (HIGH PRIORITY):
 - Explicit group creation requests: "launch a group", "create a group", "group for everyone", "add everyone"
 - These should route to appropriate flow (onboarding for first group, management for additional groups)
 - "Add everyone" requests should be detected regardless of current flow state
 
-📋 **MANAGEMENT CONTINUATION SIGNALS**:
+MANAGEMENT CONTINUATION SIGNALS:
 - User has managementProgress AND continues that task → management
 
 INTENT OPTIONS:
@@ -108,6 +119,7 @@ INTENT OPTIONS:
    
 2. coin_launch - User wants to launch a coin into an existing group  
    Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group"
+   IMAGE ONLY: If user uploads an image attachment with minimal/no text, this is coin launch information
    
 3. management - User wants to view/manage existing groups/coins OR create ADDITIONAL groups (when they already have groups)
    Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "create another group", "who are the fee receivers?", "what's my group?", "show fee receivers"
@@ -119,23 +131,24 @@ INTENT OPTIONS:
    Examples: "yes", "ok", "do it", "yep", "sure", "go ahead", "let's do it"
 
 CLASSIFICATION PRIORITY ORDER:
-1. **INFORMATIONAL QUERIES** - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
-2. **GROUP CREATION SIGNALS** - Explicit group creation or "add everyone" requests override current step
-3. **ACTIVE FLOW CONTINUATION** - Is user continuing an active onboarding/management process?
-4. **NEW INTENT DETECTION** - If no active flow, what is the user trying to do?
+1. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
+2. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
+3. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
+4. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
 
-🔗 **CHAIN SWITCHING DETECTION** (VERY IMPORTANT):
+CHAIN SWITCHING DETECTION (VERY IMPORTANT):
 - If user is in active onboarding/management AND mentions chains → CONTINUE CURRENT FLOW
 - Chain keywords: "sepolia", "mainnet", "base", "testnet", "ethereum"
 - Chain switching phrases: "let's launch on X", "use X network", "switch to X", "actually X", "on X instead"
 - These are NOT coin launches - they are chain preferences during existing flows!
 
-⚠️ **CRITICAL EXAMPLES**:
+CRITICAL EXAMPLES:
 - User in onboarding + "split between me and alice" = onboarding (continuing fee receiver setup)
 - User in onboarding + "MyCoin (MCN)" = onboarding (providing coin details)  
 - User in onboarding + "launch Token TOKIE into that group" = onboarding (providing coin details during onboarding!)
 - User in onboarding + "actually let's launch on sepolia" = onboarding (chain switching, NOT coin launch!)
 - User in onboarding + "switch to base sepolia and launch there" = onboarding (chain switching during onboarding!)
+- User in onboarding + "oh launch on base sepolia <3" = onboarding (chain switching during group creation, NOT coin launch!)
 - User with 0 groups + "create group" = onboarding (first group)
 - User with groups + "show my groups" = management (viewing existing)
 - User in onboarding + "who are the fee receivers?" = management (asking about existing group info, NOT continuing onboarding)
@@ -143,6 +156,8 @@ CLASSIFICATION PRIORITY ORDER:
 - User in onboarding + "show fee receivers" = management (asking about existing group info)
 - User in onboarding + "launch a group for everyone here" = onboarding (group creation with add everyone, NOT coin launch!)
 - User in onboarding + "create a group for everyone" = onboarding (group creation with add everyone)
+- User with groups + uploads image with no/minimal text = coin_launch (image-only coin launch information)
+- User with groups + "" (empty message) with image attachment = coin_launch (providing coin image)
 
 Respond ONLY with this JSON format:
 {
@@ -167,7 +182,12 @@ Respond ONLY with this JSON format:
       if (userState.onboardingProgress.splitData?.receivers) {
         context += `- Already has fee receivers configured\n`;
       }
-      if (userState.onboardingProgress.coinData) {
+      
+      // CRITICAL: Only include coin data context when user is actively in coin creation steps
+      // Don't include it during group creation to avoid misleading the intent classifier
+      if (userState.onboardingProgress.coinData && 
+          (userState.onboardingProgress.step === 'coin_creation' || 
+           userState.onboardingProgress.step === 'username_collection')) {
         const coinData = userState.onboardingProgress.coinData;
         context += `- Coin data: name=${coinData.name || 'missing'}, ticker=${coinData.ticker || 'missing'}, image=${coinData.image ? 'provided' : 'missing'}\n`;
       }
@@ -183,9 +203,18 @@ Respond ONLY with this JSON format:
       context += `MANAGEMENT IN PROGRESS: ${userState.managementProgress.action} (${userState.managementProgress.step})\n`;
     }
     
+    // Add coin launch progress context (this is when user is actively launching coins)
+    if (userState.coinLaunchProgress) {
+      context += `COIN LAUNCH IN PROGRESS: Step ${userState.coinLaunchProgress.step}\n`;
+      if (userState.coinLaunchProgress.coinData) {
+        const coinData = userState.coinLaunchProgress.coinData;
+        context += `- Active coin launch: name=${coinData.name || 'missing'}, ticker=${coinData.ticker || 'missing'}, image=${coinData.image ? 'provided' : 'missing'}\n`;
+      }
+    }
+    
     if (groupCount > 0) {
       const groupInfo = userState.groups.map(g => 
-        `Group ${g.id.slice(-6)} (${g.coins.length} coins)`
+        `${g.id.slice(0, 6)}...${g.id.slice(-4)} (${g.coins.length} coins)`
       ).join(', ');
       context += `Group details: ${groupInfo}`;
     }

@@ -248,7 +248,7 @@ __metadata:
     "@xmtp/content-type-remote-attachment": "npm:^2.0.2"
     "@xmtp/content-type-transaction-reference": "npm:^2.0.2"
     "@xmtp/content-type-wallet-send-calls": "npm:^2.0.0"
-    "@xmtp/node-sdk": "npm:^2.1.0"
+    "@xmtp/node-sdk": "npm:^3.0.0"
     ai: "npm:^4.2.9"
     axios: "npm:^1.9.0"
     dotenv: "npm:^16.5.0"
@@ -559,22 +559,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/node-bindings@npm:1.2.2":
-  version: 1.2.2
-  resolution: "@xmtp/node-bindings@npm:1.2.2"
-  checksum: 10c0/a0e884d2303d6f2d6b937234c0982b8e64a871a6a6447c48178dbbfbec91222f1eff5d0327a90d4cf0c7b23717ab910f7967d723a1d012d1dea329aab2cf59e0
+"@xmtp/node-bindings@npm:1.2.4":
+  version: 1.2.4
+  resolution: "@xmtp/node-bindings@npm:1.2.4"
+  checksum: 10c0/b4d42af24f7e5cf951e18e88392f3a64d49fc1aa01c557c37e25282e60c07d92a525628b99b15ebf2e1d6359fac0064f6222e3eab4f04d73ff98329e29ded9c6
   languageName: node
   linkType: hard
 
-"@xmtp/node-sdk@npm:^2.1.0":
-  version: 2.2.1
-  resolution: "@xmtp/node-sdk@npm:2.2.1"
+"@xmtp/node-sdk@npm:^3.0.0":
+  version: 3.0.0
+  resolution: "@xmtp/node-sdk@npm:3.0.0"
   dependencies:
     "@xmtp/content-type-group-updated": "npm:^2.0.2"
     "@xmtp/content-type-primitives": "npm:^2.0.2"
     "@xmtp/content-type-text": "npm:^2.0.2"
-    "@xmtp/node-bindings": "npm:1.2.2"
-  checksum: 10c0/2536c0aab0960d66badce11acf58fc719ba524a975f40bff2fab8a4d6305c9a8b88a2fd71c37a03f566264be02502407a9bce22183da4822d4bcc6c620c0b536
+    "@xmtp/node-bindings": "npm:1.2.4"
+  checksum: 10c0/90d5e5892eb2eaf0380b47f64b13878afe54c347aca905c4c8223c77fa7b4a3732c0755427be65b59ed640907c549022fcad2ae540e0cfaf8108f33fa2cbdfee
   languageName: node
   linkType: hard
 

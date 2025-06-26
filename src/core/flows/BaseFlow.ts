@@ -28,6 +28,27 @@ export abstract class BaseFlow {
       return context.message.content.trim();
     }
     
+    // Handle attachment messages with JSON URLs containing text
+    if (context.hasAttachment && context.attachment) {
+      try {
+        const attachment = context.attachment;
+        
+        // Check if the attachment URL is a JSON string containing text
+        if (typeof attachment.url === 'string' && attachment.url.startsWith('{') && attachment.url.endsWith('}')) {
+          const parsed = JSON.parse(attachment.url);
+          if (parsed.text && typeof parsed.text === 'string') {
+            this.log('Extracted text from JSON attachment URL', { 
+              extractedText: parsed.text,
+              originalUrl: attachment.url.substring(0, 100) + '...'
+            });
+            return parsed.text.trim();
+          }
+        }
+      } catch (error) {
+        this.logError('Failed to extract text from JSON attachment URL', error);
+      }
+    }
+    
     // Handle other content types if needed
     return '';
   }

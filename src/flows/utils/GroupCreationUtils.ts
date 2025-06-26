@@ -221,8 +221,7 @@ export class GroupCreationUtils {
       chainName: chainConfig.name,
       chainDisplayName: chainConfig.displayName,
       treasuryManagerFactory,
-      addressFeeSplitManagerImplementation,
-      availableChainIds: Object.keys(TreasuryManagerFactoryAddress)
+      addressFeeSplitManagerImplementation
     });
     
     if (!treasuryManagerFactory || !addressFeeSplitManagerImplementation) {
@@ -273,33 +272,38 @@ export class GroupCreationUtils {
     chainConfig: ChainConfig = DEFAULT_CHAIN,
     description?: string
   ): Promise<GroupCreationResult | null> {
-    // Extract fee receivers
-    const extraction = await this.extractFeeReceivers(context);
-    if (!extraction || !extraction.receivers || extraction.receivers.length === 0) {
-      return null;
+    try {
+      // Extract fee receivers
+      const extraction = await this.extractFeeReceivers(context);
+      if (!extraction || !extraction.receivers || extraction.receivers.length === 0) {
+        return null;
+      }
+
+      // Resolve usernames to addresses
+      const resolvedReceivers = await this.resolveUsernames(context, extraction.receivers);
+      
+      // Check if any failed to resolve
+      const failed = resolvedReceivers.filter(r => !r.resolvedAddress);
+      if (failed.length > 0) {
+        throw new Error(`Couldn't resolve these usernames: ${failed.map(r => r.username).join(', ')}`);
+      }
+
+      // Create transaction calls with proper error handling
+      const walletSendCalls = await this.createGroupDeploymentCalls(
+        resolvedReceivers, 
+        context.creatorAddress,
+        chainConfig,
+        description
+      );
+
+      return {
+        walletSendCalls,
+        resolvedReceivers,
+        chainConfig
+      };
+    } catch (error) {
+      console.error('Failed to create group from message:', error);
+      throw error; // Re-throw to let caller handle
     }
-
-    // Resolve usernames to addresses
-    const resolvedReceivers = await this.resolveUsernames(context, extraction.receivers);
-    
-    // Check if any failed to resolve
-    const failed = resolvedReceivers.filter(r => !r.resolvedAddress);
-    if (failed.length > 0) {
-      throw new Error(`Couldn't resolve these usernames: ${failed.map(r => r.username).join(', ')}`);
-    }
-
-    // Create transaction calls
-    const walletSendCalls = await this.createGroupDeploymentCalls(
-      resolvedReceivers, 
-      context.creatorAddress,
-      chainConfig,
-      description
-    );
-
-    return {
-      walletSendCalls,
-      resolvedReceivers,
-      chainConfig
-    };
   }
 } 

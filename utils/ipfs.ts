@@ -247,7 +247,7 @@ export async function generateTokenUri(
 ): Promise<string> {
   try {
     console.log("Generating token URI for:", name);
-    console.log("Using image URL:", metadata.imageUrl);
+    console.log("Using image URL:", metadata.imageUrl.startsWith("data:") ? `[Base64 image data - ${Math.round(metadata.imageUrl.length / 1024)}KB]` : metadata.imageUrl);
 
     // If the image URL is already an IPFS URL, use it directly
     const imageUrl = metadata.imageUrl.startsWith("ipfs://")

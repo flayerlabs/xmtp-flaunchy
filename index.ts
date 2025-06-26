@@ -8,6 +8,7 @@ import OpenAI from "openai";
 import { flaunchy } from "./characters/flaunchy";
 import { processMessage } from "./utils/llm";
 import { MessageHistory } from "./utils/messageHistory";
+import { InstallationManager } from "./src/core/installation/InstallationManager";
 import {
   RemoteAttachmentCodec,
   ContentTypeRemoteAttachment,
@@ -201,18 +202,21 @@ async function main() {
     fs.mkdirSync(volumePath, { recursive: true });
   }
 
-  // Create and configure the XMTP client
+  // Create and configure the XMTP client with installation limit handling
   // It's important to register all necessary codecs (RemoteAttachmentCodec, AttachmentCodec)
   // for proper handling of different content types, especially encrypted attachments.
-  const client = await Client.create(signer, {
+  const client = await InstallationManager.createClient(signer, {
     env: XMTP_ENV as XmtpEnv,
-    codecs: [
-      new WalletSendCallsCodec(),
-      remoteAttachmentCodec, // For handling remote (URL-based) attachments
-      attachmentCodec, // For handling direct/native attachments
-    ],
     dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
     dbEncryptionKey: encryptionKey,
+    retryAttempts: 3,
+    onInstallationLimitExceeded: async (error) => {
+      console.error("🚫 XMTP Installation Limit Exceeded:");
+      console.error(error.message);
+      console.error("\nSuggested actions:");
+      error.suggestedActions?.forEach(action => console.error(action));
+      return false; // Don't retry by default
+    }
   });
 
   // Initialize the MessageCoordinator with the client instance and a wait time (e.g., 1 second)

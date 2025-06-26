@@ -1,6 +1,6 @@
-// Combined launch details extraction template for onboarding flow
-export const launchDetailsExtractionTemplate = `
-# LAUNCH DETAILS EXTRACTION TASK
+// Coin launch details extraction template for coin launch flow
+export const coinLaunchExtractionTemplate = `
+# COIN LAUNCH EXTRACTION TASK
 You must return ONLY a valid JSON object. NO conversation, NO explanation, NO extra text.
 
 EXTRACTION RULES
@@ -33,16 +33,32 @@ Image Extraction:
 - IMPORTANT: If only an image attachment is provided (no text), this is still valid coin launch information
 - Return null if no valid image found
 
-FEE RECEIVER EXTRACTION
+TARGET GROUP EXTRACTION
 
-Look for:
-1. Usernames (starting with @), ENS names (.eth), wallet addresses (0x...)
-2. Self-references: "me", "myself", "my address", "use my username", "just me" → mark as SELF_REFERENCE
-3. Equal split indicators: "equal", "split equally", "same for everyone", etc.
-4. Percentage splits: "alice 30%", "@bob 25%", "charlie.eth 40%", etc.
-5. Multiple users: comma-separated or "and" separated lists
+Look for group/contract address references:
+1. Full contract addresses: "0x1234567890abcdef..." (40 hex characters after 0x)
+2. Shortened addresses: "0x1234...abcd" format
+3. Group references: "into group 0x...", "launch into 0x...", "use group 0x..."
+4. Direct address mentions: any 0x followed by hex characters
 
-IMPORTANT: If no usernames/addresses/splits are found, set feeReceivers to null. Do not hallucinate.
+LAUNCH PARAMETERS EXTRACTION
+
+Market Cap:
+- Look for: "market cap", "mcap", "starting cap", "$1000", "1k", etc.
+- Extract numeric values and convert k/K to thousands
+- Clamp between $100 and $10,000
+
+Duration:
+- Look for: "fair launch duration", "launch time", "30 minutes", "1 hour", etc.
+- Convert hours to minutes, clamp between 1-60 minutes
+
+Premine:
+- Look for: "premine", "prebuy", "pre-buy" with percentages
+- Extract percentage values, clamp between 0-100%
+
+Buybacks:
+- Look for: "buyback", "buy back", "automated buybacks" with percentages
+- Extract percentage values, clamp between 0-100%
 
 INPUT DATA
 Current Message: {{message}}
@@ -63,74 +79,60 @@ Return ONLY this JSON structure:
     "ticker": "string or null", 
     "image": "string or null"
   },
-  "feeReceivers": {
-    "receivers": [
-      {
-        "identifier": "username_or_address_or_SELF_REFERENCE",
-        "percentage": number_or_null,
-        "type": "username|ens|address|self"
-      }
-    ] || null,
-    "splitType": "equal|percentage|self_only" || null,
-    "confidence": number_0_to_1
+  "targetGroup": "string or null",
+  "launchParameters": {
+    "startingMarketCap": number_or_null,
+    "fairLaunchDuration": number_or_null,
+    "premineAmount": number_or_null,
+    "buybackPercentage": number_or_null
   }
 }
 
 Examples:
 
-Token only:
-"Launch DogeCoin (DOGE)" →
+Full launch command:
+"launch nobi (NOBI) into 0xfdb02c98d215ee60e19822a42dee9e6c26fe7394" →
+{
+  "tokenDetails": {"name": "nobi", "ticker": "NOBI", "image": null},
+  "targetGroup": "0xfdb02c98d215ee60e19822a42dee9e6c26fe7394",
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+}
+
+Token with parameters:
+"Launch DogeCoin (DOGE) with $5000 market cap and 45 minute fair launch" →
 {
   "tokenDetails": {"name": "DogeCoin", "ticker": "DOGE", "image": null},
-  "feeReceivers": {"receivers": null, "splitType": null, "confidence": 0}
+  "targetGroup": null,
+  "launchParameters": {"startingMarketCap": 5000, "fairLaunchDuration": 45, "premineAmount": null, "buybackPercentage": null}
 }
 
-Token + Fee Receivers:
-"Launch Timer (TIME) and split fees with @alice and me" →
-{
-  "tokenDetails": {"name": "Timer", "ticker": "TIME", "image": null},
-  "feeReceivers": {
-    "receivers": [
-      {"identifier": "@alice", "percentage": null, "type": "username"},
-      {"identifier": "SELF_REFERENCE", "percentage": null, "type": "self"}
-    ],
-    "splitType": "equal",
-    "confidence": 0.9
-  }
-}
-
-Fee Receivers only:
-"split with @bob 60% and me 40%" →
+Group selection only:
+"use group 0x1234567890abcdef1234567890abcdef12345678" →
 {
   "tokenDetails": {"name": null, "ticker": null, "image": null},
-  "feeReceivers": {
-    "receivers": [
-      {"identifier": "@bob", "percentage": 60, "type": "username"},
-      {"identifier": "SELF_REFERENCE", "percentage": 40, "type": "self"}
-    ],
-    "splitType": "percentage",
-    "confidence": 0.9
-  }
+  "targetGroup": "0x1234567890abcdef1234567890abcdef12345678",
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Image only (with attachment):
 "" (empty message with image attachment) →
 {
   "tokenDetails": {"name": null, "ticker": null, "image": "attachment_provided"},
-  "feeReceivers": {"receivers": null, "splitType": null, "confidence": 0}
+  "targetGroup": null,
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
 }
 
-Extract launch details from the current message now:
+Extract coin launch details from the current message now:
 `;
 
 // Helper function to use the template
-export function createLaunchExtractionPrompt(context: {
+export function createCoinLaunchExtractionPrompt(context: {
   message: string;
   hasAttachment?: boolean;
   attachmentType?: string;
   imageUrl?: string;
 }): string {
-  let prompt = launchDetailsExtractionTemplate;
+  let prompt = coinLaunchExtractionTemplate;
   
   // Replace template variables
   prompt = prompt.replace('{{message}}', context.message);
@@ -154,20 +156,18 @@ export function createLaunchExtractionPrompt(context: {
   return prompt;
 }
 
-// Type for the combined extraction result
-export interface LaunchExtractionResult {
+// Type for the coin launch extraction result
+export interface CoinLaunchExtractionResult {
   tokenDetails: {
     name: string | null;
     ticker: string | null;
     image: string | null;
   };
-  feeReceivers: {
-    receivers: Array<{
-      identifier: string;
-      percentage: number | null;
-      type: 'username' | 'ens' | 'address' | 'self';
-    }> | null;
-    splitType: 'equal' | 'percentage' | 'self_only' | null;
-    confidence: number;
+  targetGroup: string | null;
+  launchParameters: {
+    startingMarketCap: number | null;
+    fairLaunchDuration: number | null;
+    premineAmount: number | null;
+    buybackPercentage: number | null;
   };
 } 

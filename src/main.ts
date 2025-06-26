@@ -23,11 +23,7 @@ import { QAFlow } from "./flows/qa/QAFlow";
 import { ManagementFlow } from "./flows/management/ManagementFlow";
 import { CoinLaunchFlow } from "./flows/coin-launch/CoinLaunchFlow";
 import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoordinator";
-
-// Initialize codecs globally
-const attachmentCodec = new AttachmentCodec();
-const remoteAttachmentCodec = new RemoteAttachmentCodec();
-const transactionReferenceCodec = new TransactionReferenceCodec();
+import { InstallationManager } from "./core/installation/InstallationManager";
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -65,18 +61,42 @@ async function main() {
     fs.mkdirSync(volumePath, { recursive: true });
   }
 
-  console.log("📦 Creating XMTP client...");
-  const client = await Client.create(signer, {
-    env: XMTP_ENV as XmtpEnv,
-    codecs: [
-      new WalletSendCallsCodec(),
-      remoteAttachmentCodec,
-      attachmentCodec,
-      transactionReferenceCodec,
-    ],
-    dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
-    dbEncryptionKey: encryptionKey,
-  });
+  // Create XMTP client with installation limit handling
+  let client;
+  try {
+    // First try to build from existing installation (avoids creating new ones)
+    console.log("🔄 Attempting to reuse existing XMTP installation...");
+    client = await InstallationManager.buildExistingClient(signer, {
+      env: XMTP_ENV as XmtpEnv,
+      dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
+      dbEncryptionKey: encryptionKey,
+      retryAttempts: 2
+    });
+  } catch (buildError: any) {
+    console.log("⚠️ Could not reuse existing installation, creating new one...");
+    console.log("Build error:", buildError.message);
+    
+    // Fallback to creating new installation with limit handling
+    client = await InstallationManager.createClient(signer, {
+      env: XMTP_ENV as XmtpEnv,
+      dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
+      dbEncryptionKey: encryptionKey,
+      retryAttempts: 3,
+      onInstallationLimitExceeded: async (error) => {
+        console.error("🚫 XMTP Installation Limit Exceeded:");
+        console.error(error.message);
+        console.error("\nSuggested actions:");
+        error.suggestedActions?.forEach(action => console.error(action));
+        
+        // For production apps, you might want to:
+        // 1. Notify administrators
+        // 2. Try to clean up old installations
+        // 3. Use a fallback strategy
+        
+        return false; // Don't retry by default
+      }
+    });
+  }
 
   // Log agent details
   logAgentDetails(address, client.inboxId, XMTP_ENV);

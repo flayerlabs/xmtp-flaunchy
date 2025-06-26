@@ -3,7 +3,7 @@ import { numToHex } from "../../../utils/hex";
 
 export interface ChainConfig {
   id: number;
-  name: 'base' | 'base-sepolia'; // Match PendingTransaction network type
+  name: 'base' | 'baseSepolia'; // Match viem naming convention
   displayName: string;
   hexId: string;
   viemChain: typeof base | typeof baseSepolia;
@@ -19,9 +19,9 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     viemChain: base,
     isTestnet: false
   },
-  'base-sepolia': {
+  'baseSepolia': {
     id: baseSepolia.id,
-    name: 'base-sepolia',
+    name: 'baseSepolia',
     displayName: 'Base Sepolia',
     hexId: numToHex(baseSepolia.id),
     viemChain: baseSepolia,
@@ -33,86 +33,18 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
 export const DEFAULT_CHAIN = SUPPORTED_CHAINS['base'];
 
 /**
- * Extract chain preference from user message
+ * Get default chain based on NETWORK environment variable
+ * NETWORK=base (default) -> Base Mainnet
+ * NETWORK=baseSepolia -> Base Sepolia
  */
-export function detectChainFromMessage(message: string): ChainConfig {
-  const lowerMessage = message.toLowerCase();
+export function getDefaultChain(): ChainConfig {
+  const networkEnv = process.env.NETWORK;
   
-  // Check for specific chain mentions
-  if (lowerMessage.includes('sepolia') || lowerMessage.includes('testnet') || lowerMessage.includes('test')) {
-    return SUPPORTED_CHAINS['base-sepolia'];
+  if (networkEnv && SUPPORTED_CHAINS[networkEnv]) {
+    return SUPPORTED_CHAINS[networkEnv];
   }
   
-  if (lowerMessage.includes('mainnet') || lowerMessage.includes('main')) {
-    return SUPPORTED_CHAINS['base'];
-  }
-  
-  // Check for Base mentions (default to mainnet unless sepolia specified)
-  if (lowerMessage.includes('base')) {
-    if (lowerMessage.includes('sepolia')) {
-      return SUPPORTED_CHAINS['base-sepolia'];
-    }
-    return SUPPORTED_CHAINS['base'];
-  }
-  
-  // Default to Base Mainnet if no specific chain mentioned
   return DEFAULT_CHAIN;
 }
 
-/**
- * Get network name for pending transaction based on chain
- */
-export function getNetworkName(chainConfig: ChainConfig): 'base' | 'base-sepolia' {
-  return chainConfig.name;
-}
-
-/**
- * Get display-friendly chain description
- */
-export function getChainDescription(chainConfig: ChainConfig): string {
-  return chainConfig.isTestnet 
-    ? `${chainConfig.displayName} (Testnet)`
-    : chainConfig.displayName;
-}
-
-/**
- * Validate if a chain is supported
- */
-export function isSupportedChain(chainName: string): boolean {
-  return Object.keys(SUPPORTED_CHAINS).includes(chainName.toLowerCase()) ||
-         Object.values(SUPPORTED_CHAINS).some(chain => 
-           chain.displayName.toLowerCase() === chainName.toLowerCase()
-         );
-}
-
-/**
- * Get chain config by name (flexible matching)
- */
-export function getChainByName(chainName: string): ChainConfig | null {
-  const lowerName = chainName.toLowerCase();
-  
-  // Direct key match
-  if (SUPPORTED_CHAINS[lowerName]) {
-    return SUPPORTED_CHAINS[lowerName];
-  }
-  
-  // Display name match
-  const chainByDisplayName = Object.values(SUPPORTED_CHAINS).find(
-    chain => chain.displayName.toLowerCase() === lowerName
-  );
-  
-  if (chainByDisplayName) {
-    return chainByDisplayName;
-  }
-  
-  // Partial matches
-  if (lowerName.includes('sepolia') || lowerName.includes('testnet')) {
-    return SUPPORTED_CHAINS['base-sepolia'];
-  }
-  
-  if (lowerName.includes('base') && !lowerName.includes('sepolia')) {
-    return SUPPORTED_CHAINS['base'];
-  }
-  
-  return null;
-} 
+ 

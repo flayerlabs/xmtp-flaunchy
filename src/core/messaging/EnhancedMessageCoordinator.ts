@@ -7,9 +7,10 @@ import { UserState, UserGroup } from "../types/UserState";
 import { Character } from "../../../types";
 import { ContentTypeRemoteAttachment, type RemoteAttachment, RemoteAttachmentCodec, type Attachment } from "@xmtp/content-type-remote-attachment";
 import { ContentTypeTransactionReference, type TransactionReference } from "@xmtp/content-type-transaction-reference";
-import { decodeEventLog, type Log, createPublicClient, http, isAddress } from 'viem';
+import { decodeEventLog, decodeAbiParameters, type Log, createPublicClient, http, isAddress } from 'viem';
 import { base, baseSepolia, mainnet } from 'viem/chains';
 import { uploadImageToIPFS } from '../../../utils/ipfs';
+import { getDefaultChain } from '../../flows/utils/ChainSelection';
 
 // ABI for PoolCreated event
 const poolCreatedAbi = [
@@ -594,39 +595,215 @@ export class EnhancedMessageCoordinator {
   }
 
   private async processImageAttachment(attachment: RemoteAttachment): Promise<string> {
+    console.log('🖼️ Processing XMTP remote attachment:', {
+      filename: attachment.filename,
+      url: attachment.url,
+      scheme: attachment.scheme,
+      hasContentDigest: !!(attachment as any).contentDigest,
+      hasSalt: !!(attachment as any).salt,
+      hasNonce: !!(attachment as any).nonce,
+      hasSecret: !!(attachment as any).secret
+    });
+
     try {
-      console.log('🖼️ Processing image attachment:', {
-        filename: attachment.filename,
-        url: attachment.url
+      // Properly handle XMTP remote attachment decryption
+      console.log('🔓 Decrypting XMTP remote attachment...');
+      
+      // Check if the URL is a JSON string - if so, we need to handle this differently
+      let isJsonUrl = false;
+      let actualImageUrl = '';
+      
+      if (typeof attachment.url === 'string' && attachment.url.startsWith('{') && attachment.url.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(attachment.url);
+          if (parsed.url) {
+            console.log('📋 Detected JSON URL in attachment:', { originalUrl: attachment.url.substring(0, 100), parsedUrl: parsed.url });
+            isJsonUrl = true;
+            actualImageUrl = parsed.url;
+          }
+        } catch (parseError) {
+          console.error('Failed to parse JSON URL from attachment:', parseError);
+        }
+      }
+      
+      // If we have a JSON URL, fetch the image directly instead of using XMTP decryption
+      if (isJsonUrl && actualImageUrl) {
+        console.log('🌐 Fetching image directly from parsed URL:', actualImageUrl);
+        
+        const response = await fetch(actualImageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        const imageData = new Uint8Array(arrayBuffer);
+        
+        console.log('✅ Direct image fetch successful:', {
+          url: actualImageUrl,
+          dataSize: imageData.length,
+          estimatedFileSizeKB: Math.round(imageData.length / 1024),
+          contentType: response.headers.get('content-type')
+        });
+        
+        // Validate the image data
+        if (imageData.length === 0) {
+          throw new Error('Fetched image has no data');
+        }
+        
+        if (imageData.length < 100) {
+          throw new Error(`Image data too small (${imageData.length} bytes), likely corrupted`);
+        }
+        
+        if (imageData.length > 10 * 1024 * 1024) { // 10MB limit
+          throw new Error(`Image data too large (${Math.round(imageData.length / 1024 / 1024)}MB), max 10MB allowed`);
+        }
+        
+        // Convert to base64 for IPFS upload
+        console.log('📤 Converting fetched image to base64 and uploading to IPFS...');
+        const base64Image = Buffer.from(imageData).toString('base64');
+        
+        // Upload to IPFS using our existing upload function
+        const ipfsResponse = await uploadImageToIPFS({
+          pinataConfig: { jwt: process.env.PINATA_JWT! },
+          base64Image,
+          name: attachment.filename || 'image'
+        });
+        
+        console.log('📋 IPFS upload response:', {
+          IpfsHash: ipfsResponse.IpfsHash,
+          PinSize: ipfsResponse.PinSize,
+          Timestamp: ipfsResponse.Timestamp
+        });
+        
+        // Validate the IPFS hash
+        if (!ipfsResponse.IpfsHash || typeof ipfsResponse.IpfsHash !== 'string') {
+          throw new Error('Invalid IPFS response: missing or invalid IpfsHash');
+        }
+        
+        // Validate IPFS hash format
+        const hash = ipfsResponse.IpfsHash;
+        const isValidFormat = (
+          hash.startsWith('Qm') ||           // CIDv0 format
+          hash.startsWith('baf') ||          // CIDv1 format  
+          hash.startsWith('bae') ||          // CIDv1 format
+          hash.startsWith('bai') ||          // CIDv1 format
+          hash.startsWith('bab')             // CIDv1 format
+        );
+        
+        if (!isValidFormat) {
+          throw new Error(`Invalid IPFS hash format: ${hash} - should start with Qm, baf, bae, bai, or bab`);
+        }
+        
+        // Validate hash length
+        if (hash.length < 20 || hash.length > 100) {
+          throw new Error(`Invalid IPFS hash length: ${hash.length} characters`);
+        }
+        
+        const ipfsUrl = `ipfs://${hash}`;
+        console.log('✅ Successfully processed JSON URL attachment and uploaded to IPFS:', ipfsUrl);
+        
+        return ipfsUrl;
+      }
+      
+      // Use the XMTP RemoteAttachmentCodec to decrypt the attachment (for normal attachments)
+      // This should handle all the encryption/decryption automatically
+      const decryptedAttachment = await RemoteAttachmentCodec.load(attachment, this.client) as Attachment;
+      
+      console.log('✅ XMTP decryption successful:', {
+        filename: decryptedAttachment.filename,
+        mimeType: decryptedAttachment.mimeType,
+        dataSize: decryptedAttachment.data.length,
+        estimatedFileSizeKB: Math.round(decryptedAttachment.data.length / 1024)
       });
       
-      // Decrypt the attachment using XMTP's RemoteAttachmentCodec
-      console.log('🔓 Decrypting attachment...');
-      const decrypted = await RemoteAttachmentCodec.load(attachment, this.client) as Attachment;
+      // Validate the decrypted data
+      if (!decryptedAttachment.data || decryptedAttachment.data.length === 0) {
+        throw new Error('Decrypted attachment has no data');
+      }
       
-      // Convert decrypted data to base64 for IPFS upload
-      const base64Image = Buffer.from(decrypted.data).toString('base64');
+      // Validate it's a reasonable image size
+      if (decryptedAttachment.data.length < 100) {
+        throw new Error(`Image data too small (${decryptedAttachment.data.length} bytes), likely corrupted`);
+      }
       
-      // Upload to IPFS
-      console.log('📤 Uploading to IPFS...');
+      if (decryptedAttachment.data.length > 10 * 1024 * 1024) { // 10MB limit
+        throw new Error(`Image data too large (${Math.round(decryptedAttachment.data.length / 1024 / 1024)}MB), max 10MB allowed`);
+      }
+      
+      // Convert to base64 for IPFS upload
+      console.log('📤 Converting decrypted image to base64 and uploading to IPFS...');
+      const base64Image = Buffer.from(decryptedAttachment.data).toString('base64');
+      
+      console.log('📊 Image processing details:', {
+        originalDataSize: decryptedAttachment.data.length,
+        base64Size: base64Image.length,
+        filename: decryptedAttachment.filename || 'image',
+        mimeType: decryptedAttachment.mimeType || 'unknown'
+      });
+      
+      // Upload to IPFS using our existing upload function
       const ipfsResponse = await uploadImageToIPFS({
         pinataConfig: { jwt: process.env.PINATA_JWT! },
         base64Image,
-        name: attachment.filename || 'image'
+        name: decryptedAttachment.filename || 'image'
       });
       
-      const ipfsUrl = `ipfs://${ipfsResponse.IpfsHash}`;
-      console.log('✅ Successfully uploaded image to IPFS:', ipfsUrl);
+      console.log('📋 IPFS upload response:', {
+        IpfsHash: ipfsResponse.IpfsHash,
+        PinSize: ipfsResponse.PinSize,
+        Timestamp: ipfsResponse.Timestamp
+      });
+      
+      // Validate the IPFS hash
+      if (!ipfsResponse.IpfsHash || typeof ipfsResponse.IpfsHash !== 'string') {
+        throw new Error('Invalid IPFS response: missing or invalid IpfsHash');
+      }
+      
+      // Validate IPFS hash format
+      const hash = ipfsResponse.IpfsHash;
+      const isValidFormat = (
+        hash.startsWith('Qm') ||           // CIDv0 format
+        hash.startsWith('baf') ||          // CIDv1 format  
+        hash.startsWith('bae') ||          // CIDv1 format
+        hash.startsWith('bai') ||          // CIDv1 format
+        hash.startsWith('bab')             // CIDv1 format
+      );
+      
+      if (!isValidFormat) {
+        throw new Error(`Invalid IPFS hash format: ${hash} - should start with Qm, baf, bae, bai, or bab`);
+      }
+      
+      // Validate hash length
+      if (hash.length < 20 || hash.length > 100) {
+        throw new Error(`Invalid IPFS hash length: ${hash.length} characters`);
+      }
+      
+      const ipfsUrl = `ipfs://${hash}`;
+      console.log('✅ Successfully processed XMTP attachment and uploaded to IPFS:', ipfsUrl);
       
       return ipfsUrl;
       
     } catch (error) {
-      console.error('❌ Error processing image attachment:', error);
+      console.error('❌ XMTP attachment processing failed:', error);
       
-      // Fallback to a placeholder to maintain compatibility
-      console.log('🔄 Falling back to placeholder image processing');
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate processing
-      return `ipfs://QmPlaceholder${Math.random().toString(36).substring(2, 15)}`;
+      // Log detailed error information for debugging
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack?.split('\n').slice(0, 3).join('\n') // First 3 lines of stack
+        });
+      }
+      
+      // Log attachment details for debugging
+      console.error('Attachment details for debugging:', {
+        filename: attachment.filename,
+        url: typeof attachment.url === 'string' ? attachment.url.substring(0, 100) + '...' : attachment.url,
+        scheme: attachment.scheme,
+        attachmentKeys: Object.keys(attachment)
+      });
+      
+      return 'IMAGE_PROCESSING_FAILED';
     }
   }
 
@@ -662,9 +839,9 @@ export class EnhancedMessageCoordinator {
       const txHash = transactionRef.reference as `0x${string}`;
       console.log('🔍 Fetching transaction receipt for hash:', txHash);
       
-      // Determine which network to use based on the networkId
-      const isMainnet = transactionRef.networkId === 8453 || transactionRef.networkId === '8453';
-      const chain = isMainnet ? base : baseSepolia;
+      // Use default chain from environment
+      const defaultChain = getDefaultChain();
+      const chain = defaultChain.viemChain;
       
       // Create a public client to fetch the transaction receipt
       const publicClient = createPublicClient({
@@ -688,8 +865,8 @@ export class EnhancedMessageCoordinator {
           
           // Send error message to user
           const errorMessage = pendingTx.type === 'group_creation' 
-            ? "❌ **Transaction Error**\n\nI couldn't verify your Group creation. The transaction completed, but I was unable to extract the Group address from the receipt.\n\nPlease check your wallet for the transaction details, or try creating another Group."
-            : "❌ **Transaction Error**\n\nI couldn't verify your Coin creation. The transaction completed, but I was unable to extract the Coin address from the receipt.\n\nPlease check your wallet for the transaction details, or try launching another Coin.";
+            ? "❌ Transaction Error\n\nI couldn't verify your Group creation. The transaction completed, but I was unable to extract the Group address from the receipt.\n\nPlease check your wallet for the transaction details, or try creating another Group."
+            : "❌ Transaction Error\n\nI couldn't verify your Coin creation. The transaction completed, but I was unable to extract the Coin address from the receipt.\n\nPlease check your wallet for the transaction details, or try launching another Coin.";
           
           await conversation.send(errorMessage);
           
@@ -707,8 +884,8 @@ export class EnhancedMessageCoordinator {
           
           // Send error message to user
           const errorMessage = pendingTx.type === 'group_creation' 
-            ? "❌ **Transaction Error**\n\nI extracted an invalid Group address from your transaction receipt. This is a security issue.\n\nPlease check your wallet for the correct address, or try creating another Group."
-            : "❌ **Transaction Error**\n\nI extracted an invalid Coin address from your transaction receipt. This is a security issue.\n\nPlease check your wallet for the correct address, or try launching another Coin.";
+            ? "❌ Transaction Error\n\nI extracted an invalid Group address from your transaction receipt. This is a security issue.\n\nPlease check your wallet for the correct address, or try creating another Group."
+            : "❌ Transaction Error\n\nI extracted an invalid Coin address from your transaction receipt. This is a security issue.\n\nPlease check your wallet for the correct address, or try launching another Coin.";
           
           await conversation.send(errorMessage);
           
@@ -723,45 +900,76 @@ export class EnhancedMessageCoordinator {
         // Determine network
         const network = pendingTx.network;
         
-        // Create success message
-        let successMessage: string;
-        let url: string;
-        
-        if (pendingTx.type === 'group_creation') {
-          successMessage = `Group created!\n\nCA: ${contractAddress}`;
-          url = `https://flaunch.gg/${network}/group/${contractAddress}`;
-        } else {
-          successMessage = `Coin created!\n\nCA: ${contractAddress}`;
-          url = `https://flaunch.gg/${network}/coin/${contractAddress}`;
-        }
-        
-        successMessage += `\n\n${url}`;
-        
-        // Send success message
-        await conversation.send(successMessage);
-        
-        // Generate next steps in character's voice with user context
-        const nextStepsMessage = await this.generateNextStepsMessage(pendingTx.type, userState);
-        await conversation.send(nextStepsMessage);
-        
         // Update user state based on transaction type
         if (pendingTx.type === 'group_creation') {
-          // For group creation, store the manager address and move to coin creation
+          // For group creation, extract receiver data FIRST
           const currentProgress = userState.onboardingProgress;
           
-          // Determine chain info from network
-          const chainId = isMainnet ? 8453 : 84532; // Base mainnet : Base Sepolia
-          const chainName = pendingTx.network as 'base' | 'base-sepolia';
+          // Use default chain from environment
+          const defaultChain = getDefaultChain();
+          const chainId = defaultChain.id;
+          const chainName = defaultChain.name;
+          
+          // Extract receiver data from transaction logs or fallback to stored data
+          let receivers: Array<{ username: string; resolvedAddress: string; percentage: number }> = [];
+          
+          try {
+            // Try to extract receivers from transaction logs
+            receivers = await this.extractReceiversFromTransactionLogs(receipt, senderInboxId);
+            console.log('✅ Using receivers from transaction logs:', receivers);
+          } catch (error) {
+            console.log('Failed to extract receivers from logs, using stored data:', error);
+            
+            // Fallback to stored data (onboarding or management progress)
+            const storedReceivers = currentProgress?.splitData?.receivers || 
+                                  userState.managementProgress?.groupCreationData?.receivers || 
+                                  [];
+            
+            receivers = storedReceivers.map(r => ({
+              username: r.username,
+              resolvedAddress: r.resolvedAddress || senderInboxId, // fallback to user's own address
+              percentage: r.percentage || (100 / (storedReceivers.length || 1))
+            }));
+            console.log('📋 Using stored receivers as fallback:', receivers);
+          }
+          
+          // If no receivers found, default to the transaction sender
+          if (receivers.length === 0) {
+            receivers = [{
+              username: senderInboxId,
+              resolvedAddress: senderInboxId,
+              percentage: 100
+            }];
+            console.log('🔄 Using default receiver (transaction sender):', receivers);
+          }
+          
+          // Send confirmation message using CORRECT receiver data
+          const receiverNames = receivers.map(r => {
+            // Format receiver display name
+            if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+              return r.username;
+            } else {
+              return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+            }
+          }).join(', ');
+          
+          await conversation.send(`group created for ${receiverNames}!`);
+          
+          // For onboarding, move to next step
+          if (userState.status === 'onboarding') {
+            const coinData = userState.onboardingProgress?.coinData;
+            if (coinData && (coinData.name || coinData.ticker)) {
+              await conversation.send("now let's launch your coin!");
+            } else {
+              await conversation.send("what coin do you want to launch?");
+            }
+          }
           
           // Create the group entry for the user's groups array
           const newGroup: UserGroup = {
             id: contractAddress,
             type: 'username_split',
-            receivers: (currentProgress?.splitData?.receivers || []).map(r => ({
-              username: r.username,
-              resolvedAddress: r.resolvedAddress || 'unknown',
-              percentage: r.percentage || (100 / (currentProgress?.splitData?.receivers.length || 1))
-            })),
+            receivers,
             coins: [],
             chainId,
             chainName,
@@ -792,17 +1000,21 @@ export class EnhancedMessageCoordinator {
             } : undefined
           });
         } else {
+          // Coin creation success
+          const networkPath = network === 'baseSepolia' ? 'base-sepolia' : 'base';
+          await conversation.send(`🎉 coin created! CA: ${contractAddress}\n\ntrack your coin's progress: https://mini.flaunch.gg\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`);
           // For coin creation, add the coin to user's collection
           // Use the group address from the user's onboarding progress (the group they just created)
           const groupAddress = userState.onboardingProgress?.groupData?.managerAddress || 
                              userState.onboardingProgress?.splitData?.managerAddress ||
                              (userState.groups.length > 0 ? userState.groups[userState.groups.length - 1].id : 'unknown-group');
           
-          // Determine chain info from network
-          const chainId = isMainnet ? 8453 : 84532; // Base mainnet : Base Sepolia
-          const chainName = pendingTx.network as 'base' | 'base-sepolia';
+          // Use default chain from environment
+          const defaultChain = getDefaultChain();
+          const chainId = defaultChain.id;
+          const chainName = defaultChain.name;
           
-          await this.sessionManager.updateUserState(senderInboxId, {
+          const updatedState = await this.sessionManager.updateUserState(senderInboxId, {
             pendingTransaction: undefined,
             ...(pendingTx.coinData && {
               coins: [
@@ -830,13 +1042,21 @@ export class EnhancedMessageCoordinator {
               )
             })
           });
+
+          // If user was onboarding, complete onboarding and send mini.flaunch.gg link
+          if (userState.status === 'onboarding') {
+            await this.sessionManager.completeOnboarding(senderInboxId);
+            
+            // Send completion message with mini.flaunch.gg link
+            const completionMessage = `🎉 onboarding complete! track your coin's progress and manage your group at https://mini.flaunch.gg`;
+            await conversation.send(completionMessage);
+          }
         }
 
         console.log('Successfully processed transaction reference and sent success message', {
           type: pendingTx.type,
           contractAddress,
           network,
-          url,
           txHash
         });
 
@@ -847,9 +1067,9 @@ export class EnhancedMessageCoordinator {
         
         let errorMessage: string;
         if (receiptError?.name === 'TimeoutError' || receiptError?.message?.includes('timeout')) {
-          errorMessage = "⏰ **Transaction Timeout**\n\nYour transaction is taking longer than expected to confirm. This is normal during network congestion.\n\nPlease check your wallet in a few minutes, or send the transaction reference again once it's confirmed.";
+          errorMessage = "⏰ Transaction Timeout\n\nYour transaction is taking longer than expected to confirm. This is normal during network congestion.\n\nPlease check your wallet in a few minutes, or send the transaction reference again once it's confirmed.";
         } else {
-          errorMessage = "❌ **Transaction Error**\n\nI couldn't fetch your transaction receipt from the blockchain. This could be due to network issues.\n\nPlease wait a moment and try again, or check your wallet for transaction details.";
+                      errorMessage = "❌ Transaction Error\n\nI couldn't fetch your transaction receipt from the blockchain. This could be due to network issues.\n\nPlease wait a moment and try again, or check your wallet for transaction details.";
         }
         
         await conversation.send(errorMessage);
@@ -863,7 +1083,7 @@ export class EnhancedMessageCoordinator {
       try {
         const conversation = await this.client.conversations.getConversationById(message.conversationId);
         if (conversation) {
-          await conversation.send("❌ **System Error**\n\nI encountered an error while processing your transaction reference. This could be due to an unexpected format or system issue.\n\nPlease check your wallet for transaction details and try again if needed.");
+          await conversation.send("❌ System Error\n\nI encountered an error while processing your transaction reference. This could be due to an unexpected format or system issue.\n\nPlease check your wallet for transaction details and try again if needed.");
         }
         
         // Clear any pending transaction state
@@ -876,6 +1096,69 @@ export class EnhancedMessageCoordinator {
       }
       
       return false;
+    }
+  }
+
+  private async extractReceiversFromTransactionLogs(receipt: any, senderAddress: string): Promise<Array<{ username: string; resolvedAddress: string; percentage: number }>> {
+    try {
+      if (!receipt || !receipt.logs || !Array.isArray(receipt.logs)) {
+        throw new Error('Invalid receipt or logs');
+      }
+      
+      // Look for the FeeSplitManagerInitialized event (topic: 0x1622d3ee94b11b30b943c365a33e530faf52f5ccbc53d8aae6a25ec82a61caff)
+      const feeSplitInitializedTopic = '0x1622d3ee94b11b30b943c365a33e530faf52f5ccbc53d8aae6a25ec82a61caff';
+      
+      for (const log of receipt.logs) {
+        if (log.topics && log.topics[0] === feeSplitInitializedTopic && log.data) {
+          console.log('🔍 Decoding FeeSplitManagerInitialized event data:', log.data);
+          
+          // Decode the log data directly - it contains: owner, params struct
+          const decoded = decodeAbiParameters(
+            [
+              { name: 'owner', type: 'address' },
+              {
+                name: 'params',
+                type: 'tuple',
+                components: [
+                  { name: 'creatorShare', type: 'uint256' },
+                  {
+                    name: 'recipientShares',
+                    type: 'tuple[]',
+                    components: [
+                      { name: 'recipient', type: 'address' },
+                      { name: 'share', type: 'uint256' }
+                    ]
+                  }
+                ]
+              }
+            ],
+            log.data
+          );
+          
+          console.log('✅ Successfully decoded log data:', {
+            owner: decoded[0],
+            creatorShare: decoded[1].creatorShare.toString(),
+            recipientShares: decoded[1].recipientShares.map((rs: any) => ({
+              recipient: rs.recipient,
+              share: rs.share.toString()
+            }))
+          });
+          
+          const recipientShares = decoded[1].recipientShares as Array<{ recipient: string; share: bigint }>;
+          const totalShare = 10000000n; // 100% in contract format
+          
+          return recipientShares.map(rs => ({
+            username: rs.recipient, // Use address as username since we don't have the original username
+            resolvedAddress: rs.recipient,
+            percentage: Number(rs.share * 100n / totalShare) // Convert to percentage
+          }));
+        }
+      }
+      
+      throw new Error('FeeSplitManagerInitialized event not found in logs');
+    } catch (error) {
+      console.error('Failed to extract receivers from transaction logs:', error);
+      throw error;
     }
   }
 
@@ -1004,52 +1287,6 @@ export class EnhancedMessageCoordinator {
     }
   }
 
-  private async generateNextStepsMessage(transactionType: 'group_creation' | 'coin_creation', userState: any): Promise<string> {
-    const { getCharacterResponse } = await import('../../../utils/character');
-    
-    let prompt: string;
-    
-    if (transactionType === 'group_creation') {
-      // Check if coin details are already stored
-      const coinData = userState.onboardingProgress?.coinData;
-      const hasStoredCoin = coinData && (coinData.name || coinData.ticker);
-      
-      if (hasStoredCoin) {
-        // User already provided coin details earlier
-        const coinName = coinData.name || 'your coin';
-        const coinTicker = coinData.ticker ? `(${coinData.ticker})` : '';
-        const needsImage = !coinData.image;
-        
-                 prompt = `The user just successfully created their Group! 
-         
-         Great news - you already mentioned wanting to launch "${coinName}" ${coinTicker} earlier! 
-         ${needsImage ? 'Just need an image to complete your coin launch.' : 'We have all the details needed for your coin launch.'}
-         
-         Be excited about remembering their coin details and the progress made. Keep it concise and use your character's voice.`;
-      } else {
-                 // No coin details stored, ask for them
-         prompt = `The user just successfully created their Group! Now ask for coin details to launch their first coin:
-         - Coin name
-         - Ticker symbol (2-8 letters)  
-         - Image URL or they can upload an image
-         
-         Be excited about the progress and explain this will be their first coin in the group. Keep it concise and use your character's voice.`;
-      }
-    } else {
-      prompt = `The user just successfully created a Coin! 
-      
-      Tell them what they can do next: they can ask for details on their Groups or Coins, launch more coins into any of their Groups, and importantly, they can go to https://mini.flaunch.gg to see all their coins and claim fees.
-      
-      Mention that they've completed onboarding and can now use https://mini.flaunch.gg for coin management and fee claiming. Ask if there's anything more they'd like to do. Use your character's voice and style.`;
-    }
-
-    return await getCharacterResponse({
-      openai: this.openai,
-      character: this.character,
-      prompt
-    });
-  }
-
   private async shouldProcessMessage(
     primaryMessage: DecodedMessage,
     conversation: any,
@@ -1101,6 +1338,37 @@ export class EnhancedMessageCoordinator {
     } catch (error) {
       console.error('Error checking if response to agent message:', error);
       return false;
+    }
+  }
+
+  /**
+   * Handle errors that might come from users with installation limit issues
+   */
+  private async handleUserInstallationLimitError(error: any, senderAddress?: string): Promise<void> {
+    const errorMessage = error?.message?.toLowerCase() || '';
+    const isInstallationLimit = [
+      'installation limit',
+      'max installations', 
+      'maximum installations',
+      'exceeded installation limit',
+      '12/5 installations'
+    ].some(pattern => errorMessage.includes(pattern));
+
+    if (isInstallationLimit && senderAddress) {
+      console.log(`⚠️ User ${senderAddress} appears to have hit XMTP installation limit`);
+      
+      // You could potentially send them a helpful message if possible
+      const helpMessage = `🚫 It looks like you've hit XMTP's 5-installation limit! 
+
+To fix this:
+• Clean up old XMTP installations from other apps/devices
+• Use the same database/encryption key across deployments
+• Contact XMTP support if you need help managing installations
+
+This is a new limit in XMTP 3.0.0 to improve network performance.`;
+
+      // Log for your reference
+      console.log("📋 Installation limit help message prepared for user:", helpMessage);
     }
   }
 } 

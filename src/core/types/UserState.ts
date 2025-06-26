@@ -3,6 +3,7 @@ export interface UserState {
   status: 'new' | 'onboarding' | 'active';
   onboardingProgress?: OnboardingProgress;
   managementProgress?: ManagementProgress;
+  coinLaunchProgress?: CoinLaunchProgress;
   coins: UserCoin[];
   groups: UserGroup[];
   preferences: UserPreferences;
@@ -48,7 +49,7 @@ export interface UserCoin {
   fairLaunchPercent: number;
   initialMarketCap: number;
   chainId: number; // Store which chain this coin was launched on
-  chainName: 'base' | 'base-sepolia'; // Human-readable chain name
+  chainName: 'base' | 'baseSepolia'; // Human-readable chain name
   createdAt: Date;
   // Live data from API
   liveData?: {
@@ -70,7 +71,7 @@ export interface UserGroup {
   }>;
   coins: string[]; // Array of ticker symbols
   chainId: number; // Store which chain this group was launched on
-  chainName: 'base' | 'base-sepolia'; // Human-readable chain name
+  chainName: 'base' | 'baseSepolia'; // Human-readable chain name
   createdAt: Date;
   updatedAt: Date;
   // Live data from API
@@ -103,7 +104,14 @@ export interface PendingTransaction {
     ticker: string;
     image: string;
   };
-  network: 'base' | 'base-sepolia';
+  launchParameters?: {
+    startingMarketCap?: number;
+    fairLaunchDuration?: number;
+    premineAmount?: number;
+    buybackPercentage?: number;
+    targetGroupId?: string;
+  };
+  network: 'base' | 'baseSepolia';
   timestamp: Date;
 }
 
@@ -123,5 +131,22 @@ export interface ManagementProgress {
     image?: string;
     targetGroupId?: string;
   };
+  startedAt: Date;
+}
+
+export interface CoinLaunchProgress {
+  step: 'collecting_coin_data' | 'selecting_group' | 'creating_transaction';
+  coinData?: {
+    name?: string;
+    ticker?: string;
+    image?: string;
+  };
+  launchParameters?: {
+    startingMarketCap?: number;
+    fairLaunchDuration?: number;
+    premineAmount?: number;
+    buybackPercentage?: number;
+  };
+  targetGroupId?: string;
   startedAt: Date;
 } 
