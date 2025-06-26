@@ -76,11 +76,7 @@ export class SessionManager {
   async completeOnboarding(userId: string): Promise<UserState> {
     return this.updateUserState(userId, {
       status: 'active',
-      onboardingProgress: {
-        ...((await this.getUserState(userId)).onboardingProgress!),
-        step: 'completed',
-        completedAt: new Date()
-      }
+      onboardingProgress: undefined // Clear onboarding progress completely when done
     });
   }
 
@@ -118,13 +114,14 @@ export class SessionManager {
   // Helper methods for onboarding flow
   async updateOnboardingStep(userId: string, step: 'coin_creation' | 'username_collection' | 'completed'): Promise<UserState> {
     const state = await this.getUserState(userId);
+    const isCompleted = step === 'completed';
     
     return this.updateUserState(userId, {
-      status: step === 'completed' ? 'active' : 'onboarding',
-      onboardingProgress: {
+      status: isCompleted ? 'active' : 'onboarding',
+      onboardingProgress: isCompleted ? undefined : {
         ...state.onboardingProgress!,
         step,
-        completedAt: step === 'completed' ? new Date() : undefined
+        completedAt: undefined
       }
     });
   }
