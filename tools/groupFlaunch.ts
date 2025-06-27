@@ -1,36 +1,50 @@
 import { ContentTypeWalletSendCalls } from "@xmtp/content-type-wallet-send-calls";
 import type { Client, Conversation } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
-import {
-  encodeAbiParameters,
-  encodeFunctionData,
-  parseUnits,
-  zeroAddress,
-  zeroHash,
-  type Address,
-  type Hex,
-} from "viem";
+import { encodeAbiParameters, type Address } from "viem";
 import { z } from "zod";
-import { AddressFeeSplitManagerAddress, FlaunchZapAddress } from "../addresses";
+import { AddressFeeSplitManagerAddress } from "../addresses";
 import type { Character, ToolContext } from "../types";
 import { getCharacterResponse } from "../utils/character";
 import { getTool, invalidArgsResponse } from "../utils/tool";
-import { generateTokenUri } from "../utils/ipfs";
-import { FlaunchZapAbi } from "../abi/FlaunchZap";
-import { chain, TOTAL_SUPPLY } from "./constants";
-import { numToHex } from "../utils/hex";
+import { chain } from "./constants";
 import { getDisplayName } from "../utils/ens";
+import { createFlaunchTransaction } from "../src/flows/utils/FlaunchTransactionUtils";
 
 export const groupFlaunchSchema = z.object({
   ticker: z.string().describe("The ticker of the coin to flaunch"),
-  image: z.string().optional().describe("The image of the coin to flaunch"),
+  image: z.string().describe("The image of the coin to flaunch"),
   startingMarketCap: z
     .number()
     .min(100)
     .max(10000)
     .optional()
     .describe(
-      "The starting market cap of the coin in USD. Between 100 and 10,000"
+      "The starting market cap of the coin in USD. Between 100 and 10,000. Default: 1,000"
+    ),
+  fairLaunchDuration: z
+    .number()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe(
+      "Fair launch duration in minutes. Between 1 and 60 minutes"
+    ),
+  preminePercentage: z
+    .number()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe(
+      "Percentage of tokens to premine (prebuy). Between 0 and 100%"
+    ),
+  buybackPercentage: z
+    .number()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe(
+      "Percentage of fees to go to automated buybacks. Between 0 and 100%"
     ),
 });
 
@@ -52,22 +66,8 @@ const createGroupFlaunchCalls = async ({
       flaunchArgs: args,
     });
 
-    const initialMarketCapUSD = args.startingMarketCap ?? 10_000;
-    const initialMCapInUSDCWei = parseUnits(initialMarketCapUSD.toString(), 6);
-    const initialPriceParams = encodeAbiParameters(
-      [
-        {
-          type: "uint256",
-        },
-      ],
-      [initialMCapInUSDCWei]
-    );
-
-    const fairLaunchPercent = 60;
-    const fairLaunchInBps = BigInt(fairLaunchPercent * 100);
-
-    const creatorFeeAllocationPercent = 80;
-    const creatorFeeAllocationInBps = creatorFeeAllocationPercent * 100;
+    const fairLaunchPercent = 10;
+    const creatorFeeAllocationPercent = 100;
 
     const inboxState = await client.preferences.inboxStateFromInboxIds([
       senderInboxId,
@@ -82,13 +82,20 @@ const createGroupFlaunchCalls = async ({
     const feeReceivers: Address[] = [];
 
     console.log(`Found ${members.length} total members in the group`);
+    console.log(`Group members analysis:`);
+    console.log(`- Sender InboxId: ${senderInboxId}`);
+    console.log(`- Bot InboxId: ${client.inboxId}`);
 
     for (const member of members) {
+      console.log(`Processing member: ${member.inboxId}`);
+      
       // Skip the sender and the bot
       if (
         member.inboxId !== senderInboxId &&
         member.inboxId !== client.inboxId
       ) {
+        console.log(`  → Including member ${member.inboxId} as fee receiver`);
+        
         // Get the address for this member
         const memberInboxState =
           await client.preferences.inboxStateFromInboxIds([member.inboxId]);
@@ -99,22 +106,47 @@ const createGroupFlaunchCalls = async ({
           const memberAddress = memberInboxState[0].identifiers[0]
             .identifier as Address;
           feeReceivers.push(memberAddress);
-          console.log(`Added fee receiver: ${memberAddress}`);
+          console.log(`  → Added fee receiver: ${memberAddress}`);
+        } else {
+          console.log(`  → Could not get address for member ${member.inboxId}`);
         }
+      } else {
+        const reason = member.inboxId === senderInboxId ? 'sender' : 'bot';
+        console.log(`  → Skipping member ${member.inboxId} (${reason})`);
       }
     }
 
-    console.log(`Total fee receivers: ${feeReceivers.length}`);
+    console.log(`Total fee receivers before deduplication: ${feeReceivers.length}`);
+    console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
 
+    // Deduplicate fee receivers - combine shares for duplicate addresses (case-insensitive)
+    const addressShareMap = new Map<Address, bigint>();
     const VALID_SHARE_TOTAL = 100_00000n; // 5 decimals as BigInt
-    const totalParticipants = BigInt(feeReceivers.length + 1); // +1 for the creator
+    
+    // First pass: calculate equal share per unique address (case-insensitive)
+    const uniqueFeeReceivers = [...new Set(feeReceivers.map(addr => addr.toLowerCase() as Address))];
+    const totalParticipants = BigInt(uniqueFeeReceivers.length + 1); // +1 for the creator
     const sharePerAddress = VALID_SHARE_TOTAL / totalParticipants;
     const remainder = VALID_SHARE_TOTAL % totalParticipants;
 
-    // Generate initialize data for the fee split manager
-    const recipientShares = feeReceivers.map((receiver) => ({
+    // Build the address share map by counting duplicates (case-insensitive)
+    for (const receiver of feeReceivers) {
+      const normalizedAddress = receiver.toLowerCase() as Address;
+      const currentShare = addressShareMap.get(normalizedAddress) || 0n;
+      addressShareMap.set(normalizedAddress, currentShare + sharePerAddress);
+    }
+
+    console.log(`Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`);
+    console.log(`Deduplicated fee receiver shares:`, Array.from(addressShareMap.entries()).map(([addr, share]) => ({
+      address: addr,
+      share: share.toString(),
+      percentage: (Number(share) / Number(VALID_SHARE_TOTAL) * 100).toFixed(2) + '%'
+    })));
+
+    // Generate initialize data for the fee split manager using deduplicated addresses
+    const recipientShares = Array.from(addressShareMap.entries()).map(([receiver, share]) => ({
       recipient: receiver,
-      share: sharePerAddress,
+      share: share,
     }));
 
     // Creator gets the base share plus any rounding remainder to ensure a valid share total
@@ -146,114 +178,34 @@ const createGroupFlaunchCalls = async ({
       ]
     );
 
-    // upload image & token uri to ipfs
-    let tokenUri = "";
-    if (args.image) {
-      console.log("Generating token URI with image:", args.image);
-      tokenUri = await generateTokenUri(args.ticker, {
-        pinataConfig: { jwt: process.env.PINATA_JWT! },
-        metadata: {
-          imageUrl: args.image,
-          description: "Flaunched via Flaunchy on XMTP",
-          websiteUrl: "",
-          discordUrl: "",
-          twitterUrl: "",
-          telegramUrl: "",
-        },
-      });
-      console.log("Generated token URI:", tokenUri);
-    }
-
-    // Prepare flaunch params
-    const flaunchParams = {
-      name: args.ticker,
-      symbol: args.ticker,
-      tokenUri,
-      initialTokenFairLaunch: (TOTAL_SUPPLY * fairLaunchInBps) / 10000n,
-      fairLaunchDuration: 0n,
-      premineAmount: 0n,
-      creator: creatorAddress as `0x${string}`,
-      creatorFeeAllocation: creatorFeeAllocationInBps,
-      flaunchAt: 0n,
-      initialPriceParams,
-      feeCalculatorParams: "0x" as `0x${string}`,
-    };
-    const treasuryManagerParams = {
-      manager: AddressFeeSplitManagerAddress[chain.id],
-      initializeData: initializeData as `0x${string}`,
-      depositData: "0x" as `0x${string}`,
-    };
-    const whitelistParams = {
-      merkleRoot: zeroHash,
-      merkleIPFSHash: "",
-      maxTokens: 0n,
-    };
-    const airdropParams = {
-      airdropIndex: 0n,
-      airdropAmount: 0n,
-      airdropEndTime: 0n,
-      merkleRoot: zeroHash,
-      merkleIPFSHash: "",
-    };
-
-    console.log("Prepared flaunch params:", {
-      flaunchParams,
+    console.log("Prepared group flaunch params:", {
       creatorShare,
       recipientShares,
-      treasuryManagerParams,
-      whitelistParams,
-      airdropParams,
+      initializeData
     });
 
-    // Encode the flaunch function call
-    const functionData = encodeFunctionData({
-      abi: FlaunchZapAbi,
-      functionName: "flaunch",
-      args: [
-        flaunchParams,
-        whitelistParams,
-        airdropParams,
-        treasuryManagerParams,
-      ],
+    // Calculate creator fee allocation based on buyback percentage
+    let adjustedCreatorFeeAllocationPercent = creatorFeeAllocationPercent;
+    if (args.buybackPercentage) {
+      adjustedCreatorFeeAllocationPercent = creatorFeeAllocationPercent - args.buybackPercentage;
+    }
+
+    // Use centralized transaction creation function
+    return await createFlaunchTransaction({
+      name: args.ticker,
+      ticker: args.ticker,
+      image: args.image,
+      creatorAddress,
+      senderInboxId,
+      chain,
+      treasuryManagerAddress: AddressFeeSplitManagerAddress[chain.id],
+      treasuryInitializeData: initializeData,
+      fairLaunchPercent,
+      fairLaunchDuration: (args.fairLaunchDuration || 0) * 60, // Convert to seconds
+      startingMarketCapUSD: args.startingMarketCap ?? 1000,
+      creatorFeeAllocationPercent: adjustedCreatorFeeAllocationPercent,
+      preminePercentage: args.preminePercentage || 0
     });
-
-    console.log("Encoded function data");
-
-    // Calculate percentages for display with proper precision
-    const creatorPercentage =
-      (Number(creatorShare) / Number(VALID_SHARE_TOTAL)) * 100;
-    const recipientPercentage =
-      (Number(sharePerAddress) / Number(VALID_SHARE_TOTAL)) * 100;
-
-    // Resolve ENS names for display
-    const creatorDisplayName = await getDisplayName(creatorAddress);
-    const recipientDisplayNames = await Promise.all(
-      feeReceivers.map((addr) => getDisplayName(addr))
-    );
-
-    // Return the wallet send calls
-    return {
-      version: "1.0",
-      from: senderInboxId,
-      chainId: numToHex(chain.id),
-      calls: [
-        {
-          chainId: chain.id,
-          to: FlaunchZapAddress[chain.id],
-          data: functionData,
-          value: "0",
-          metadata: {
-            description: `Flaunching $${args.ticker} for the group on ${
-              chain.name
-            }\nwith Fee splits:\nCreator: ${creatorPercentage.toFixed(
-              2
-            )}% - ${creatorDisplayName}\nRecipients:\n${recipientDisplayNames
-              .map((name) => `${recipientPercentage.toFixed(2)}% - ${name}`)
-              .join("\n")}`,
-          },
-        },
-      ],
-    };
   } catch (error) {
     console.error("Error in createFlaunchCalls:", error);
     throw error;

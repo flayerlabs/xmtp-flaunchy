@@ -23,8 +23,13 @@ export function generateCharacterContext(character: Character): string {
   const messageExamples = character.messageExamples
     .sort(() => 0.5 - Math.random())
     .slice(0, 5)
-    .map((ex) => ex.map((msg) => `${msg.user}: ${msg.content.text}`).join("\n"))
-    .join("\n\n");
+    .map((ex) => `Agent: ${ex}`)
+    .join("\n");
+  
+  // Include ALL knowledge - this is critical for accurate responses
+  const knowledgeString = character.knowledge 
+    ? character.knowledge.join("\n- ")
+    : "";
 
   return `
     # Character Profile
@@ -35,6 +40,10 @@ export function generateCharacterContext(character: Character): string {
 
     # Background Lore
     ${selectedLore}
+
+    # Critical Knowledge & Facts
+    You MUST use this knowledge when responding:
+    - ${knowledgeString}
 
     # Style Guidelines
     ${styleDirections}
@@ -57,7 +66,10 @@ export async function getCharacterResponse({
   const response = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { role: "system", content: generateCharacterContext(character) },
+      { 
+        role: "system", 
+        content: `${character.system}\n\n${generateCharacterContext(character)}` 
+      },
       { role: "user", content: prompt },
     ],
   });
