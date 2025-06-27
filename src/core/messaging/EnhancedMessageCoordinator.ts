@@ -646,7 +646,7 @@ export class EnhancedMessageCoordinator {
 
       // Call Neynar API to resolve Farcaster username
       const response = await fetch(
-        `https://api.neynar.com/v2/farcaster/user/by_username?username=${username}`,
+        `https://api.neynar.com/v2/farcaster/user/by_username?username=${username.toLowerCase()}`,
         {
           headers: {
             accept: "application/json",
