@@ -244,8 +244,14 @@ export class EnhancedMessageCoordinator {
       return false;
     }
 
-    // Skip wallet send calls but handle transaction receipts
     const contentTypeId = message.contentType?.typeId;
+
+    // Skip read receipts, avoid logging to prevent spam
+    if (contentTypeId === "readReceipt") {
+      return false;
+    }
+
+    // Skip wallet send calls but handle transaction receipts
     if (contentTypeId === "wallet-send-calls") {
       console.log("⏭️ SKIPPING WALLET SEND CALLS", {
         contentType: contentTypeId,
