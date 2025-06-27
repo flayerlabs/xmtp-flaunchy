@@ -3,6 +3,7 @@ import { FlowContext } from "../../core/types/FlowContext";
 import { getCharacterResponse } from "../../../utils/character";
 import { createLaunchExtractionPrompt, LaunchExtractionResult } from "../onboarding/launchExtractionTemplate";
 import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "../coin-launch/coinLaunchExtractionTemplate";
+import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -16,6 +17,13 @@ export class QAFlow extends BaseFlow {
       userId: context.userState.userId,
       message: messageText.substring(0, 100) + '...'
     });
+
+    // ENHANCED: Check for multiple coin launch requests first
+    const isMultipleCoinRequest = await this.detectMultipleCoinRequest(context, messageText);
+    if (isMultipleCoinRequest) {
+      await this.handleMultipleCoinRequest(context);
+      return;
+    }
 
     // Check if user with existing groups is trying to launch a coin
     if (context.userState.groups.length > 0) {
@@ -56,11 +64,18 @@ export class QAFlow extends BaseFlow {
         // Show groups for selection if user has multiple groups
         if (context.userState.groups.length === 1) {
           const group = context.userState.groups[0];
-          await this.sendResponse(context, `launching ${extraction.tokenDetails.name || 'coin'} into your group ${group.id.slice(0, 6)}...${group.id.slice(-4)}. what details are missing?`);
+          const groupDisplay = await GroupCreationUtils.formatAddress(group.id, context.ensResolver);
+          await this.sendResponse(context, `launching ${extraction.tokenDetails.name || 'coin'} into your group ${groupDisplay}. what details are missing?`);
         } else {
           let message = `launching ${extraction.tokenDetails.name || 'coin'}! choose a group:\n\n`;
+          
+          // Resolve all group addresses at once
+          const groupAddresses = context.userState.groups.map(g => g.id);
+          const addressMap = await GroupCreationUtils.formatAddresses(groupAddresses, context.ensResolver);
+          
           for (const group of context.userState.groups) {
-            message += `${group.id}\n`;
+            const groupDisplay = addressMap.get(group.id.toLowerCase()) || group.id;
+            message += `${groupDisplay}\n`;
             message += `- coins: ${group.coins.length > 0 ? group.coins.join(', ') : 'none yet'}\n\n`;
           }
           message += "specify the contract address (group ID) you want to launch into.";
@@ -242,5 +257,52 @@ export class QAFlow extends BaseFlow {
       this.logError('Failed to extract launch details', error);
       return null;
     }
+  }
+
+  /**
+   * Detect if user is asking to launch multiple coins at once
+   */
+  private async detectMultipleCoinRequest(context: FlowContext, messageText: string): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Does this message request launching multiple coins/tokens? "${messageText}"
+          
+          Look for patterns like:
+          - "launch 3 coins"
+          - "create multiple tokens"
+          - "launch COIN1 and COIN2"
+          - "create tokens called X, Y, and Z"
+          - "launch several coins"
+          - "create a few tokens"
+          - Multiple coin names or tickers in one request
+          - Asking about batch/bulk coin creation
+          
+          Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+    } catch (error) {
+      this.logError('Failed to detect multiple coin request', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle requests for multiple coin launches by explaining the limitation
+   */
+  private async handleMultipleCoinRequest(context: FlowContext): Promise<void> {
+    await this.sendResponse(context, 
+      "i can only launch one coin at a time! " +
+      "let's start with your first coin - give me a name, ticker, and image. " +
+      "after we launch it, we can create another one."
+    );
   }
 } 

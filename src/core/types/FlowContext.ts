@@ -3,6 +3,7 @@ import type OpenAI from "openai";
 import type { Character } from "../../../types";
 import type { UserState } from "./UserState";
 import type { SessionManager } from "../session/SessionManager";
+import type { ENSResolverService } from "../../services/ENSResolverService";
 
 export interface FlowContext {
   // Core XMTP objects
@@ -22,6 +23,9 @@ export interface FlowContext {
   
   // Session management
   sessionManager: SessionManager;
+  
+  // Services
+  ensResolver: ENSResolverService;
   
   // Message context
   messageText: string;

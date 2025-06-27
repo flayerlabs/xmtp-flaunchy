@@ -203,6 +203,7 @@ export class CoinLaunchFlow extends BaseFlow {
         processImageAttachment: context.processImageAttachment,
         hasAttachment: context.hasAttachment,
         attachment: context.attachment,
+        ensResolver: context.ensResolver,
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
         fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds
@@ -837,6 +838,7 @@ export class CoinLaunchFlow extends BaseFlow {
         processImageAttachment: context.processImageAttachment,
         hasAttachment: context.hasAttachment,
         attachment: context.attachment,
+        ensResolver: context.ensResolver,
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
         fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds

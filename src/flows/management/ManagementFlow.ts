@@ -39,6 +39,12 @@ export class ManagementFlow extends BaseFlow {
       messageText: messageText?.substring(0, 100)
     });
 
+    // Handle invited users with welcome message
+    if (userState.status === 'invited') {
+      await this.handleInvitedUserWelcome(context);
+      return;
+    }
+
     // Clear any conflicting pending transactions from other flows (but not our own)
     await this.clearCrossFlowTransactions(context);
 
@@ -503,16 +509,14 @@ If no parameters are mentioned, return: {}`
         if (validateWalletSendCalls(walletSendCalls)) {
           await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
           
-          // Create display names for confirmation
-          const displayNames = updatedReceivers.map(r => {
-            const displayName = (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x'))
-              ? (r.username.startsWith('@') ? r.username : `@${r.username}`)
-              : `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-            const percentage = r.percentage ? ` (${r.percentage.toFixed(1)}%)` : '';
-            return `${displayName}${percentage}`;
-          }).join(', ');
+          // Create display names with ENS resolution
+          const message = await GroupCreationUtils.createTransactionMessageWithENS(
+            updatedReceivers,
+            'updated',
+            context.ensResolver
+          );
           
-          return `updated group with ${updatedReceivers.length} members: ${displayNames}. sign to create!`;
+          return message;
         }
       } catch (error) {
         this.logError('Failed to modify group transaction with everyone', error);
@@ -670,16 +674,14 @@ If no parameters are mentioned, return: {}`
         if (validateWalletSendCalls(walletSendCalls)) {
           await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
           
-          // Create display names for confirmation
-          const displayNames = updatedReceivers.map(r => {
-            const displayName = (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x'))
-              ? (r.username.startsWith('@') ? r.username : `@${r.username}`)
-              : `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-            const percentage = r.percentage ? ` (${r.percentage.toFixed(1)}%)` : '';
-            return `${displayName}${percentage}`;
-          }).join(', ');
+          // Create display names with ENS resolution
+          const message = await GroupCreationUtils.createTransactionMessageWithENS(
+            updatedReceivers,
+            'updated',
+            context.ensResolver
+          );
           
-          return `updated group with ${updatedReceivers.length} members: ${displayNames}. sign to create!`;
+          return message;
         }
       } catch (error) {
         this.logError('Failed to modify group transaction', error);
@@ -815,8 +817,12 @@ If no parameters are mentioned, return: {}`
       if (validateWalletSendCalls(result.walletSendCalls)) {
         await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
         
-        // Use shared utility for transaction message
-        const message = GroupCreationUtils.createTransactionMessage(result.resolvedReceivers, 'created');
+        // Use ENS-resolved transaction message
+        const message = await GroupCreationUtils.createTransactionMessageWithENS(
+          result.resolvedReceivers, 
+          'created',
+          context.ensResolver
+        );
         await this.sendResponse(context, message);
       }
     } else {
@@ -907,7 +913,7 @@ If no parameters are mentioned, return: {}`
       
       for (const group of currentNetworkGroups) {
         const balance = await this.getGroupBalance(group, context.creatorAddress);
-        const groupDisplay = GroupCreationUtils.formatGroupDisplay(group, userState, {
+        const groupDisplay = await GroupCreationUtils.formatGroupDisplayWithENS(group, userState, context.ensResolver, {
           showClaimable: true,
           claimableAmount: balance,
           includeEmoji: false // Use bullet points for list format
@@ -1260,6 +1266,59 @@ Answer only "yes" or "no".`
    * Clear pending transactions from other flows when starting management operations
    * Only clears coin_creation transactions since management handles group_creation
    */
+  private async handleInvitedUserWelcome(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    // Generate welcome message with group and coin information
+    const groupCount = userState.groups.length;
+    const coinCount = userState.coins.length;
+    
+    let welcomeMessage = `hey! 👋 someone added you to a flaunchy group and you now have access to ${groupCount} group${groupCount !== 1 ? 's' : ''}`;
+    
+    if (coinCount > 0) {
+      welcomeMessage += ` with ${coinCount} coin${coinCount !== 1 ? 's' : ''}`;
+    }
+    
+    welcomeMessage += `!\n\n`;
+    
+    // List groups with ENS-resolved names
+    if (groupCount > 0) {
+      welcomeMessage += `your groups:\n`;
+      for (const group of userState.groups) {
+        const receiverNames = await Promise.all(
+          group.receivers.map(async (r) => 
+            await GroupCreationUtils.formatAddress(r.resolvedAddress, context.ensResolver)
+          )
+        );
+        welcomeMessage += `• ${group.name} (${receiverNames.join(', ')})\n`;
+      }
+      welcomeMessage += `\n`;
+    }
+    
+    // List coins if any
+    if (coinCount > 0) {
+      welcomeMessage += `your coins:\n`;
+      for (const coin of userState.coins) {
+        welcomeMessage += `• ${coin.name} (${coin.ticker})\n`;
+      }
+      welcomeMessage += `\n`;
+    }
+    
+    welcomeMessage += `you can now:\n`;
+    welcomeMessage += `• launch new coins for your groups\n`;
+    welcomeMessage += `• check your fee earnings\n`;
+    welcomeMessage += `• create new groups\n`;
+    welcomeMessage += `• ask me anything about your groups or coins\n\n`;
+    welcomeMessage += `what would you like to do?`;
+    
+    // Update user status to active (they've been welcomed)
+    await context.sessionManager.updateUserState(userState.userId, {
+      status: 'active'
+    });
+    
+    await this.sendResponse(context, welcomeMessage);
+  }
+
   private async clearCrossFlowTransactions(context: FlowContext): Promise<void> {
     const { userState } = context;
     

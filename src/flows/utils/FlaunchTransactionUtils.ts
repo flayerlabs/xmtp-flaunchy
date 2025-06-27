@@ -48,6 +48,9 @@ export interface FlaunchTransactionParams {
   processImageAttachment?: (attachment: any) => Promise<string>;
   hasAttachment?: boolean;
   attachment?: any;
+  
+  // ENS resolver for address formatting
+  ensResolver?: any;
 }
 
 export interface WalletSendCalls {
@@ -289,7 +292,9 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
         data: functionData,
         value: `0x${BigInt(transactionValue).toString(16)}`,
         metadata: {
-          description: `Launch $${ticker} into ${treasuryManagerAddress.slice(0, 6)}...${treasuryManagerAddress.slice(-4)}`,
+          description: params.ensResolver 
+            ? `Launch $${ticker} into ${await params.ensResolver.resolveSingleAddress(treasuryManagerAddress)}`
+            : `Launch $${ticker} into ${treasuryManagerAddress.slice(0, 6)}...${treasuryManagerAddress.slice(-4)}`,
         },
       },
     ],

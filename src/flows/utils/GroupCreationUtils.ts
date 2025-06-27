@@ -115,17 +115,39 @@ export class GroupCreationUtils {
     chainConfig: ChainConfig,
     description?: string
   ): Promise<any> {
+    console.log('🏗️  GROUP DEPLOYMENT CALL CREATION STARTED', {
+      receiverCount: resolvedReceivers.length,
+      creatorAddress,
+      chainConfig: chainConfig.displayName,
+      description
+    });
+
+    // ENHANCED VALIDATION: Check for inbox IDs that shouldn't be here
+    const invalidReceivers = resolvedReceivers.filter(r => 
+      !r.resolvedAddress || 
+      !r.resolvedAddress.startsWith('0x') || 
+      r.resolvedAddress.length !== 42
+    );
+    
+    if (invalidReceivers.length > 0) {
+      console.error('❌ INVALID RECEIVERS DETECTED:', invalidReceivers);
+      throw new Error(`Invalid receiver addresses detected: ${invalidReceivers.map(r => `${r.username}: ${r.resolvedAddress}`).join(', ')}`);
+    }
+
     // Deduplicate receivers first - combine shares for duplicate addresses
     const addressShareMap = new Map<Address, bigint>();
     const TOTAL_SHARE = 10000000n; // 100.00000% in contract format
     let totalAllocated = 0n;
     const receivers = Array.from(new Set(resolvedReceivers.map(r => r.resolvedAddress!.toLowerCase()))); // Deduplicated addresses
     
-    console.log('Receivers before deduplication', {
+    console.log('📊 RECEIVER VALIDATION AND DEDUPLICATION', {
+      originalCount: resolvedReceivers.length,
+      uniqueAddressCount: receivers.length,
       receivers: resolvedReceivers.map(r => ({
         username: r.username,
         resolvedAddress: r.resolvedAddress,
-        percentage: r.percentage
+        percentage: r.percentage,
+        isValidAddress: r.resolvedAddress?.startsWith('0x') && r.resolvedAddress?.length === 42
       }))
     });
 
@@ -167,7 +189,9 @@ export class GroupCreationUtils {
       totalAllocated += share;
     }
 
-    console.log('Receivers after deduplication', {
+    console.log('📈 SHARE CALCULATION COMPLETE', {
+      totalAllocated: totalAllocated.toString(),
+      expectedTotal: TOTAL_SHARE.toString(),
       uniqueReceivers: Array.from(addressShareMap.entries()).map(([addr, share]) => ({
         address: addr,
         share: share.toString(),
@@ -234,7 +258,7 @@ export class GroupCreationUtils {
     const treasuryManagerFactory = TreasuryManagerFactoryAddress[chainConfig.id];
     const addressFeeSplitManagerImplementation = AddressFeeSplitManagerAddress[chainConfig.id];
     
-    console.log('Contract address lookup', {
+    console.log('🔗 CONTRACT ADDRESS LOOKUP', {
       chainId: chainConfig.id,
       chainName: chainConfig.name,
       chainDisplayName: chainConfig.displayName,
@@ -263,8 +287,7 @@ export class GroupCreationUtils {
     const finalDescription = description || `Create Group for ${receiverList}`;
     const chainDescription = chainConfig.isTestnet ? ` (${chainConfig.displayName})` : '';
 
-    // Return wallet send calls in the correct format
-    return {
+    const walletSendCalls = {
       version: '1.0',
       from: creatorAddress,
       chainId: chainConfig.hexId,
@@ -280,6 +303,17 @@ export class GroupCreationUtils {
         }
       ]
     };
+
+    console.log('🎯 GROUP DEPLOYMENT TRANSACTION CREATED', {
+      success: true,
+      receiverCount: resolvedReceivers.length,
+      uniqueAddresses: addressShareMap.size,
+      totalShare: finalTotal.toString(),
+      description: finalDescription
+    });
+
+    // Return wallet send calls in the correct format
+    return walletSendCalls;
   }
 
   /**
@@ -484,29 +518,52 @@ export class GroupCreationUtils {
       'System', 'Protocol', 'Algorithm', 'Framework', 'Structure', 'Grid'
     ];
 
-    // Get a pseudo-random selection based on receiver addresses
-    // This ensures the same receivers always get the same name
+    // Create a hash from receiver addresses AND current timestamp for uniqueness
     const addressString = receivers
       .map(r => r.resolvedAddress?.toLowerCase() || '')
-      .sort() // Sort to ensure consistent ordering
+      .sort() // Sort to ensure consistent ordering for same receivers
       .join('');
     
-    // Create a simple hash from the address string
+    // Add timestamp entropy to ensure uniqueness even with same receivers
+    const timestamp = Date.now().toString();
+    const entropyString = addressString + timestamp + Math.random().toString();
+    
+    // Improved hash function with better distribution
     let hash = 0;
-    for (let i = 0; i < addressString.length; i++) {
-      const char = addressString.charCodeAt(i);
+    for (let i = 0; i < entropyString.length; i++) {
+      const char = entropyString.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash; // Convert to 32-bit integer
     }
     
-    // Use the hash to select adjective and noun
+    // Additional hash mixing to improve distribution
+    hash = hash ^ (hash >>> 16);
+    hash = hash * 0x85ebca6b;
+    hash = hash ^ (hash >>> 13);
+    hash = hash * 0xc2b2ae35;
+    hash = hash ^ (hash >>> 16);
+    
+    // Use the improved hash to select adjective and noun
     const adjIndex = Math.abs(hash) % adjectives.length;
     const nounIndex = Math.abs(hash >> 8) % nouns.length;
     
-    // Add a number suffix for extra uniqueness
+    // Add a number suffix for extra uniqueness (0-999)
     const suffix = Math.abs(hash >> 16) % 1000;
     
-    return `${adjectives[adjIndex]} ${nouns[nounIndex]} ${suffix}`;
+    const generatedName = `${adjectives[adjIndex]} ${nouns[nounIndex]} ${suffix}`;
+    
+    console.log('🎯 Group name generation:', {
+      receiverCount: receivers.length,
+      addressString: addressString.substring(0, 50) + '...',
+      timestamp,
+      hash,
+      adjIndex,
+      nounIndex,
+      suffix,
+      generatedName
+    });
+    
+    return generatedName;
   }
 
   /**
@@ -558,7 +615,7 @@ export class GroupCreationUtils {
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `Write a short, badass announcement for a newly created trading group. The group is called "${groupName}" and has ${memberCount} members: ${memberList}.
+          content: `Write a short, badass announcement for a newly created trading group. The group is called ${groupName} and has ${memberCount} members: ${memberList}.
 
 Make it feel like something important and powerful just got created. Keep it:
 - Short (1 sentence max)
@@ -568,13 +625,13 @@ Make it feel like something important and powerful just got created. Keep it:
 - About the group being ready to trade/make moves
 
 Examples of tone:
-- "${groupName} is live and ready to dominate! 🚀"
-- "${groupName} has entered the game ⚡"
-- "Welcome to ${groupName} - let's make some moves 💎"
+- "${groupName}" just got locked in onchain and is ready to dominate!
+- Your Group "${groupName}" has entered the game
+- Welcome to "${groupName}" - let's make some moves
 
 Don't use the exact examples - create something original that fits the group name and vibe.${coinPromptText ? `
 
-IMPORTANT: After the celebration, add this exact text: "${coinPromptText.trim()}"` : ""}`
+IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}` : ""}`
         }],
         temperature: 0.7,
         max_tokens: 80
@@ -656,5 +713,194 @@ IMPORTANT: After the celebration, add this exact text: "${coinPromptText.trim()}
     }
     
     return display;
+  }
+
+  /**
+   * Generate a standardized group display format with ENS resolution
+   */
+  static async formatGroupDisplayWithENS(
+    group: any, 
+    userState: any, 
+    ensResolver: any,
+    options: {
+      showClaimable?: boolean;
+      claimableAmount?: number;
+      includeEmoji?: boolean;
+    } = {}
+  ): Promise<string> {
+    const { showClaimable = false, claimableAmount = 0, includeEmoji = true } = options;
+    
+    // Format group header with full address
+    const emoji = includeEmoji ? '📁 ' : '• ';
+    let display = `${emoji}"${group.name}" (${group.id})\n`;
+    
+    // Format coins
+    const groupCoins = userState.coins?.filter((coin: any) => 
+      coin.groupId?.toLowerCase() === group.id.toLowerCase() && coin.launched
+    ) || [];
+    
+    const coinTickers = groupCoins.map((coin: any) => coin.ticker);
+    const coinsDisplay = coinTickers.length > 0 ? coinTickers.join(', ') : 'none yet';
+    display += `- coins: ${coinsDisplay}\n`;
+    
+    // Format fee receivers with ENS resolution
+    if (group.receivers && group.receivers.length > 0) {
+      try {
+        // Collect addresses for ENS resolution
+        const addresses = group.receivers
+          .map((receiver: any) => receiver.resolvedAddress)
+          .filter((addr: string) => addr && addr.startsWith('0x') && addr.length === 42);
+        
+        // Resolve all addresses at once
+        const addressMap = await this.formatAddresses(addresses, ensResolver);
+        
+        const receiverDisplays = group.receivers.map((receiver: any) => {
+          let displayName = receiver.username;
+          
+          // If username is an address or not available, use ENS resolution
+          if (!displayName || (displayName.startsWith('0x') && displayName.length === 42)) {
+            const address = receiver.resolvedAddress || receiver.username;
+            if (address && address.startsWith('0x') && address.length === 42) {
+              displayName = addressMap.get(address.toLowerCase()) || `${address.slice(0, 6)}...${address.slice(-4)}`;
+            } else {
+              displayName = address || 'unknown';
+            }
+          }
+          
+          // Add percentage if available
+          const percentage = receiver.percentage ? ` (${receiver.percentage.toFixed(1)}%)` : '';
+          return `${displayName}${percentage}`;
+        });
+        
+        display += `- fee receivers: ${receiverDisplays.join(', ')}\n`;
+      } catch (error) {
+        console.error('Failed to resolve ENS for group display:', error);
+        // Fallback to original formatting
+        const receiverDisplays = group.receivers.map((receiver: any) => {
+          const address = receiver.resolvedAddress || receiver.username;
+          const displayName = address && address.startsWith('0x') && address.length === 42
+            ? `${address.slice(0, 6)}...${address.slice(-4)}`
+            : (receiver.username || 'unknown');
+          const percentage = receiver.percentage ? ` (${receiver.percentage.toFixed(1)}%)` : '';
+          return `${displayName}${percentage}`;
+        });
+        display += `- fee receivers: ${receiverDisplays.join(', ')}\n`;
+      }
+    }
+    
+    // Add claimable amount if requested
+    if (showClaimable) {
+      display += `- claimable: ${claimableAmount.toFixed(6)} ETH\n`;
+    }
+    
+    return display;
+  }
+
+  /**
+   * Format a single address with ENS resolution fallback
+   */
+  static async formatAddress(address: string, ensResolver: any): Promise<string> {
+    try {
+      return await ensResolver.resolveSingleAddress(address);
+    } catch (error) {
+      console.error('Failed to resolve address:', address, error);
+      return `${address.slice(0, 6)}...${address.slice(-4)}`;
+    }
+  }
+
+  /**
+   * Format multiple addresses with ENS resolution fallback
+   */
+  static async formatAddresses(addresses: string[], ensResolver: any): Promise<Map<string, string>> {
+    try {
+      return await ensResolver.resolveAddresses(addresses);
+    } catch (error) {
+      console.error('Failed to resolve addresses:', addresses, error);
+      const fallbackMap = new Map<string, string>();
+      for (const address of addresses) {
+        fallbackMap.set(address.toLowerCase(), `${address.slice(0, 6)}...${address.slice(-4)}`);
+      }
+      return fallbackMap;
+    }
+  }
+
+  /**
+   * Format receiver display names with ENS resolution
+   */
+  static async formatReceiversWithENS(
+    receivers: FeeReceiver[], 
+    ensResolver: any
+  ): Promise<string[]> {
+    try {
+      // Collect all addresses that need resolution
+      const addressesToResolve = receivers
+        .filter(r => r.resolvedAddress)
+        .map(r => r.resolvedAddress!);
+
+      // Resolve all addresses at once
+      const addressMap = await this.formatAddresses(addressesToResolve, ensResolver);
+
+      // Format each receiver
+      return receivers.map(r => {
+        if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+          // Username is already resolved (e.g., @javery)
+          return r.username.startsWith('@') ? r.username : `@${r.username}`;
+        } else if (r.resolvedAddress) {
+          // Use ENS-resolved display name
+          return addressMap.get(r.resolvedAddress.toLowerCase()) || `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+        } else {
+          return r.username || 'Unknown';
+        }
+      });
+    } catch (error) {
+      console.error('Failed to format receivers with ENS:', error);
+      // Fallback to original logic
+      return receivers.map(r => {
+        if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
+          return r.username.startsWith('@') ? r.username : `@${r.username}`;
+        } else if (r.resolvedAddress) {
+          return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
+        } else {
+          return r.username || 'Unknown';
+        }
+      });
+    }
+  }
+
+  /**
+   * Create transaction message with ENS-resolved names
+   */
+  static async createTransactionMessageWithENS(
+    receivers: FeeReceiver[], 
+    action: string,
+    ensResolver: any
+  ): Promise<string> {
+    const displayNames = await this.formatReceiversWithENS(receivers, ensResolver);
+    const membersList = displayNames.slice(0, 3).join(', ');
+    const moreCount = displayNames.length > 3 ? ` and ${displayNames.length - 3} more` : '';
+    
+    // Create natural, excited messages based on the action
+    if (action === 'creating') {
+      return `creating group with ${receivers.length} members: ${membersList}${moreCount}. sign to create!`;
+    } else if (action === 'updated') {
+      return `updated group with ${receivers.length} members: ${membersList}${moreCount}. sign to create!`;
+    } else {
+      // For 'created' and other actions, generate an excited confirmation
+      const memberCount = receivers.length;
+      const allMembersList = `${membersList}${moreCount}`;
+      
+      // Generate excited messages similar to group introductions
+      const excitedMessages = [
+        `ready to create a group for ${memberCount} members: ${allMembersList}! let's make some moves`,
+        `${memberCount}-member group is ready to deploy: ${allMembersList}! ready to dominate`,
+        `transaction ready for ${allMembersList}! time to trade`,
+        `${memberCount} members strong: ${allMembersList}! group is ready to deploy`,
+        `sign to create a group for ${memberCount} members: ${allMembersList}! let's get this bread`
+      ];
+      
+      // Pick a random excited message
+      const randomIndex = Math.floor(Math.random() * excitedMessages.length);
+      return excitedMessages[randomIndex];
+    }
   }
 } 

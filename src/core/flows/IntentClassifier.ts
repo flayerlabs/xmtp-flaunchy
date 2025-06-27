@@ -108,11 +108,13 @@ INTENT OPTIONS:
    GROUP CREATION: If user mentions "group" + "everyone", this is group creation with "add everyone" functionality
    CRITICAL: If user has existing groups (Groups > 0), group creation is MANAGEMENT, not onboarding
    
-2. coin_launch - User wants to launch a coin into an existing group  
-   Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group"
+2. coin_launch - User wants to launch a TOKEN/COIN into an existing group  
+   Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group", "flaunch a token", "launch a token into group", "I want to launch a token into [group name]"
+   CRITICAL TOKEN INDICATORS: "token", "coin", ticker symbols in parentheses like "(MCN)", "(DOGE)", specific coin names
    COIN SPECIFICATIONS: Token specifications with parameters: "Banana (BNAA) with $100 market cap and 0.77% premine", "MyCoin (MCN) $5000 market cap", "DOGE token with 10% prebuy", "create Token (TOK) with $1000 starting cap"
    IMAGE ONLY: If user uploads an image attachment with minimal/no text, this is coin launch information
    LAUNCH PARAMETERS: Messages containing market cap, premine/prebuy percentages, launch parameters
+   CRITICAL: "launch a token" = coin_launch, "launch a group" = group creation
    
 3. group_launch - User wants to create ADDITIONAL groups (when they already have groups)
    Examples: "start a new group", "create a group for everyone", "let's create another group", "launch a group", "launch a group and add everyone"
@@ -180,6 +182,18 @@ ACTIONS (requesting execution) → onboarding/group_launch/management/coin_launc
 - User with groups + "Banana (BNAA) with $100 market cap and 0.77% premine" = coin_launch (coin specification with parameters)
 - User with groups + "MyCoin (MCN) $5000 market cap" = coin_launch (coin specification with market cap)
 - User with groups + "DOGE token with 10% prebuy" = coin_launch (coin specification with prebuy)
+- User with groups + "I would like to flaunch a token into [group name]" = coin_launch (explicit token launch request)
+- User with groups + "launch a token into my group" = coin_launch (token launch, NOT group creation)
+- User with groups + "create a token" = coin_launch (token creation)
+- User with groups + "launch a coin" = coin_launch (coin launch)
+- User with groups + "flaunch a token" = coin_launch (token launch with "flaunch" terminology)
+
+CRITICAL DISTINCTION - TOKEN vs GROUP:
+- "launch a TOKEN" = coin_launch (creating/launching a cryptocurrency token)
+- "launch a GROUP" = group_launch (creating a new fee-splitting group)
+- "flaunch a token" = coin_launch (platform-specific term for token launch)
+- "create a coin" = coin_launch (cryptocurrency creation)
+- "create a group" = group_launch (fee group creation)
 
 Respond ONLY with this JSON format:
 {

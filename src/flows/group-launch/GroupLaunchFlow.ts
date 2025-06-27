@@ -97,8 +97,12 @@ export class GroupLaunchFlow extends BaseFlow {
       if (validateWalletSendCalls(result.walletSendCalls)) {
         await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
         
-        // Use shared utility for transaction message
-        const message = GroupCreationUtils.createTransactionMessage(result.resolvedReceivers, 'created');
+        // Use ENS-resolved transaction message
+        const message = await GroupCreationUtils.createTransactionMessageWithENS(
+          result.resolvedReceivers, 
+          'created',
+          context.ensResolver
+        );
         await this.sendResponse(context, message);
       }
     } else {
@@ -109,6 +113,7 @@ export class GroupLaunchFlow extends BaseFlow {
 
   /**
    * Detect if user wants to add everyone from the group chat
+   * ENHANCED: More comprehensive detection patterns
    */
   private async detectAddEveryone(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;
@@ -126,7 +131,13 @@ export class GroupLaunchFlow extends BaseFlow {
           - "all members"
           - "include everyone"
           - "everyone in the chat"
+          - "everyone in this chat"
           - "add everyone"
+          - "create a group for everyone"
+          - "let's create a group for everyone"
+          - "group for everyone"
+          - "all of us"
+          - "all people in this chat"
           
           Answer only "yes" or "no".`
         }],
@@ -162,9 +173,15 @@ export class GroupLaunchFlow extends BaseFlow {
 
   /**
    * Add everyone from the current group chat as fee receivers
+   * ENHANCED: Better one-shot handling with clear messaging
    */
   private async addEveryoneFromChat(context: FlowContext, additionalReceivers: string[] = []): Promise<void> {
     try {
+      this.log('Adding everyone from chat to group', {
+        userId: context.userState.userId,
+        additionalReceivers: additionalReceivers.length
+      });
+
       // Get conversation members
       const members = await context.conversation.members();
       const feeReceivers = [];
@@ -207,6 +224,13 @@ export class GroupLaunchFlow extends BaseFlow {
         return;
       }
 
+      this.log('Creating group with all members', {
+        userId: context.userState.userId,
+        totalReceivers: allReceivers.length,
+        chatMembers: feeReceivers.length,
+        additionalMembers: resolvedAdditionalReceivers.length
+      });
+
       // Create group
       const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
         allReceivers,
@@ -236,16 +260,14 @@ export class GroupLaunchFlow extends BaseFlow {
       if (validateWalletSendCalls(walletSendCalls)) {
         await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
         
-        // Create display names for confirmation
-        const displayNames = allReceivers.map(r => {
-          if (r.username && r.username !== r.resolvedAddress && !r.username.startsWith('0x')) {
-            return r.username.startsWith('@') ? r.username : `@${r.username}`;
-          } else {
-            return `${r.resolvedAddress.slice(0, 6)}...${r.resolvedAddress.slice(-4)}`;
-          }
-        }).join(', ');
+        // ENHANCED: Use ENS resolution for confirmation message
+        const confirmationMessage = await GroupCreationUtils.createTransactionMessageWithENS(
+          allReceivers,
+          'creating',
+          context.ensResolver
+        );
         
-        await this.sendResponse(context, `creating group with ${allReceivers.length} members: ${displayNames}. sign to create!`);
+        await this.sendResponse(context, confirmationMessage);
       }
 
     } catch (error) {

@@ -72,18 +72,39 @@ export class FlowRouter {
     }
     
     // =============================================================================
-    // PRIORITY 2: QUESTIONS & INQUIRIES (ALWAYS OVERRIDE PROGRESS)
-    // Users should always be able to ask questions regardless of their current flow
+    // PRIORITY 2: INVITED USER WELCOME
+    // Users who were added to groups by others get a welcome message first
     // =============================================================================
-    console.log(`[FlowRouter] ❓ PRIORITY 2: Checking for questions and inquiries`);
+    if (userState.status === 'invited') {
+      console.log(`[FlowRouter] 👋 PRIORITY 2: Invited user needs welcome → management`);
+      return 'management';
+    }
+
+    // =============================================================================
+    // PRIORITY 3: IMMEDIATE ACTION ROUTING (HIGH-CONFIDENCE ACTIONS)
+    // =============================================================================
+    console.log(`[FlowRouter] 🎯 PRIORITY 3: Checking for immediate actions`);
     
+    // ENHANCED: Check for "create group for everyone" patterns that should be one-shot
+    const isGroupForEveryone = await this.detectGroupForEveryone(context, messageText);
+    if (isGroupForEveryone) {
+      console.log(`[FlowRouter] ✅ P3 RESULT: Group for everyone detected → routing to appropriate flow`);
+      // Route to group_launch for users with groups, onboarding for new users
+      if (userState.groups.length > 0) {
+        return 'group_launch';
+      } else {
+        return 'onboarding';
+      }
+    }
+
+    // Check for immediate high-confidence questions that should bypass other priorities
     const questionType = await this.detectQuestionType(context, messageText);
     if (questionType && intentResult.confidence > 0.7) {
       const targetFlow = questionType === 'informational' ? 'management' : 'qa';
-      console.log(`[FlowRouter] ✅ P2 RESULT: ${questionType} question detected → ${targetFlow}`);
+      console.log(`[FlowRouter] ✅ P3 RESULT: ${questionType} question detected → ${targetFlow}`);
       return targetFlow;
     } else {
-      console.log(`[FlowRouter] ⏭️ P2 SKIP: Not a high-confidence question (questionType=${questionType}, confidence=${intentResult.confidence.toFixed(2)})`);
+      console.log(`[FlowRouter] ⏭️ P3 SKIP: Not a high-confidence question (questionType=${questionType}, confidence=${intentResult.confidence.toFixed(2)})`);
     }
     
     // SPECIAL CASE: Management intent with high confidence should override onboarding
@@ -94,56 +115,63 @@ export class FlowRouter {
     }
     
     // =============================================================================
-    // PRIORITY 3: ONBOARDING (ONLY FOR NEW/INCOMPLETE USERS)
+    // PRIORITY 4: ONBOARDING (ONLY FOR NEW/INCOMPLETE USERS)
     // New users or users with incomplete onboarding must complete it first
     // =============================================================================
     if (this.shouldStayInOnboarding(userState)) {
-      console.log(`[FlowRouter] 🎓 PRIORITY 3: User needs onboarding`);
+      console.log(`[FlowRouter] 🎓 PRIORITY 4: User needs onboarding`);
+      
+      // SPECIAL CASE: If user has groups and intent is coin_launch, route to coin_launch
+      // This completes the onboarding flow (they need both groups AND coins)
+      if (userState.groups.length > 0 && intentResult.intent === 'coin_launch' && intentResult.confidence >= 0.8) {
+        console.log(`[FlowRouter] ✅ P4 SPECIAL: User has groups + coin launch intent → coin_launch (completing onboarding)`);
+        return 'coin_launch';
+      }
       
       // Check if this is an onboarding-related interaction
       const isOnboardingRelated = await this.isOnboardingRelatedInteraction(context, messageText);
       if (isOnboardingRelated) {
-        console.log(`[FlowRouter] ✅ P3 RESULT: Onboarding-related interaction → onboarding`);
+        console.log(`[FlowRouter] ✅ P4 RESULT: Onboarding-related interaction → onboarding`);
         return 'onboarding';
       } else {
         // Users who need onboarding should ALWAYS go to onboarding
         // The onboarding flow can handle any type of message and guide them appropriately
-        console.log(`[FlowRouter] ✅ P3 RESULT: User needs onboarding → onboarding`);
+        console.log(`[FlowRouter] ✅ P4 RESULT: User needs onboarding → onboarding`);
         return 'onboarding';
       }
     } else {
-      console.log(`[FlowRouter] ⏭️ P3 SKIP: User doesn't need onboarding (status=${userState.status}, hasProgress=${!!userState.onboardingProgress})`);
+      console.log(`[FlowRouter] ⏭️ P4 SKIP: User doesn't need onboarding (status=${userState.status}, hasProgress=${!!userState.onboardingProgress})`);
     }
     
     // =============================================================================
-    // PRIORITY 4: ACTIVE FLOW CONTINUATION
+    // PRIORITY 5: ACTIVE FLOW CONTINUATION
     // If user has active progress, check if they want to continue or start fresh
     // =============================================================================
     const activeFlow = this.getActiveFlow(userState);
     if (activeFlow) {
-      console.log(`[FlowRouter] 🔄 PRIORITY 4: User has active ${activeFlow} progress`);
+      console.log(`[FlowRouter] 🔄 PRIORITY 5: User has active ${activeFlow} progress`);
       
       const shouldContinue = await this.shouldContinueActiveFlow(context, activeFlow);
       if (shouldContinue) {
-        console.log(`[FlowRouter] ✅ P4 RESULT: Continuing active flow → ${activeFlow}`);
+        console.log(`[FlowRouter] ✅ P5 RESULT: Continuing active flow → ${activeFlow}`);
         return activeFlow;
       } else {
         // User wants to do something different - clear the active progress
-        console.log(`[FlowRouter] 🧹 P4 CLEAR: User wants to do something different, clearing ${activeFlow} progress`);
+        console.log(`[FlowRouter] 🧹 P5 CLEAR: User wants to do something different, clearing ${activeFlow} progress`);
         await this.clearActiveFlowProgress(context, activeFlow);
-        console.log(`[FlowRouter] ⏭️ P4 CONTINUE: Proceeding to fresh intent routing`);
+        console.log(`[FlowRouter] ⏭️ P5 CONTINUE: Proceeding to fresh intent routing`);
       }
     } else {
-      console.log(`[FlowRouter] ⏭️ P4 SKIP: No active flow progress`);
+      console.log(`[FlowRouter] ⏭️ P5 SKIP: No active flow progress`);
     }
     
     // =============================================================================
-    // PRIORITY 5: FRESH INTENT ROUTING
+    // PRIORITY 6: FRESH INTENT ROUTING
     // Route based on classified intent for users with no active progress
     // =============================================================================
-    console.log(`[FlowRouter] 🎯 PRIORITY 5: Fresh intent routing`);
+    console.log(`[FlowRouter] 🎯 PRIORITY 6: Fresh intent routing`);
     const targetFlow = this.intentToFlowType(intentResult.intent, userState);
-    console.log(`[FlowRouter] ✅ P5 RESULT: Intent-based routing → ${targetFlow}`);
+    console.log(`[FlowRouter] ✅ P6 RESULT: Intent-based routing → ${targetFlow}`);
     
     return targetFlow;
   }
@@ -178,13 +206,24 @@ export class FlowRouter {
   }
 
   private shouldStayInOnboarding(userState: UserState): boolean {
+    // If user is marked as active, they've completed onboarding - don't route to onboarding
+    if (userState.status === 'active') {
+      return false;
+    }
+    
+    // Invited users get a special welcome message, but don't need full onboarding
+    // They already have groups/coins from being added to groups
+    if (userState.status === 'invited') {
+      return false;
+    }
+    
     // User needs onboarding if they don't have both groups AND coins
     const hasGroupsAndCoins = userState.groups.length > 0 && userState.coins.length > 0;
     
     // Stay in onboarding if:
-    // 1. User is marked as new/onboarding, OR
-    // 2. User doesn't have both groups and coins (regardless of status)
-    return (userState.status === 'new' || userState.status === 'onboarding') || 
+    // 1. User is marked as new/onboarding AND
+    // 2. User doesn't have both groups and coins
+    return (userState.status === 'new' || userState.status === 'onboarding') && 
            !hasGroupsAndCoins;
   }
 
@@ -512,6 +551,35 @@ export class FlowRouter {
       Return ONLY:
       "yes" - if continuing the coin launch
       "no" - if asking about something different
+    `;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 10
+    });
+
+    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
+  }
+
+  private async detectGroupForEveryone(context: FlowContext, messageText: string): Promise<boolean> {
+    const { openai } = context;
+    
+    const prompt = `
+      User said: "${messageText}"
+      
+      Is this message indicating a group for everyone?
+      
+      GROUP FOR EVERYONE (return "yes"):
+      - "create a group for everyone"
+      - "add everyone"
+      - "let's create a group for everyone"
+      - "awesome let's create a group for everyone"
+      
+      Return ONLY:
+      "yes" - if this is a group for everyone
+      "no" - if this is not a group for everyone
     `;
 
     const response = await openai.chat.completions.create({
