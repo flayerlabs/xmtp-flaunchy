@@ -11,46 +11,27 @@ export abstract class BaseFlow {
   abstract processMessage(context: FlowContext): Promise<void>;
 
   // Common utility methods that all flows can use
-  protected async sendResponse(context: FlowContext, message: string): Promise<void> {
+  protected async sendResponse(
+    context: FlowContext,
+    message: string
+  ): Promise<void> {
     // Log the outgoing agent reply
-    this.log('🤖 AGENT REPLY', {
-      userId: context.userState?.userId || 'unknown',
+    this.log("🤖 AGENT REPLY", {
+      userId: context.userState?.userId || "unknown",
       message: message,
       timestamp: new Date().toISOString(),
-      messageLength: message.length
+      messageLength: message.length,
     });
-    
+
     await context.conversation.send(message);
   }
 
   protected extractMessageText(context: FlowContext): string {
-    if (typeof context.message.content === 'string') {
-      return context.message.content.trim();
-    }
-    
-    // Handle attachment messages with JSON URLs containing text
-    if (context.hasAttachment && context.attachment) {
-      try {
-        const attachment = context.attachment;
-        
-        // Check if the attachment URL is a JSON string containing text
-        if (typeof attachment.url === 'string' && attachment.url.startsWith('{') && attachment.url.endsWith('}')) {
-          const parsed = JSON.parse(attachment.url);
-          if (parsed.text && typeof parsed.text === 'string') {
-            this.log('Extracted text from JSON attachment URL', { 
-              extractedText: parsed.text,
-              originalUrl: attachment.url.substring(0, 100) + '...'
-            });
-            return parsed.text.trim();
-          }
-        }
-      } catch (error) {
-        this.logError('Failed to extract text from JSON attachment URL', error);
-      }
-    }
-    
-    // Handle other content types if needed
-    return '';
+    // The EnhancedMessageCoordinator already handles message text extraction properly
+    // and provides it in the FlowContext.messageText field, which includes:
+    // - Direct text content for text messages
+    // - Text from related messages when the primary message is an attachment
+    return context.messageText;
   }
 
   protected hasAttachment(context: FlowContext): boolean {
@@ -58,19 +39,19 @@ export abstract class BaseFlow {
   }
 
   protected log(message: string, data?: any): void {
-    console.log(`[${this.name}] ${message}`, data || '');
+    console.log(`[${this.name}] ${message}`, data || "");
   }
 
   protected logError(message: string, error?: any): void {
-    console.error(`[${this.name}] ${message}`, error || '');
+    console.error(`[${this.name}] ${message}`, error || "");
   }
 
   // Helper for parsing common input patterns
   protected parseCommaSeparatedList(input: string): string[] {
     return input
-      .split(',')
-      .map(item => item.trim())
-      .filter(item => item.length > 0);
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
   }
 
   // Helper for validating Ethereum addresses
@@ -87,4 +68,4 @@ export abstract class BaseFlow {
     }
     return null;
   }
-} 
+}
