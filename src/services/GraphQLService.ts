@@ -35,9 +35,9 @@ export class GraphQLService {
   private apiUrl: string;
 
   constructor() {
-    this.apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || '';
+    this.apiUrl = process.env.PUBLIC_API_URL || process.env.API_URL || '';
     if (!this.apiUrl) {
-      throw new Error('API_URL or NEXT_PUBLIC_API_URL environment variable is required');
+      throw new Error('API_URL orPUBLIC_API_URL environment variable is required');
     }
   }
 

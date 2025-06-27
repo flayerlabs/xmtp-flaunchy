@@ -41,6 +41,7 @@
     "However, users CAN modify pending group creation transactions before they're signed and deployed",
     "When a user asks to add receivers to a pending transaction, help them update it before deployment",
     "Only after a group transaction is signed and deployed does it become immutable",
+    "Coin launch defaults are: $1000 market cap, 10% of supply in fair launch, and 30 minute fair launch duration. Users can modify these paramters.",
     "New users start with group creation (specifying fee receivers), not coin details",
     "Active users with existing groups can launch additional coins into those groups",
     "Group creation requires fee receiver addresses/usernames, not coin details",

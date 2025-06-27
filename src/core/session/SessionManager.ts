@@ -68,6 +68,11 @@ export class SessionManager {
     return !state || state.status === 'new';
   }
 
+  async userExists(userId: string): Promise<boolean> {
+    const state = await this.stateStore.get(userId);
+    return !!state;
+  }
+
   async isOnboarding(userId: string): Promise<boolean> {
     const state = await this.stateStore.get(userId);
     return state?.status === 'onboarding';

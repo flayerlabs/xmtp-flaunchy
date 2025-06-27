@@ -1,6 +1,6 @@
 export interface UserState {
   userId: string;
-  status: 'new' | 'onboarding' | 'active';
+  status: 'new' | 'onboarding' | 'active' | 'invited';
   onboardingProgress?: OnboardingProgress;
   managementProgress?: ManagementProgress;
   coinLaunchProgress?: CoinLaunchProgress;

@@ -25,7 +25,7 @@ export class ENSResolverService {
   private apiUrl: string;
 
   constructor() {
-    this.apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || '';
+    this.apiUrl = process.env.PUBLIC_API_URL || process.env.API_URL || '';
     if (!this.apiUrl) {
       console.warn('⚠️ API_URL not configured, ENS resolution will use fallback addresses');
     }

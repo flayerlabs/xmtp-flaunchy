@@ -27,6 +27,7 @@ import { base, baseSepolia, mainnet } from "viem/chains";
 import { uploadImageToIPFS } from "../../../utils/ipfs";
 import { getDefaultChain } from "../../flows/utils/ChainSelection";
 import { GroupStorageService } from "../../services/GroupStorageService";
+import { ENSResolverService } from "../../services/ENSResolverService";
 
 // ABI for PoolCreated event
 const poolCreatedAbi = [
@@ -221,6 +222,7 @@ export class EnhancedMessageCoordinator {
   private readonly THREAD_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
   private groupStorageService: GroupStorageService;
+  private ensResolverService: ENSResolverService;
 
   constructor(
     private client: Client<any>,
@@ -233,6 +235,7 @@ export class EnhancedMessageCoordinator {
     this.messageQueue = new Map();
     this.waitTimeMs = waitTimeMs;
     this.groupStorageService = new GroupStorageService(this.sessionManager);
+    this.ensResolverService = new ENSResolverService();
   }
 
   async processMessage(message: DecodedMessage): Promise<boolean> {
@@ -413,8 +416,8 @@ export class EnhancedMessageCoordinator {
       ]);
       const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
 
-      // Get user state and clean up legacy data
-      let userState = await this.sessionManager.getUserState(senderInboxId);
+      // Get user state by Ethereum address (the actual on-chain identity)
+      let userState = await this.sessionManager.getUserState(creatorAddress);
 
       // Check if we should process this message
       const shouldProcess = await this.shouldProcessMessage(
@@ -528,6 +531,9 @@ export class EnhancedMessageCoordinator {
       // Session management
       sessionManager: this.sessionManager,
 
+      // Services
+      ensResolver: this.ensResolverService,
+
       // Message context
       messageText,
       hasAttachment,
@@ -543,7 +549,7 @@ export class EnhancedMessageCoordinator {
       },
 
       updateState: async (updates: Partial<UserState>) => {
-        await this.sessionManager.updateUserState(senderInboxId, updates);
+        await this.sessionManager.updateUserState(creatorAddress, updates);
       },
 
       // Utility functions
@@ -837,7 +843,14 @@ export class EnhancedMessageCoordinator {
   ): Promise<boolean> {
     try {
       const senderInboxId = message.senderInboxId;
-      const userState = await this.sessionManager.getUserState(senderInboxId);
+
+      // Get creator address for user state lookup
+      const inboxState = await this.client.preferences.inboxStateFromInboxIds([
+        senderInboxId,
+      ]);
+      const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
+
+      const userState = await this.sessionManager.getUserState(creatorAddress);
 
       // Check if user has a pending transaction
       if (!userState.pendingTransaction) {
@@ -908,7 +921,7 @@ export class EnhancedMessageCoordinator {
           await conversation.send(errorMessage);
 
           // Clear the pending transaction since we can't process it
-          await this.sessionManager.updateUserState(senderInboxId, {
+          await this.sessionManager.updateUserState(creatorAddress, {
             pendingTransaction: undefined,
             managementProgress: undefined, // Clear management progress on system error
           });
@@ -932,7 +945,7 @@ export class EnhancedMessageCoordinator {
           await conversation.send(errorMessage);
 
           // Clear the pending transaction since we can't process it
-          await this.sessionManager.updateUserState(senderInboxId, {
+          await this.sessionManager.updateUserState(creatorAddress, {
             pendingTransaction: undefined,
             managementProgress: undefined, // Clear management progress on system error
           });
@@ -953,59 +966,59 @@ export class EnhancedMessageCoordinator {
           const chainId = defaultChain.id;
           const chainName = defaultChain.name;
 
-          // Extract receiver data from transaction logs or fallback to stored data
+          // FIXED: Use stored receiver data instead of transaction logs for better accuracy
           let receivers: Array<{
             username: string;
             resolvedAddress: string;
             percentage: number;
           }> = [];
 
-          try {
-            // Try to extract receivers from transaction logs
-            receivers = await this.extractReceiversFromTransactionLogs(
-              receipt,
-              senderInboxId
-            );
-            console.log("✅ Using receivers from transaction logs:", receivers);
-          } catch (error) {
+          // Always use stored data for receiver information since it preserves original usernames
+          const storedReceivers =
+            currentProgress?.splitData?.receivers ||
+            userState.managementProgress?.groupCreationData?.receivers ||
+            [];
+
+          if (storedReceivers.length > 0) {
+            receivers = storedReceivers
+              .map((r) => ({
+                username: r.username,
+                resolvedAddress: r.resolvedAddress || "", // Don't fallback to inbox ID
+                percentage: r.percentage || 100 / storedReceivers.length,
+              }))
+              .filter(
+                (r) => r.resolvedAddress && r.resolvedAddress.startsWith("0x")
+              ); // Only include valid Ethereum addresses
+
             console.log(
-              "Failed to extract receivers from logs, using stored data:",
-              error
-            );
-
-            // Fallback to stored data (onboarding or management progress)
-            const storedReceivers =
-              currentProgress?.splitData?.receivers ||
-              userState.managementProgress?.groupCreationData?.receivers ||
-              [];
-
-            receivers = storedReceivers.map((r) => ({
-              username: r.username,
-              resolvedAddress: r.resolvedAddress || senderInboxId, // fallback to user's own address
-              percentage: r.percentage || 100 / (storedReceivers.length || 1),
-            }));
-            console.log("📋 Using stored receivers as fallback:", receivers);
-          }
-
-          // If no receivers found, default to the transaction sender
-          if (receivers.length === 0) {
-            receivers = [
-              {
-                username: senderInboxId,
-                resolvedAddress: senderInboxId,
-                percentage: 100,
-              },
-            ];
-            console.log(
-              "🔄 Using default receiver (transaction sender):",
+              "📋 Using stored receivers (filtered for valid addresses):",
               receivers
             );
           }
 
-          // Send confirmation message using CORRECT receiver data
+          // REMOVED: Fallback to transaction sender as this was causing the inbox ID issue
+          // If no valid receivers found, this is an error condition
+          if (receivers.length === 0) {
+            console.error(
+              "❌ CRITICAL: No valid fee receivers found for group creation"
+            );
+            await conversation.send(
+              "❌ Group Creation Error\n\nNo valid fee receivers were found for your group. This is a critical error.\n\nPlease try creating the group again with valid usernames or addresses."
+            );
+
+            // Clear the pending transaction since we can't process it
+            await this.sessionManager.updateUserState(creatorAddress, {
+              pendingTransaction: undefined,
+              managementProgress: undefined,
+            });
+
+            return false;
+          }
+
+          // Send confirmation message using ENS-resolved receiver data
           const receiverNames = await Promise.all(
             receivers.map(async (r) => {
-              // Format receiver display name with improved username resolution
+              // Format receiver display name with ENS resolution
               if (
                 r.username &&
                 r.username !== r.resolvedAddress &&
@@ -1016,33 +1029,22 @@ export class EnhancedMessageCoordinator {
                   ? r.username
                   : `@${r.username}`;
               } else {
-                // Try to resolve the address to a username
-                const resolvedUsername = await this.resolveUsername(
+                // Use ENS resolution for the address
+                return await this.ensResolverService.resolveSingleAddress(
                   r.resolvedAddress
                 );
-                if (
-                  resolvedUsername &&
-                  resolvedUsername !== r.resolvedAddress
-                ) {
-                  return resolvedUsername.startsWith("@")
-                    ? resolvedUsername
-                    : `@${resolvedUsername}`;
-                } else {
-                  // Fallback to shortened address
-                  return `${r.resolvedAddress.slice(
-                    0,
-                    6
-                  )}...${r.resolvedAddress.slice(-4)}`;
-                }
               }
             })
           );
+
+          // Creator address already resolved above
 
           // Store the group for all receivers using the GroupStorageService
           // This will handle generating the group name and storing it for all participants
           const groupName =
             await this.groupStorageService.storeGroupForAllReceivers(
               senderInboxId,
+              creatorAddress, // Pass the resolved creator address
               contractAddress,
               receivers.map((r) => ({
                 username: r.username,
@@ -1076,7 +1078,7 @@ export class EnhancedMessageCoordinator {
           // No need for separate messages
 
           // Update the creator's state (group was already added by GroupStorageService)
-          await this.sessionManager.updateUserState(senderInboxId, {
+          await this.sessionManager.updateUserState(creatorAddress, {
             pendingTransaction: undefined,
             managementProgress: undefined, // Clear management progress when group creation completes
             onboardingProgress: currentProgress
@@ -1123,50 +1125,44 @@ export class EnhancedMessageCoordinator {
           const chainId = defaultChain.id;
           const chainName = defaultChain.name;
 
-          const updatedState = await this.sessionManager.updateUserState(
-            senderInboxId,
-            {
-              pendingTransaction: undefined,
-              managementProgress: undefined, // Clear management progress when coin creation completes
-              ...(pendingTx.coinData && {
-                coins: [
-                  ...userState.coins,
-                  {
-                    ticker: pendingTx.coinData.ticker,
-                    name: pendingTx.coinData.name,
-                    image: pendingTx.coinData.image,
-                    groupId: groupAddress.toLowerCase(), // Normalize to lowercase for consistent matching
-                    contractAddress,
-                    launched: true,
-                    fairLaunchDuration: 30 * 60, // 30 minutes
-                    fairLaunchPercent: 10,
-                    initialMarketCap: 1000,
-                    chainId,
-                    chainName,
-                    createdAt: new Date(),
-                  },
-                ],
-                // Update the group's coins array to include the new coin ticker
-                groups: userState.groups.map((group) =>
-                  group.id.toLowerCase() === groupAddress.toLowerCase()
-                    ? {
-                        ...group,
-                        coins: [...group.coins, pendingTx.coinData!.ticker],
-                        updatedAt: new Date(),
-                      }
-                    : group
-                ),
-              }),
-            }
-          );
+          // Create the coin object (only if coinData exists)
+          if (pendingTx.coinData) {
+            const newCoin = {
+              ticker: pendingTx.coinData.ticker,
+              name: pendingTx.coinData.name,
+              image: pendingTx.coinData.image,
+              groupId: groupAddress.toLowerCase(), // Normalize to lowercase for consistent matching
+              contractAddress,
+              launched: true,
+              fairLaunchDuration: 30 * 60, // 30 minutes
+              fairLaunchPercent: 10,
+              initialMarketCap: 1000,
+              chainId,
+              chainName,
+              createdAt: new Date(),
+            };
 
-          // If user was onboarding, complete onboarding and send mini.flaunch.gg link
+            // Add coin to ALL group members (not just creator)
+            await this.groupStorageService.addCoinToAllGroupMembers(
+              groupAddress,
+              newCoin,
+              creatorAddress
+            );
+          }
+
+          // Clear the creator's pending transaction and management progress
+          await this.sessionManager.updateUserState(creatorAddress, {
+            pendingTransaction: undefined,
+            managementProgress: undefined, // Clear management progress when coin creation completes
+          });
+
+          // If user was onboarding, complete onboarding
           if (userState.status === "onboarding") {
-            await this.sessionManager.completeOnboarding(senderInboxId);
+            await this.sessionManager.completeOnboarding(creatorAddress);
 
-            // Onboarding completion message removed per user request
-            // const completionMessage = `onboarding complete! track your coin's progress and manage your group at https://mini.flaunch.gg`;
-            // await conversation.send(completionMessage);
+            // Send onboarding completion message immediately when first coin is launched
+            const completionMessage = `🎉 onboarding complete! you've got groups and coins set up. track your progress at https://mini.flaunch.gg`;
+            await conversation.send(completionMessage);
           }
         }
 
@@ -1223,7 +1219,12 @@ export class EnhancedMessageCoordinator {
 
         // Clear any pending transaction state
         const senderInboxId = message.senderInboxId;
-        await this.sessionManager.updateUserState(senderInboxId, {
+        const inboxState = await this.client.preferences.inboxStateFromInboxIds(
+          [senderInboxId]
+        );
+        const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
+
+        await this.sessionManager.updateUserState(creatorAddress, {
           pendingTransaction: undefined,
           managementProgress: undefined, // Clear management progress on system error
         });

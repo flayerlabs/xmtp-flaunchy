@@ -59,10 +59,29 @@ export class OnboardingFlow extends BaseFlow {
       return;
     }
 
-    // If user is new, start onboarding
+    // If user is new, check if they're making a specific group creation request
     if (userState.status === 'new') {
+      // Check if this message contains a group creation request
+      const hasGroupCreationRequest = await this.detectGroupCreationInMessage(context, messageText);
+      
+      if (hasGroupCreationRequest) {
+        // Update to onboarding status and process the group creation
+        await context.updateState({ 
+          status: 'onboarding',
+          onboardingProgress: {
+            step: 'group_creation',
+            startedAt: new Date()
+          }
+        });
+        
+        // Process the group creation request
+        await this.handleGroupCreation(context);
+        return;
+      } else {
+        // No specific request, give general welcome
         await this.startOnboarding(context);
         return;
+      }
     }
 
     // If user has no groups, they need to create one first
@@ -80,28 +99,10 @@ export class OnboardingFlow extends BaseFlow {
       }
     }
 
-    // User has groups - check if onboarding is complete
+    // User has groups - handle onboarding flow
     if (userState.status === 'onboarding') {
-      // Only complete onboarding if they have successfully launched coins (not just pending transactions)
-      if (userState.groups.length > 0 && userState.coins.length > 0 && !userState.pendingTransaction) {
-        await context.updateState({
-          status: 'active',
-          onboardingProgress: undefined
-        });
-        
-        const response = await getCharacterResponse({
-          openai: context.openai,
-          character: context.character,
-          prompt: `
-            Congratulate the user on completing onboarding! They now have groups and coins set up.
-            Let them know they can create more groups, launch more coins, or ask questions.
-            Keep it brief and celebratory.
-          `
-        });
-        
-        await this.sendResponse(context, response);
-        return;
-      }
+      // Note: Onboarding completion is handled automatically when first coin is successfully launched
+      // (in EnhancedMessageCoordinator transaction processing)
       
       // Check if user wants to modify fee splits for pending transactions
       if (userState.pendingTransaction && messageText) {
@@ -309,12 +310,11 @@ export class OnboardingFlow extends BaseFlow {
         }
       });
 
-      // Create message based on ACTUAL transaction data
-      const response = await this.createTransactionMessage(
-        context,
-        result.walletSendCalls,
+      // Create message with ENS-resolved names
+      const response = await GroupCreationUtils.createTransactionMessageWithENS(
         result.resolvedReceivers,
-        'created'
+        'created',
+        context.ensResolver
       );
 
       await this.sendResponse(context, response);
@@ -467,16 +467,13 @@ export class OnboardingFlow extends BaseFlow {
       // Send transaction
       await context.conversation.send(walletSendCalls, ContentTypeWalletSendCalls);
 
-            const response = await getCharacterResponse({
-              openai: context.openai,
-              character: context.character,
-              prompt: `
-          Very briefly tell them to sign the transaction to create their group with all ${feeReceivers.length} members.
-          Keep it short - 1 sentence max.
-              `
-            });
+      const response = await GroupCreationUtils.createTransactionMessageWithENS(
+        feeReceivers,
+        `sign the transaction to create your group with all`,
+        context.ensResolver
+      );
 
-            await this.sendResponse(context, response);
+      await this.sendResponse(context, response);
         
       } catch (error) {
       this.logError('Failed to add everyone from chat', error);
@@ -1260,6 +1257,43 @@ export class OnboardingFlow extends BaseFlow {
   /**
    * Detect if the user wants to completely replace the current group with a new one
    */
+  private async detectGroupCreationInMessage(context: FlowContext, messageText: string): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Does this message contain a request to create a group or add specific people to a group?
+
+Message: "${messageText}"
+
+Look for patterns like:
+- "create a group for me and @user"
+- "launch a group for me and @user" 
+- "add me and @user to a group"
+- "make a group with @user1 and @user2"
+- "@user1 @user2 let's create a group"
+- Any message that mentions usernames/addresses and group creation
+
+Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      const result = response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      
+      console.log(`[OnboardingFlow] Group creation detection: "${messageText}" -> ${result}`);
+      return result;
+      
+    } catch (error) {
+      console.error('Failed to detect group creation in message:', error);
+      return false;
+    }
+  }
+
   private async detectCompleteGroupReplacement(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;
 
