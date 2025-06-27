@@ -440,7 +440,7 @@ export class EnhancedMessageCoordinator {
       }
 
       // Send a message to the user to let them know the agent is processing their message
-      await conversation.send("🐱 Thinking...");
+      await conversation.send("🐾 Thinking...");
 
       // Create flow context (using relatedMessages as conversation history for now)
       const context = await this.createFlowContext({
