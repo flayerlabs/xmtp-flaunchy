@@ -107,6 +107,13 @@ export class FlowRouter {
       console.log(`[FlowRouter] ⏭️ P3 SKIP: Not a high-confidence question (questionType=${questionType}, confidence=${intentResult.confidence.toFixed(2)})`);
     }
     
+    // SPECIAL CASE: QA intent (greetings, questions) should override onboarding
+    // Allow natural conversation flow for greetings and general questions
+    if (intentResult.intent === 'qa' && intentResult.confidence >= 0.9) {
+      console.log(`[FlowRouter] 🎯 SPECIAL: High-confidence qa intent (greetings/questions) overrides onboarding → qa`);
+      return 'qa';
+    }
+    
     // SPECIAL CASE: Management intent with high confidence should override onboarding
     // for informational queries about existing data
     if (intentResult.intent === 'management' && intentResult.confidence >= 0.9) {

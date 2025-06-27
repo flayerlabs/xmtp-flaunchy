@@ -76,7 +76,15 @@ USER MESSAGE: "${message}"${hasAttachment ? '\nHAS IMAGE ATTACHMENT: true' : ''}
 
 CRITICAL CONTEXT RULES (READ CAREFULLY):
 
-CONVERSATIONAL FLOW CONTINUATION (HIGHEST PRIORITY):
+GREETINGS AND CASUAL CONVERSATION (HIGHEST PRIORITY):
+- Simple greetings: "hey", "hello", "hi", "what's up", "hey @flaunchy", "good morning", "good afternoon"
+- Casual conversation starters that don't request specific actions
+- Bot mentions without specific requests: "hey @flaunchy", "@flaunchy hi", "hello flaunchy"
+- These should ALWAYS be classified as qa, regardless of user state or active flows
+- Examples: "Hey @flaunchy", "Hello!", "Hi there", "What's up?", "Good morning", "@flaunchy", "hi flaunchy"
+- Even users in onboarding should get qa for basic greetings to allow natural conversation flow
+
+CONVERSATIONAL FLOW CONTINUATION (SECOND PRIORITY):
 - If user is actively in a flow (onboarding/management progress exists), assume they are responding to the bot's request
 - If bot just asked for fee receivers and user provides usernames/addresses → CONTINUE CURRENT FLOW
 - If bot just asked for coin details and user provides name/ticker → CONTINUE CURRENT FLOW  
@@ -123,8 +131,8 @@ INTENT OPTIONS:
 4. management - User wants to view/manage existing groups/coins (but NOT create new groups)
    Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "who are the fee receivers?", "what's my group?", "show fee receivers"
    
-5. qa - General questions, help, conversation, capability questions, or hypothetical scenarios
-   Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy"
+5. qa - General questions, help, conversation, capability questions, greetings, or hypothetical scenarios
+   Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy", "hey @flaunchy", "hello", "hi there", "what's up?"
    CAPABILITY/HYPOTHETICAL QUESTIONS: "can I create a group with different fee splits?", "do you support custom splits?", "is it possible to have unequal splits?", "can I make a group where one person gets more?", "what about groups with custom percentages?", "do you allow different fee structures?"
    CHAIN QUESTIONS: "can I switch chains?", "do you support other networks?", "can I launch on sepolia?", "what about ethereum mainnet?" → These are capability questions about unsupported features
    IMPORTANT: Any question seeking information about capabilities or asking "what if" scenarios should be qa, NOT action flows
@@ -133,11 +141,12 @@ INTENT OPTIONS:
    Examples: "yes", "ok", "do it", "yep", "sure", "go ahead", "let's do it"
 
 CLASSIFICATION PRIORITY ORDER:
-1. CAPABILITY/HYPOTHETICAL QUESTIONS - Questions about what's possible, supported features, or hypothetical scenarios → qa
-2. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
-3. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
-4. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
-5. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
+1. GREETINGS AND CASUAL CONVERSATION - Simple greetings, bot mentions, casual conversation → qa
+2. CAPABILITY/HYPOTHETICAL QUESTIONS - Questions about what's possible, supported features, or hypothetical scenarios → qa
+3. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
+4. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
+5. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
+6. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
 
 CRITICAL: DISTINGUISH QUESTIONS FROM ACTIONS
 - QUESTIONS seek information/understanding: "can I...", "do you support...", "is it possible...", "what about...", "how about..."
@@ -148,6 +157,15 @@ CRITICAL: DISTINGUISH QUESTIONS FROM ACTIONS
 
 
 CRITICAL EXAMPLES - QUESTIONS VS ACTIONS:
+GREETINGS AND CASUAL CONVERSATION → qa:
+- "Hey @flaunchy" = qa (greeting)
+- "Hello!" = qa (greeting)
+- "Hi there" = qa (greeting)
+- "What's up?" = qa (casual conversation)
+- "Good morning" = qa (greeting)
+- "@flaunchy" = qa (bot mention without specific request)
+- "hey flaunchy" = qa (casual greeting)
+
 QUESTIONS (seeking information) → qa:
 - "can I create a group with different fee splits for each receiver?" = qa (asking about capability)
 - "do you support custom fee splits?" = qa (asking about features)

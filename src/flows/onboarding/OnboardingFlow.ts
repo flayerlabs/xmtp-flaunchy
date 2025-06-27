@@ -170,16 +170,29 @@ export class OnboardingFlow extends BaseFlow {
       return;
     }
 
-    // Check if user is trying to add to an existing group (for when pending transaction exists)
+    // Check if user is trying to add to an existing group (ONLY when pending transaction exists)
+    // Without a pending transaction, treat all messages as complete new group specifications
     const isAddToExisting = await this.detectAddToExistingGroup(context, messageText);
-    if (isAddToExisting && existingReceivers.length > 0) {
+    if (isAddToExisting && existingReceivers.length > 0 && context.userState.pendingTransaction) {
       await this.addToExistingGroup(context, messageText);
       return;
     }
 
+    // If no pending transaction exists, treat any group specification as a complete replacement
+    // This prevents accumulation of receivers across separate messages
+    if (!context.userState.pendingTransaction && existingReceivers.length > 0) {
+      // Clear existing receivers - this is a new group specification
+      await context.updateState({
+        onboardingProgress: {
+          ...context.userState.onboardingProgress!,
+          splitData: undefined
+        }
+      });
+    }
+
     // Check if this is a complete group replacement (e.g. "ok add user1, user2, user3, user4 equal split")
     const isCompleteReplacement = await this.detectCompleteGroupReplacement(context, messageText);
-    if (isCompleteReplacement && existingReceivers.length > 0) {
+    if (isCompleteReplacement && existingReceivers.length > 0 && context.userState.pendingTransaction) {
       // Clear existing receivers and create new group
       await context.updateState({
         onboardingProgress: {
@@ -190,16 +203,16 @@ export class OnboardingFlow extends BaseFlow {
       // Continue to regular group creation logic
     }
 
-    // Check if user is trying to modify existing receiver percentages
+    // Check if user is trying to modify existing receiver percentages (ONLY when pending transaction exists)
     const isPercentageUpdate = await this.detectPercentageUpdate(context, messageText);
-    if (isPercentageUpdate && existingReceivers.length > 0) {
+    if (isPercentageUpdate && existingReceivers.length > 0 && context.userState.pendingTransaction) {
       await this.handlePercentageUpdate(context, messageText);
       return;
     }
 
-    // Special case: Check if this is an "add me with X%" request even with no existing receivers
-    // This happens when user starts with "add me with 20%" as their first message
-    if (!existingReceivers || existingReceivers.length === 0) {
+    // Special case: Check if this is an "add me with X%" request ONLY when no pending transaction
+    // This handles partial percentage specifications that need completion
+    if ((!existingReceivers || existingReceivers.length === 0) && !context.userState.pendingTransaction) {
       const isAddingToExisting = await this.detectAddToExistingGroup(context, messageText);
       if (isAddingToExisting) {
         // Try to extract the receivers to see if it's a partial percentage
