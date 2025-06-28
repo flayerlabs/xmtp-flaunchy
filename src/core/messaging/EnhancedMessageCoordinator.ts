@@ -218,8 +218,9 @@ export class EnhancedMessageCoordinator {
     }
   > = new Map();
 
-  // Thread timeout - if no activity for 30 minutes, consider thread inactive
-  private readonly THREAD_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+  // Thread timeout - if no activity for 5 minutes, consider thread inactive
+  // This ensures bot doesn't continue responding to users who've moved on
+  private readonly THREAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
   private groupStorageService: GroupStorageService;
   private ensResolverService: ENSResolverService;
@@ -1535,6 +1536,29 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
+    // Use LLM for broader engagement detection - catches cases that regex might miss
+    const isEngagingWithBot = await this.checkUserEngagementWithLLM(
+      messageText,
+      conversationId,
+      senderInboxId
+    );
+
+    if (isEngagingWithBot) {
+      console.log("🧠 LLM DETECTED ENGAGEMENT - processing message", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 100) + "...",
+      });
+
+      // Start/update active thread when LLM detects engagement
+      await this.updateActiveThread(
+        conversationId,
+        senderInboxId,
+        primaryMessage
+      );
+      return true;
+    }
+
     // Check if this is part of an active conversation thread
     const isActiveThread = await this.isInActiveThread(
       conversationId,
@@ -1553,20 +1577,9 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    // Check if user has critical ongoing processes that require attention
-    const hasCriticalProcess = this.hasCriticalOngoingProcess(userState);
-
-    if (hasCriticalProcess) {
-      console.log("⚠️ CRITICAL PROCESS - processing message", {
-        senderInboxId: senderInboxId.slice(0, 8) + "...",
-        status: userState.status,
-        hasOnboarding: !!userState.onboardingProgress,
-        hasManagement: !!userState.managementProgress,
-        hasPendingTx: !!userState.pendingTransaction,
-      });
-
-      return true;
-    }
+    // REMOVED: Critical process logic was too broad and caused bot to respond to all messages
+    // The bot should ONLY respond when explicitly mentioned or in active conversation thread
+    // Having ongoing processes doesn't mean every message should be processed
 
     console.log("⏭️ IGNORING GROUP MESSAGE - no mention or active thread", {
       senderInboxId: senderInboxId.slice(0, 8) + "...",
@@ -1578,7 +1591,7 @@ export class EnhancedMessageCoordinator {
   }
 
   /**
-   * Detect if message contains @ mention of the agent
+   * Detect if message contains mention of the agent or direct engagement
    */
   private detectAgentMention(messageText: string): boolean {
     if (!messageText || typeof messageText !== "string") {
@@ -1588,7 +1601,7 @@ export class EnhancedMessageCoordinator {
     const lowerText = messageText.toLowerCase();
     const agentName = this.character.name.toLowerCase(); // "flaunchy"
 
-    // Check for various mention patterns
+    // Check for @ mention patterns first (most reliable)
     const mentionPatterns = [
       `@${agentName}`, // @flaunchy
       `@ ${agentName}`, // @ flaunchy
@@ -1610,6 +1623,31 @@ export class EnhancedMessageCoordinator {
       lowerText.startsWith(`@ ${agentName}`)
     ) {
       return true;
+    }
+
+    // Check for direct greetings and mentions WITHOUT @ symbol
+    const directEngagementPatterns = [
+      // Direct greetings
+      new RegExp(`^(hey|hello|hi|yo|sup)\\s+${agentName}\\b`, 'i'), // "hey flaunchy", "hello flaunchy"
+      new RegExp(`^${agentName}\\s+(hey|hello|hi|yo|sup)`, 'i'), // "flaunchy hey", "flaunchy hello"
+      new RegExp(`^${agentName}\\b`, 'i'), // "flaunchy" at start of message
+      new RegExp(`\\b${agentName}\\s*[,!?.]?$`, 'i'), // "flaunchy" at end of message
+      
+      // Direct mentions in middle of sentence
+      new RegExp(`\\bhey\\s+${agentName}\\b`, 'i'), // "hey flaunchy"
+      new RegExp(`\\bhi\\s+${agentName}\\b`, 'i'), // "hi flaunchy"
+      new RegExp(`\\bhello\\s+${agentName}\\b`, 'i'), // "hello flaunchy"
+      
+      // Questions/requests directed at flaunchy
+      new RegExp(`${agentName}[,\\s]+(can|could|would|will|what|how|when|where|why)`, 'i'), // "flaunchy, can you..."
+      new RegExp(`(can|could|would|will)\\s+you\\s+.*${agentName}`, 'i'), // "can you help flaunchy"
+    ];
+
+    // Check direct engagement patterns
+    for (const pattern of directEngagementPatterns) {
+      if (pattern.test(lowerText)) {
+        return true;
+      }
     }
 
     return false;
@@ -1647,6 +1685,25 @@ export class EnhancedMessageCoordinator {
     // Check if this user is participating in the thread
     const isParticipating = thread.participatingUsers.has(senderInboxId);
 
+    if (!isParticipating) {
+      return false;
+    }
+
+    // Use LLM to check if user is still engaging with the bot
+    const messageText = typeof message.content === "string" ? message.content : "";
+    const isStillEngaged = await this.checkUserEngagementWithLLM(messageText, conversationId, senderInboxId);
+    
+    if (!isStillEngaged) {
+      // Remove this user from the thread - they've moved on
+      thread.participatingUsers.delete(senderInboxId);
+      console.log("👋 USER DISENGAGED (LLM detected) - removing from thread", {
+        conversationId: conversationId.slice(0, 8) + "...",
+        userId: senderInboxId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 50) + "...",
+      });
+      return false;
+    }
+
     // Also check if this message is a direct response to recent agent activity
     const isRecentResponse = await this.isRecentResponseToAgent(
       message,
@@ -1654,6 +1711,61 @@ export class EnhancedMessageCoordinator {
     );
 
     return isParticipating || isRecentResponse;
+  }
+
+  /**
+   * Use LLM to determine if user is still engaging with the bot
+   * Much more robust than regex patterns for natural language understanding
+   */
+  private async checkUserEngagementWithLLM(
+    messageText: string,
+    conversationId: string,
+    senderInboxId: string
+  ): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const prompt = `You are analyzing whether a user message is directed at or continuing a conversation with a bot named "flaunchy".
+
+CONTEXT: The user was previously talking to flaunchy in a group chat and is now in an active conversation thread.
+
+USER MESSAGE: "${messageText}"
+
+Is this message still engaging with the bot flaunchy? Consider:
+- Direct mentions (@flaunchy, hey flaunchy, flaunchy)
+- Continuing previous bot conversation topics (groups, coins, fees, etc.)
+- Asking questions that could be directed at the bot
+- VS talking to other people in the group
+- VS general group chat unrelated to the bot
+
+Respond with ONLY: "YES" or "NO"
+
+If the user is clearly talking to someone else (like "hey alice" or "bob how are you") or having unrelated conversations, respond "NO".
+If there's any reasonable chance they're still talking to/about the bot, respond "YES".`;
+
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o-mini", // Fast and cheap for this simple task
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 5,
+        temperature: 0, // Deterministic
+      });
+
+      const answer = response.choices[0]?.message?.content?.trim().toUpperCase();
+      const isEngaged = answer === "YES";
+
+      console.log("🤖 LLM ENGAGEMENT CHECK", {
+        userId: senderInboxId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 50) + "...",
+        llmAnswer: answer,
+        isEngaged,
+      });
+
+      return isEngaged;
+    } catch (error) {
+      console.error("Error checking user engagement with LLM:", error);
+      // On error, be conservative and assume they're still engaged
+      return true;
+    }
   }
 
   /**
@@ -1676,8 +1788,9 @@ export class EnhancedMessageCoordinator {
       const messageTime = new Date(message.sentAt);
       const timeSinceAgent = messageTime.getTime() - lastAgentTime.getTime();
 
-      // Consider it a recent response if within 5 minutes of agent activity
-      if (timeSinceAgent > 0 && timeSinceAgent < 5 * 60 * 1000) {
+      // Consider it a recent response if within 2 minutes of agent activity
+      // This prevents bot from being overly eager to continue conversations
+      if (timeSinceAgent > 0 && timeSinceAgent < 2 * 60 * 1000) {
         // Check if there are mostly user messages since agent activity
         const recentMessages = messages.filter((msg: any) => {
           const msgTime = new Date(msg.sentAt);
@@ -1758,35 +1871,9 @@ export class EnhancedMessageCoordinator {
     }
   }
 
-  /**
-   * Check if user has critical ongoing processes that require attention
-   */
-  private hasCriticalOngoingProcess(userState: any): boolean {
-    // Only consider truly critical processes that need immediate attention
-    return (
-      // User is in onboarding and has made progress
-      (userState.status === "onboarding" && userState.onboardingProgress) ||
-      // User has a pending transaction that needs processing
-      userState.pendingTransaction !== undefined ||
-      // User has active management progress with recent activity
-      (userState.managementProgress !== undefined &&
-        this.isRecentManagementActivity(userState.managementProgress))
-    );
-  }
-
-  /**
-   * Check if management progress is recent (within last 10 minutes)
-   */
-  private isRecentManagementActivity(managementProgress: any): boolean {
-    if (!managementProgress?.startedAt) return false;
-
-    const now = new Date();
-    const startTime = new Date(managementProgress.startedAt);
-    const timeDiff = now.getTime() - startTime.getTime();
-
-    // Consider recent if within last 10 minutes
-    return timeDiff < 10 * 60 * 1000;
-  }
+  // REMOVED: hasCriticalOngoingProcess and isRecentManagementActivity methods
+  // These were causing over-processing by making bot respond to all messages from users with any progress
+  // Bot should ONLY respond when explicitly mentioned or in active conversation thread
 
   /**
    * Handle errors that might come from users with installation limit issues

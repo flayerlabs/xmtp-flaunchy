@@ -38,9 +38,12 @@ FEE RECEIVER EXTRACTION
 Look for:
 1. Usernames (starting with @), ENS names (.eth), wallet addresses (0x...)
 2. Self-references: "me", "myself", "my address", "use my username", "just me" → mark as SELF_REFERENCE
-3. Equal split indicators: "equal", "split equally", "same for everyone", etc.
-4. Percentage splits: "alice 30%", "@bob 25%", "charlie.eth 40%", etc.
-5. Multiple users: comma-separated or "and" separated lists
+3. Group creation for self: "create a group for me", "make a group for me", "group for me" → mark as SELF_REFERENCE
+4. Equal split indicators: "equal", "split equally", "same for everyone", etc.
+5. Percentage splits: "alice 30%", "@bob 25%", "charlie.eth 40%", etc.
+6. Multiple users: comma-separated or "and" separated lists
+
+CRITICAL: "for me" in group creation context means the user wants to be the sole fee receiver.
 
 IMPORTANT: If no usernames/addresses/splits are found, set feeReceivers to null. Do not hallucinate.
 
@@ -109,6 +112,31 @@ Fee Receivers only:
       {"identifier": "SELF_REFERENCE", "percentage": 40, "type": "self"}
     ],
     "splitType": "percentage",
+    "confidence": 0.9
+  }
+}
+
+Group creation for self:
+"create a group for me please" →
+{
+  "tokenDetails": {"name": null, "ticker": null, "image": null},
+  "feeReceivers": {
+    "receivers": [
+      {"identifier": "SELF_REFERENCE", "percentage": null, "type": "self"}
+    ],
+    "splitType": "self_only",
+    "confidence": 0.9
+  }
+}
+
+"make a group for me" →
+{
+  "tokenDetails": {"name": null, "ticker": null, "image": null},
+  "feeReceivers": {
+    "receivers": [
+      {"identifier": "SELF_REFERENCE", "percentage": null, "type": "self"}
+    ],
+    "splitType": "self_only",
     "confidence": 0.9
   }
 }

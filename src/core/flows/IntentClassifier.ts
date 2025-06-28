@@ -93,7 +93,9 @@ CONVERSATIONAL FLOW CONTINUATION (SECOND PRIORITY):
 ONBOARDING CONTINUATION SIGNALS:
 - User has onboardingProgress AND provides: usernames, addresses, ENS names, "me and X", fee split info → onboarding
 - User has onboardingProgress AND provides coin details: coin names, tickers, images → onboarding (NOT coin_launch!)
+- User has onboardingProgress AND says "everyone" for group creation → onboarding (NOT qa!)
 - Examples: "split between me and alice", "me and @bob 50/50", "alice.eth and charlie.eth", "0x123... and 0x456..."
+- Group creation examples: "everyone", "add everyone", "all members", "include everyone"
 - Coin details examples: "Token TOKIE", "launch MyCoin (MCN)", "create DOGE with image.jpg" → onboarding if user is in onboarding
 
 INFORMATIONAL QUERIES (HIGHEST PRIORITY):
@@ -193,6 +195,10 @@ ACTIONS (requesting execution) → onboarding/group_launch/management/coin_launc
 - User in onboarding + "who are the fee receivers?" = management (asking about existing group info, NOT continuing onboarding)
 - User in onboarding + "what's my group?" = management (asking about existing group info)
 - User in onboarding + "show fee receivers" = management (asking about existing group info)
+- User in onboarding + "everyone" = onboarding (continuing group creation, NOT qa!)
+- User in onboarding + "add everyone" = onboarding (continuing group creation)
+- User in onboarding + "all members" = onboarding (continuing group creation)
+- User in onboarding + "include everyone" = onboarding (continuing group creation)
 - User in onboarding + "launch a group for everyone here" = onboarding (group creation with add everyone, NOT coin launch!)
 - User in onboarding + "create a group for everyone" = onboarding (group creation with add everyone)
 - User with groups + uploads image with no/minimal text = coin_launch (image-only coin launch information)

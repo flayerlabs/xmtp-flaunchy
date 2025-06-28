@@ -403,13 +403,14 @@ export class FlowRouter {
       User said: "${messageText}"
       
       Is this user providing group creation details or responding to the group creation question? Look for:
-      - "create a group for everyone"
+      - "everyone" (indicating all chat members)
       - "add everyone"
+      - "create a group for everyone"
       - "let's create a group for everyone"
       - "awesome let's create a group for everyone"
       - Fee receiver specifications (@alice, alice.eth, 0x123...)
       - Percentage specifications ("me 80%, @alice 20%")
-      - Group member references ("everyone in this chat")
+      - Group member references ("everyone in this chat", "all members")
       - Responses that indicate they want to proceed with group creation
       
       Return ONLY:
