@@ -1517,17 +1517,17 @@ export class EnhancedMessageCoordinator {
     const senderInboxId = primaryMessage.senderInboxId;
     const conversationId = primaryMessage.conversationId;
 
-    // Check for explicit @ mentions of the agent
-    const hasMention = this.detectAgentMention(messageText);
+    // Fast regex check for obvious mentions (saves LLM calls)
+    const hasObviousMention = this.detectObviousAgentMention(messageText);
 
-    if (hasMention) {
-      console.log("🎯 AGENT MENTIONED - processing message", {
+    if (hasObviousMention) {
+      console.log("⚡ OBVIOUS MENTION DETECTED - processing message", {
         senderInboxId: senderInboxId.slice(0, 8) + "...",
         conversationId: conversationId.slice(0, 8) + "...",
         messageText: messageText.substring(0, 100) + "...",
       });
 
-      // Start/update active thread when mentioned
+      // Start/update active thread when obviously mentioned
       await this.updateActiveThread(
         conversationId,
         senderInboxId,
@@ -1536,18 +1536,20 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    // Use LLM for broader engagement detection - catches cases that regex might miss
-    const isEngagingWithBot = await this.checkUserEngagementWithLLM(
+    // LLM fallback for bot commands and edge cases that regex might miss
+    const engagementCheck = await this.checkConversationEngagement(
       messageText,
       conversationId,
-      senderInboxId
+      senderInboxId,
+      "new_message"
     );
 
-    if (isEngagingWithBot) {
+    if (engagementCheck.isEngaged) {
       console.log("🧠 LLM DETECTED ENGAGEMENT - processing message", {
         senderInboxId: senderInboxId.slice(0, 8) + "...",
         conversationId: conversationId.slice(0, 8) + "...",
         messageText: messageText.substring(0, 100) + "...",
+        reason: engagementCheck.reason,
       });
 
       // Start/update active thread when LLM detects engagement
@@ -1581,19 +1583,23 @@ export class EnhancedMessageCoordinator {
     // The bot should ONLY respond when explicitly mentioned or in active conversation thread
     // Having ongoing processes doesn't mean every message should be processed
 
-    console.log("⏭️ IGNORING GROUP MESSAGE - no mention or active thread", {
+    console.log("⏭️ IGNORING MESSAGE - no explicit engagement detected", {
       senderInboxId: senderInboxId.slice(0, 8) + "...",
       conversationId: conversationId.slice(0, 8) + "...",
       messageText: messageText.substring(0, 50) + "...",
+      reason: "not_mentioned_and_not_in_active_thread",
     });
 
     return false;
   }
 
+
+
   /**
-   * Detect if message contains mention of the agent or direct engagement
+   * Fast regex detection for obvious agent mentions (saves LLM calls)
+   * Only catches the most clear-cut cases where we're 100% sure
    */
-  private detectAgentMention(messageText: string): boolean {
+  private detectObviousAgentMention(messageText: string): boolean {
     if (!messageText || typeof messageText !== "string") {
       return false;
     }
@@ -1601,7 +1607,7 @@ export class EnhancedMessageCoordinator {
     const lowerText = messageText.toLowerCase();
     const agentName = this.character.name.toLowerCase(); // "flaunchy"
 
-    // Check for @ mention patterns first (most reliable)
+    // Check for @ mention patterns (most reliable)
     const mentionPatterns = [
       `@${agentName}`, // @flaunchy
       `@ ${agentName}`, // @ flaunchy
@@ -1610,7 +1616,7 @@ export class EnhancedMessageCoordinator {
       ` @${agentName} `, // (spaces around) @flaunchy
     ];
 
-    // Check exact @ mention patterns first (most reliable)
+    // Check exact @ mention patterns
     for (const pattern of mentionPatterns) {
       if (lowerText.includes(pattern)) {
         return true;
@@ -1625,26 +1631,15 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    // Check for direct greetings and mentions WITHOUT @ symbol
-    const directEngagementPatterns = [
-      // Direct greetings
-      new RegExp(`^(hey|hello|hi|yo|sup)\\s+${agentName}\\b`, 'i'), // "hey flaunchy", "hello flaunchy"
-      new RegExp(`^${agentName}\\s+(hey|hello|hi|yo|sup)`, 'i'), // "flaunchy hey", "flaunchy hello"
-      new RegExp(`^${agentName}\\b`, 'i'), // "flaunchy" at start of message
-      new RegExp(`\\b${agentName}\\s*[,!?.]?$`, 'i'), // "flaunchy" at end of message
-      
-      // Direct mentions in middle of sentence
-      new RegExp(`\\bhey\\s+${agentName}\\b`, 'i'), // "hey flaunchy"
-      new RegExp(`\\bhi\\s+${agentName}\\b`, 'i'), // "hi flaunchy"
-      new RegExp(`\\bhello\\s+${agentName}\\b`, 'i'), // "hello flaunchy"
-      
-      // Questions/requests directed at flaunchy
-      new RegExp(`${agentName}[,\\s]+(can|could|would|will|what|how|when|where|why)`, 'i'), // "flaunchy, can you..."
-      new RegExp(`(can|could|would|will)\\s+you\\s+.*${agentName}`, 'i'), // "can you help flaunchy"
+    // Check for VERY OBVIOUS direct address to agent
+    const obviousPatterns = [
+      new RegExp(`^(hey|hello|hi|ok|yes|sure|alright)\\s+${agentName}\\b`, 'i'), // "hey flaunchy", "ok flaunchy"
+      new RegExp(`^${agentName}\\s+(hey|hello|hi|let|can|help|show|create)`, 'i'), // "flaunchy hey", "flaunchy let's"
+      new RegExp(`^${agentName}[,\\s]+(help|what|how|can|could|show|let)`, 'i'), // "flaunchy, help me", "flaunchy let's"
     ];
 
-    // Check direct engagement patterns
-    for (const pattern of directEngagementPatterns) {
+    // Check obvious patterns
+    for (const pattern of obviousPatterns) {
       if (pattern.test(lowerText)) {
         return true;
       }
@@ -1689,17 +1684,23 @@ export class EnhancedMessageCoordinator {
       return false;
     }
 
-    // Use LLM to check if user is still engaging with the bot
+    // Use improved LLM to check if user is still engaging with the bot
     const messageText = typeof message.content === "string" ? message.content : "";
-    const isStillEngaged = await this.checkUserEngagementWithLLM(messageText, conversationId, senderInboxId);
+    const engagementResult = await this.checkConversationEngagement(
+      messageText, 
+      conversationId, 
+      senderInboxId,
+      "active_thread"
+    );
     
-    if (!isStillEngaged) {
+    if (!engagementResult.isEngaged) {
       // Remove this user from the thread - they've moved on
       thread.participatingUsers.delete(senderInboxId);
-      console.log("👋 USER DISENGAGED (LLM detected) - removing from thread", {
+      console.log("👋 USER DISENGAGED - removing from thread", {
         conversationId: conversationId.slice(0, 8) + "...",
         userId: senderInboxId.slice(0, 8) + "...",
         messageText: messageText.substring(0, 50) + "...",
+        reason: engagementResult.reason,
       });
       return false;
     }
@@ -1714,58 +1715,102 @@ export class EnhancedMessageCoordinator {
   }
 
   /**
-   * Use LLM to determine if user is still engaging with the bot
-   * Much more robust than regex patterns for natural language understanding
+   * Use LLM to determine conversation engagement with proper context
+   * Handles both initial engagement detection and ongoing conversation analysis
    */
-  private async checkUserEngagementWithLLM(
+  private async checkConversationEngagement(
     messageText: string,
     conversationId: string,
-    senderInboxId: string
-  ): Promise<boolean> {
-    if (!messageText) return false;
+    senderInboxId: string,
+    context: "new_message" | "active_thread"
+  ): Promise<{ isEngaged: boolean; reason: string }> {
+    if (!messageText) return { isEngaged: false, reason: "empty_message" };
 
     try {
-      const prompt = `You are analyzing whether a user message is directed at or continuing a conversation with a bot named "flaunchy".
-
-CONTEXT: The user was previously talking to flaunchy in a group chat and is now in an active conversation thread.
-
-USER MESSAGE: "${messageText}"
-
-Is this message still engaging with the bot flaunchy? Consider:
-- Direct mentions (@flaunchy, hey flaunchy, flaunchy)
-- Continuing previous bot conversation topics (groups, coins, fees, etc.)
-- Asking questions that could be directed at the bot
-- VS talking to other people in the group
-- VS general group chat unrelated to the bot
-
-Respond with ONLY: "YES" or "NO"
-
-If the user is clearly talking to someone else (like "hey alice" or "bob how are you") or having unrelated conversations, respond "NO".
-If there's any reasonable chance they're still talking to/about the bot, respond "YES".`;
+      const contextualPrompt = context === "active_thread" 
+        ? this.buildActiveThreadPrompt(messageText)
+        : this.buildNewMessagePrompt(messageText);
 
       const response = await this.openai.chat.completions.create({
-        model: "gpt-4o-mini", // Fast and cheap for this simple task
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 5,
-        temperature: 0, // Deterministic
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: contextualPrompt }],
+        max_tokens: 20,
+        temperature: 0,
       });
 
-      const answer = response.choices[0]?.message?.content?.trim().toUpperCase();
-      const isEngaged = answer === "YES";
+      const result = response.choices[0]?.message?.content?.trim();
+      const [answer, ...reasonParts] = result?.split(':') || [];
+      const isEngaged = answer?.toUpperCase() === "YES";
+      const reason = reasonParts.join(':').trim() || answer;
 
-      console.log("🤖 LLM ENGAGEMENT CHECK", {
+      console.log("🤖 ENGAGEMENT CHECK", {
+        context,
         userId: senderInboxId.slice(0, 8) + "...",
         messageText: messageText.substring(0, 50) + "...",
-        llmAnswer: answer,
+        result: answer,
+        reason,
         isEngaged,
       });
 
-      return isEngaged;
+      return { isEngaged, reason };
     } catch (error) {
-      console.error("Error checking user engagement with LLM:", error);
-      // On error, be conservative and assume they're still engaged
-      return true;
+      console.error("Error checking conversation engagement:", error);
+      // On error, be conservative based on context
+      const fallbackEngaged = context === "active_thread";
+      return { isEngaged: fallbackEngaged, reason: "llm_error" };
     }
+  }
+
+  private buildActiveThreadPrompt(messageText: string): string {
+    return `You are analyzing if a user is still engaged with bot "flaunchy" in an ACTIVE conversation thread.
+
+CONTEXT: User was previously talking to flaunchy and is in an active conversation thread.
+
+USER MESSAGE: "${messageText}"
+
+Is the user still engaged with flaunchy? Be STRICT:
+
+ENGAGED (respond "YES:continuing"):
+- Asking questions about bot features: "what can you do?", "how does this work?"
+- Continuing bot topics: groups, coins, fees, transactions
+- Providing requested information: usernames, addresses, confirmations
+- Direct responses to bot: "yes", "ok", "go ahead"
+- Bot-related requests: "show my groups", "launch a coin"
+
+DISENGAGED (respond "NO:reason"):
+- Greeting others: "hey alice", "hi bob" → "NO:greeting_others"
+- General chat: "lol", "nice", "cool" → "NO:general_chat"  
+- Unrelated topics: "what's for lunch?" → "NO:off_topic"
+- Side conversations: talking about non-bot things → "NO:side_conversation"
+
+Respond: "YES:continuing" or "NO:reason"`;
+  }
+
+  private buildNewMessagePrompt(messageText: string): string {
+    return `You are analyzing if a user wants to engage with bot "flaunchy" in a group chat.
+
+CONTEXT: Most obvious mentions like "@flaunchy" and "hey flaunchy" are pre-filtered. You handle BOT COMMANDS and edge cases.
+
+USER MESSAGE: "${messageText}"
+
+Does this message want to engage with flaunchy?
+
+ENGAGE (respond "YES:reason"):
+- Bot commands: "create a group", "launch a coin", "show my groups" → "YES:bot_command"
+- Help requests: "help", "what can you do", "how does this work" → "YES:help_request"
+- Bot actions: "start", "begin", "initialize" → "YES:action_request"
+- Addressing flaunchy: "ok flaunchy let's...", "sure flaunchy...", "alright flaunchy..." → "YES:addressing_bot"
+- Creative mentions: "flaunchy?", "yo flaunchy!" → "YES:creative_mention"
+
+DO NOT ENGAGE (respond "NO:reason"):
+- General greetings: "hi", "hello", "hey" (without bot name) → "NO:general_greeting"
+- Casual chat: "what's up", "how are you", "nice", "cool" → "NO:casual_chat"
+- Pure social talk: "hey alice", "bob how are you" (not involving bot) → "NO:talking_to_others"
+- Unrelated topics: "what's for lunch", "did you see the game" → "NO:off_topic"
+
+IMPORTANT: If someone says "ok flaunchy" or "yes flaunchy" they are clearly addressing the bot, even if they mention others after.
+
+Respond: "YES:reason" or "NO:reason"`;
   }
 
   /**
