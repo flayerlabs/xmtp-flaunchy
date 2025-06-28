@@ -28,6 +28,14 @@ export class OnboardingFlow extends BaseFlow {
 
     // Handle pending transaction updates first
     if (userState.pendingTransaction) {
+      // Check if user wants to cancel the transaction
+      const isCancellation = await this.detectCancellation(context, messageText);
+      if (isCancellation) {
+        await this.cancelTransaction(context);
+        await this.sendResponse(context, "transaction cancelled.");
+        return;
+      }
+      
       const transactionResponse = await this.handlePendingTransactionInquiry(context, messageText);
       if (transactionResponse) {
         await this.sendResponse(context, transactionResponse);
@@ -389,7 +397,7 @@ export class OnboardingFlow extends BaseFlow {
         model: 'gpt-4o-mini',
         messages: [{
           role: 'user',
-          content: `Does this message request to include all group chat members? "${messageText}" 
+          content: `Does this message request to include ALL group chat members? "${messageText}" 
           
           Look for requests like:
           - "everyone"
@@ -398,6 +406,12 @@ export class OnboardingFlow extends BaseFlow {
           - "include everyone"
           - "everyone in the chat"
           - "add everyone"
+          - "create a group for everyone"
+          - "flaunchy create a group for everyone"
+          - "group for everyone"
+          - "everyone in this chat"
+          - "all of us"
+          - "all people here"
           
           Answer only "yes" or "no".`
         }],
@@ -405,7 +419,15 @@ export class OnboardingFlow extends BaseFlow {
         max_tokens: 5
       });
 
-      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      const result = response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      
+      console.log('[OnboardingFlow] Everyone detection:', {
+        messageText: messageText.substring(0, 50),
+        result,
+        userId: context.userState.userId.substring(0, 8) + "..."
+      });
+      
+      return result;
     } catch (error) {
       this.logError('Failed to detect add everyone intent', error);
       return false;
@@ -424,8 +446,21 @@ export class OnboardingFlow extends BaseFlow {
           const memberInboxState = await context.client.preferences.inboxStateFromInboxIds([member.inboxId]);
           if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
             const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName = await context.ensResolver.resolveSingleAddress(memberAddress);
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              // If resolution fails, use address as fallback
+              this.log(`Could not resolve address ${memberAddress}, using address as username`);
+            }
+            
             feeReceivers.push({
-              username: memberAddress,
+              username: username,
               resolvedAddress: memberAddress,
               percentage: undefined // Equal split
             });
@@ -1306,6 +1341,8 @@ Answer only "yes" or "no".`
       return false;
     }
   }
+
+
 
   private async detectCompleteGroupReplacement(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;

@@ -1634,8 +1634,8 @@ export class EnhancedMessageCoordinator {
     // Check for VERY OBVIOUS direct address to agent
     const obviousPatterns = [
       new RegExp(`^(hey|hello|hi|ok|yes|sure|alright)\\s+${agentName}\\b`, 'i'), // "hey flaunchy", "ok flaunchy"
-      new RegExp(`^${agentName}\\s+(hey|hello|hi|let|can|help|show|create)`, 'i'), // "flaunchy hey", "flaunchy let's"
-      new RegExp(`^${agentName}[,\\s]+(help|what|how|can|could|show|let)`, 'i'), // "flaunchy, help me", "flaunchy let's"
+      new RegExp(`^${agentName}\\s+(hey|hello|hi|let|can|help|show|create|add|include|remove|launch|make)`, 'i'), // "flaunchy hey", "flaunchy add", "flaunchy create"
+      new RegExp(`^${agentName}[,\\s]+(help|what|how|can|could|show|let|add|create|launch|include)`, 'i'), // "flaunchy, help me", "flaunchy add javery"
     ];
 
     // Check obvious patterns
@@ -1797,6 +1797,7 @@ Does this message want to engage with flaunchy?
 
 ENGAGE (respond "YES:reason"):
 - Bot commands: "create a group", "launch a coin", "show my groups" → "YES:bot_command"
+- Bot name + action: "flaunchy add javery", "flaunchy create group", "flaunchy help" → "YES:bot_command"
 - Help requests: "help", "what can you do", "how does this work" → "YES:help_request"
 - Bot actions: "start", "begin", "initialize" → "YES:action_request"
 - Addressing flaunchy: "ok flaunchy let's...", "sure flaunchy...", "alright flaunchy..." → "YES:addressing_bot"
@@ -1808,7 +1809,7 @@ DO NOT ENGAGE (respond "NO:reason"):
 - Pure social talk: "hey alice", "bob how are you" (not involving bot) → "NO:talking_to_others"
 - Unrelated topics: "what's for lunch", "did you see the game" → "NO:off_topic"
 
-IMPORTANT: If someone says "ok flaunchy" or "yes flaunchy" they are clearly addressing the bot, even if they mention others after.
+IMPORTANT: If someone says "flaunchy [action]" like "flaunchy add javery please" they are clearly addressing the bot.
 
 Respond: "YES:reason" or "NO:reason"`;
   }

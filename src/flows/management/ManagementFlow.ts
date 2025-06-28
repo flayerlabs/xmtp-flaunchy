@@ -452,8 +452,21 @@ If no parameters are mentioned, return: {}`
           const memberInboxState = await context.client.preferences.inboxStateFromInboxIds([member.inboxId]);
           if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
             const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName = await context.ensResolver.resolveSingleAddress(memberAddress);
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              // If resolution fails, use address as fallback
+              this.log(`Could not resolve address ${memberAddress}, using address as username`);
+            }
+            
             everyoneReceivers.push({
-              username: memberAddress,
+              username: username,
               resolvedAddress: memberAddress,
               percentage: undefined
             });
@@ -761,12 +774,8 @@ If no parameters are mentioned, return: {}`
     return transactionDetails || 'transaction ready to sign.';
   }
 
-  private async cancelTransaction(context: FlowContext): Promise<void> {
-    await context.updateState({
-      pendingTransaction: undefined,
-      managementProgress: undefined
-    });
-  }
+  // Use centralized cancellation from BaseFlow
+  // private async cancelTransaction method is now inherited from BaseFlow
 
   private async handleOngoingProcess(context: FlowContext): Promise<void> {
     const progress = context.userState.managementProgress!;
@@ -1132,8 +1141,21 @@ Answer only "yes" or "no".`
           const memberInboxState = await context.client.preferences.inboxStateFromInboxIds([member.inboxId]);
           if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
             const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName = await context.ensResolver.resolveSingleAddress(memberAddress);
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              // If resolution fails, use address as fallback
+              this.log(`Could not resolve address ${memberAddress}, using address as username`);
+            }
+            
             feeReceivers.push({
-              username: memberAddress,
+              username: username,
               resolvedAddress: memberAddress,
               percentage: undefined
             });

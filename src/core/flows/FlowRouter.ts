@@ -321,6 +321,9 @@ export class FlowRouter {
       - Different scope: "launch a group for everyone" vs pending individual coin
       - Explicit new beginnings: "actually, let's create a group instead"
       - Unrelated actions: "show my existing groups", "list my coins"
+      - General Q&A questions: "what's my address?", "who am I?", "what can you do?", "how does this work?"
+      - Personal info requests: "what's my wallet address?", "what address am I?"
+      - Help/capability questions: "help", "explain this", "what are your features?"
       
       Message: "${messageText}"
       

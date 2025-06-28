@@ -191,8 +191,21 @@ export class GroupLaunchFlow extends BaseFlow {
           const memberInboxState = await context.client.preferences.inboxStateFromInboxIds([member.inboxId]);
           if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
             const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName = await context.ensResolver.resolveSingleAddress(memberAddress);
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              // If resolution fails, use address as fallback
+              this.log(`Could not resolve address ${memberAddress}, using address as username`);
+            }
+            
             feeReceivers.push({
-              username: memberAddress,
+              username: username,
               resolvedAddress: memberAddress,
               percentage: undefined
             });

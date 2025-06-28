@@ -169,6 +169,10 @@ GREETINGS AND CASUAL CONVERSATION → qa:
 - "hey flaunchy" = qa (casual greeting)
 
 QUESTIONS (seeking information) → qa:
+- "What's my address Flaunchy?" = qa (asking for personal info)
+- "what's my wallet address?" = qa (asking for personal info)
+- "what address am I?" = qa (asking for personal info)
+- "who am I?" = qa (asking for identity info)
 - "can I create a group with different fee splits for each receiver?" = qa (asking about capability)
 - "do you support custom fee splits?" = qa (asking about features)
 - "is it possible to have unequal splits?" = qa (asking about possibility)
