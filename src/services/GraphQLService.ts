@@ -85,13 +85,7 @@ export class GraphQLService {
         headers['x-chain-id'] = chainConfig.id.toString();
       }
 
-      console.log('🔍 FETCHING GROUP DATA', {
-        url: `${this.apiUrl}/graphql`,
-        addresses: groupAddresses,
-        chain: chainConfig ? `${chainConfig.displayName} (${chainConfig.id})` : 'Base Mainnet (default)',
-        headers: chainConfig && chainConfig.name !== 'base' ? { 'x-chain-id': headers['x-chain-id'] } : 'none',
-        query: query.trim()
-      });
+      console.log(`[GraphQL] 🔍 Fetching ${groupAddresses.length} groups on ${chainConfig ? chainConfig.displayName : 'Base Mainnet'}`);
 
       const response = await fetch(`${this.apiUrl}/graphql`, {
         method: 'POST',
@@ -110,14 +104,7 @@ export class GraphQLService {
         throw new Error(`GraphQL errors: ${result.errors.map(e => e.message).join(', ')}`);
       }
 
-      console.log('✅ GROUP DATA FETCHED', {
-        groupCount: result.data.addressFeeSplitManagers.length,
-        chain: chainConfig ? chainConfig.displayName : 'Base Mainnet',
-        groups: result.data.addressFeeSplitManagers.map(g => ({
-          id: g.id,
-          holdingsCount: g.holdings.length
-        }))
-      });
+      console.log(`[GraphQL] ✅ Fetched ${result.data.addressFeeSplitManagers.length} groups`);
 
       return result.data.addressFeeSplitManagers;
     } catch (error) {

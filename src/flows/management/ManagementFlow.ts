@@ -11,6 +11,7 @@ import { AddressFeeSplitManagerAbi } from "../../../abi/AddressFeeSplitManager";
 import { getDisplayName } from "../../../utils/ens";
 import { getCharacterResponse } from "../../../utils/character";
 import { GroupStorageService } from "../../services/GroupStorageService";
+import { safeParseJSON } from "../../core/utils/jsonUtils";
 
 type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
 
@@ -72,84 +73,38 @@ export class ManagementFlow extends BaseFlow {
   private async handlePendingTransaction(context: FlowContext, messageText: string): Promise<string | null> {
     const { userState } = context;
     
-    // Add comprehensive logging for debugging
     if (!userState.pendingTransaction) {
-      this.log('No pending transaction found', {
-        userId: userState.userId,
-        messageText: messageText.substring(0, 100)
-      });
-      console.log('🚫 No pending transaction found for user:', userState.userId);
       return null;
     }
     
-    // Log pending transaction details
     const pendingTx = userState.pendingTransaction;
-    this.log('Found pending transaction', {
-      userId: userState.userId,
-      transactionType: pendingTx.type,
-      pendingTransaction: pendingTx,
-      messageText: messageText.substring(0, 100)
-    });
-    
-    console.log('💳 PENDING TRANSACTION DETAILS:', {
-      userId: userState.userId,
-      type: pendingTx.type,
-      coinData: pendingTx.coinData,
-      launchParameters: pendingTx.launchParameters,
-      network: pendingTx.network,
-      timestamp: pendingTx.timestamp,
-      messageText: messageText
-    });
     
     // Use LLM to determine if the message is about the pending transaction
     const isTransactionRelated = await this.isMessageAboutPendingTransaction(context, messageText, userState.pendingTransaction?.type || 'unknown');
     
-    console.log('🤖 TRANSACTION RELATION CHECK:', {
-      userId: userState.userId,
-      messageText,
-      isTransactionRelated,
-      transactionType: pendingTx.type
-    });
-    
     // If message is not transaction-related, don't handle it here
     if (!isTransactionRelated) {
-      this.log('Message not about pending transaction, passing through', {
-        userId: userState.userId,
-        messageText: messageText.substring(0, 100)
-      });
-      console.log('⏭️ Message not transaction-related, passing to normal flow');
       return null;
     }
-    
-    console.log('✅ Message IS transaction-related, handling...');
     
     // Use LLM to classify the transaction-related intent
     const transactionIntent = await this.classifyTransactionIntent(context, messageText);
     
-    console.log('🎯 TRANSACTION INTENT:', {
-      userId: userState.userId,
-      intent: transactionIntent,
-      messageText
-    });
-    
     switch (transactionIntent) {
       case 'cancel':
-        console.log('🚫 CANCELLING TRANSACTION');
+        console.log(`[Management] 🚫 Cancelling ${pendingTx.type} transaction`);
         await this.cancelTransaction(context);
         return 'transaction cancelled.';
         
       case 'modify':
-        console.log('🔧 MODIFYING TRANSACTION');
+        console.log(`[Management] 🔧 Modifying ${pendingTx.type} transaction`);
         const modifyResult = await this.modifyTransaction(context, messageText);
-        console.log('🔧 MODIFY RESULT:', { modifyResult, isNull: modifyResult === null });
         return modifyResult;
         
       case 'inquiry':
-        console.log('❓ HANDLING INQUIRY');
         return await this.handleTransactionInquiry(context, messageText);
         
       default:
-        console.log('❓ DEFAULT TO INQUIRY');
         return await this.handleTransactionInquiry(context, messageText);
     }
   }
@@ -331,15 +286,22 @@ IMPORTANT TERMINOLOGY:
 - "prebuy", "premine", "pre-buy", "pre-mine" → refers to premineAmount (tokens bought at launch, costs ETH)
 - "buyback", "buy back", "automated buybacks" → refers to buybackPercentage (fee allocation for buybacks)
 
-Return ONLY a JSON object with any changed parameters:
+Return your response in this exact format:
+
+\`\`\`json
 {
   "startingMarketCap": number (if mentioned),
   "fairLaunchDuration": number (if mentioned, in minutes),
   "premineAmount": number (if mentioned, as percentage for prebuy/premine),
   "buybackPercentage": number (if mentioned, as percentage for buybacks)
 }
+\`\`\`
 
-If no parameters are mentioned, return: {}`
+If no parameters are mentioned, return:
+
+\`\`\`json
+{}
+\`\`\``
         }],
         temperature: 0.1,
         max_tokens: 100
@@ -352,7 +314,7 @@ If no parameters are mentioned, return: {}`
 
       let parameterChanges;
       try {
-        parameterChanges = JSON.parse(content);
+        parameterChanges = safeParseJSON(content);
       } catch (error) {
         return "couldn't understand what parameters to change.";
       }
@@ -930,12 +892,13 @@ If no parameters are mentioned, return: {}`
         message += groupDisplay + '\n';
       }
       
-      message += `manage at https://mini.flaunch.gg`;
       await this.sendResponse(context, message);
+      await this.sendMiniAppUrl(context);
       
     } catch (error) {
       this.logError('Failed to get group details', error);
-      await this.sendResponse(context, `you have ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}. manage at https://mini.flaunch.gg`);
+      await this.sendResponse(context, `you have ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}.`);
+      await this.sendMiniAppUrl(context);
     }
   }
 
@@ -966,12 +929,13 @@ If no parameters are mentioned, return: {}`
         message += ` claimable fees: ${totalFees.toFixed(6)} ETH.`;
       }
       
-      message += ` manage at https://mini.flaunch.gg`;
       await this.sendResponse(context, message);
+      await this.sendMiniAppUrl(context);
       
     } catch (error) {
       this.logError('Failed to check fee balances', error);
-      await this.sendResponse(context, `you have ${currentNetworkCoins.length} coin${currentNetworkCoins.length > 1 ? 's' : ''} on ${currentChain.displayName}. manage at https://mini.flaunch.gg`);
+      await this.sendResponse(context, `you have ${currentNetworkCoins.length} coin${currentNetworkCoins.length > 1 ? 's' : ''} on ${currentChain.displayName}.`);
+      await this.sendMiniAppUrl(context);
     }
   }
 
@@ -1002,7 +966,8 @@ If no parameters are mentioned, return: {}`
   }
 
   private async claimFees(context: FlowContext): Promise<void> {
-    await this.sendResponse(context, "claim fees at https://mini.flaunch.gg");
+    await this.sendResponse(context, "claim fees at:");
+    await this.sendMiniAppUrl(context);
   }
 
   private async checkFees(context: FlowContext): Promise<void> {
@@ -1266,21 +1231,6 @@ Answer only "yes" or "no".`
       coin.groupId?.toLowerCase() === group.id.toLowerCase() && coin.launched
     );
     
-    // Debug logging
-    console.log('🔍 GROUP COIN COUNT DEBUG:', {
-      groupId: group.id,
-      groupIdLower: group.id.toLowerCase(),
-      totalCoins: userState.coins.length,
-      coinsWithGroupId: userState.coins.map((coin: any) => ({
-        ticker: coin.ticker,
-        groupId: coin.groupId,
-        groupIdLower: coin.groupId?.toLowerCase(),
-        launched: coin.launched,
-        matches: coin.groupId?.toLowerCase() === group.id.toLowerCase()
-      })),
-      matchingCoins: groupCoins.length
-    });
-    
     return groupCoins.length;
   }
 
@@ -1364,5 +1314,12 @@ Answer only "yes" or "no".`
       // NO USER MESSAGE - clearing should be invisible to the user
       // They just want their management action completed, not to hear about technical cleanup
     }
+  }
+
+  /**
+   * Send the mini app URL as a separate message for proper embedding
+   */
+  private async sendMiniAppUrl(context: FlowContext): Promise<void> {
+    await this.sendResponse(context, "https://mini.flaunch.gg");
   }
 } 

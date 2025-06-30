@@ -27,15 +27,6 @@ export class GroupStorageService {
     // Generate a fun group name
     const groupName = GroupCreationUtils.generateGroupName(receivers);
     
-    console.log('🏪 Storing group for all receivers (by Ethereum address):', {
-      creatorInboxId,
-      creatorAddress,
-      contractAddress,
-      groupName,
-      receiverCount: receivers.length,
-      chainName
-    });
-
     // Create the group object
     const newGroup: UserGroup = {
       id: contractAddress,
@@ -73,13 +64,6 @@ export class GroupStorageService {
       }
     }
 
-    console.log('📝 Storing group for all addresses:', {
-      groupName,
-      contractAddress,
-      totalAddresses: allAddresses.size,
-      addresses: Array.from(allAddresses)
-    });
-
     // Store the group for each address
     const promises = Array.from(allAddresses).map(async (address) => {
       try {
@@ -92,18 +76,14 @@ export class GroupStorageService {
         // If user didn't exist before (truly new), mark them as invited
         // This will trigger a welcome message when they first interact
         if (!userExists) {
-          console.log(`Setting invited status for new user: ${address}`);
           userState = await this.sessionManager.updateUserState(address, {
             status: 'invited'
           });
-        } else {
-          console.log(`User ${address} already has state (status: ${userState.status}), not setting invited status`);
         }
         
         // Check if they already have this group (avoid duplicates)
         const existingGroup = userState.groups.find(g => g.id === contractAddress);
         if (existingGroup) {
-          console.log(`⚠️ Group ${contractAddress} already exists for address ${address}`);
           return;
         }
 
@@ -115,7 +95,6 @@ export class GroupStorageService {
           ]
         });
 
-        console.log(`✅ Added group "${groupName}" to address ${address}`);
       } catch (error) {
         console.error(`❌ Failed to add group to address ${address}:`, error);
         // Continue with other addresses even if one fails
@@ -125,7 +104,7 @@ export class GroupStorageService {
     // Wait for all promises to complete
     await Promise.allSettled(promises);
     
-    console.log(`Group "${groupName}" stored for ${allAddresses.size} addresses`);
+    console.log(`[GroupStorageService] Stored "${groupName}" for ${allAddresses.size} addresses`);
     
     return groupName;
   }
@@ -136,7 +115,7 @@ export class GroupStorageService {
   async removeGroupFromAllReceivers(contractAddress: string): Promise<void> {
     // This would be used for cleanup if needed
     // For now, we'll keep it simple and not implement removal
-    console.log(`🗑️ Group removal not implemented for ${contractAddress}`);
+    console.log(`[GroupStorageService] Group removal not implemented for ${contractAddress}`);
   }
 
   /**
@@ -148,13 +127,6 @@ export class GroupStorageService {
     coin: UserCoin,
     creatorAddress: string
   ): Promise<void> {
-    console.log('🪙 Adding coin to all group members:', {
-      groupId,
-      coinTicker: coin.ticker,
-      coinName: coin.name,
-      creatorAddress
-    });
-
     try {
       // Get the creator's user state to find the group and its members
       const creatorState = await this.sessionManager.getUserState(creatorAddress);
@@ -180,13 +152,6 @@ export class GroupStorageService {
         }
       }
 
-      console.log('📝 Adding coin to all member addresses:', {
-        groupId,
-        coinTicker: coin.ticker,
-        totalAddresses: allAddresses.size,
-        addresses: Array.from(allAddresses)
-      });
-
       // Add the coin to each member's state
       const promises = Array.from(allAddresses).map(async (address) => {
         try {
@@ -197,7 +162,6 @@ export class GroupStorageService {
             c.ticker === coin.ticker && c.groupId.toLowerCase() === groupId.toLowerCase()
           );
           if (existingCoin) {
-            console.log(`⚠️ Coin ${coin.ticker} already exists for address ${address}`);
             return;
           }
 
@@ -214,7 +178,6 @@ export class GroupStorageService {
             )
           });
 
-          console.log(`✅ Added coin "${coin.ticker}" to address ${address}`);
         } catch (error) {
           console.error(`❌ Failed to add coin to address ${address}:`, error);
           // Continue with other addresses even if one fails
@@ -224,7 +187,7 @@ export class GroupStorageService {
       // Wait for all promises to complete
       await Promise.allSettled(promises);
       
-      console.log(`Coin "${coin.ticker}" added to ${allAddresses.size} group members`);
+      console.log(`[GroupStorageService] Added "${coin.ticker}" to ${allAddresses.size} group members`);
       
     } catch (error) {
       console.error(`❌ Failed to add coin to all group members for group ${groupId}:`, error);

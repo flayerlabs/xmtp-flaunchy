@@ -13,7 +13,6 @@ export class UserDataService {
    */
   async injectGroupData(userState: UserState): Promise<UserState> {
     if (userState.groups.length === 0) {
-      console.log('No groups to inject data for');
       return userState;
     }
 
@@ -21,12 +20,6 @@ export class UserDataService {
       // Get all group addresses (IDs)
       const groupAddresses = userState.groups.map(group => group.id);
       
-      console.log('🔄 INJECTING GROUP DATA', {
-        userId: userState.userId,
-        groupCount: groupAddresses.length,
-        addresses: groupAddresses
-      });
-
       // Fetch live data from API
       const apiGroupData = await this.graphqlService.fetchGroupData(groupAddresses);
       
@@ -41,11 +34,6 @@ export class UserDataService {
         const liveData = apiDataMap.get(group.id.toLowerCase());
         
         if (liveData) {
-          console.log(`✅ Injecting data for group ${group.id}:`, {
-            recipients: liveData.recipients.length,
-            holdings: liveData.holdings.length
-          });
-
           const totalFeesUSDC = liveData.holdings
             .reduce((total, holding) => {
               const fees = parseFloat(holding.collectionToken.pool.totalFeesUSDC || '0');
@@ -63,13 +51,14 @@ export class UserDataService {
             }
           };
         } else {
-          console.log(`⚠️ No API data found for group ${group.id}`);
           return group;
         }
       });
 
       // Update coins with live data
       const updatedCoins = await this.injectCoinData(userState.coins, apiDataMap);
+
+      console.log(`[UserDataService] Injected live data for ${updatedGroups.length} groups, ${updatedCoins.length} coins`);
 
       return {
         ...userState,
@@ -102,13 +91,6 @@ export class UserDataService {
         });
 
         if (holding) {
-          console.log(`✅ Injecting data for coin ${coin.ticker}:`, {
-            contractAddress: holding.collectionToken.id,
-            marketCapUSDC: holding.collectionToken.marketCapUSDC,
-            totalHolders: holding.collectionToken.totalHolders,
-            priceChange: holding.collectionToken.priceChangePercentage
-          });
-
           return {
             ...coin,
             liveData: {

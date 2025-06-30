@@ -103,7 +103,7 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
           imageUrl = Buffer.from(new Uint8Array(buffer)).toString('base64');
         }
       } catch (error) {
-        console.error('Failed to fetch image:', error);
+        console.log(`[FlaunchTransaction] ❌ Failed to fetch image: ${error instanceof Error ? error.message : String(error)}`);
       }
     } else if (image.startsWith('ipfs://')) {
       imageUrl = image;
@@ -134,7 +134,7 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
         },
       });
     } catch (error) {
-      console.error('Failed to generate token URI:', error);
+      console.log(`[FlaunchTransaction] ❌ Failed to generate token URI: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -189,49 +189,11 @@ export async function createFlaunchTransaction(params: FlaunchTransactionParams)
     const finalCost = (totalCost * 110n) / 100n;
     transactionValue = finalCost.toString();
     
-    // Debug logging
-    console.log('💰 Coin Launch Transaction Value:', {
-      ticker,
-      name,
-      startingMarketCapUSD,
-      preminePercentage,
-      premineAmount: premineAmount.toString(),
-      baseFeeETH: fee.toString(),
-      premineHasCost: premineAmount > 0n,
-      premineCalculateCost: premineAmount > 0n ? cost.toString() : 'N/A',
-      totalCostETH: totalCost.toString(),
-      finalCostWithBufferETH: finalCost.toString(),
-      transactionValueETH: transactionValue,
-      chainId: chain.id,
-      // Additional debug info
-      conversionCheck: {
-        baseFeeInETH: (Number(fee) / 1e18).toFixed(18),
-        premineCalculateCostInETH: premineAmount > 0n ? (Number(cost) / 1e18).toFixed(18) : 'N/A',
-        totalCostInETH: (Number(totalCost) / 1e18).toFixed(18),
-        finalCostInETH: (Number(finalCost) / 1e18).toFixed(18),
-        ethAmountFromInitialPrice: ethAmount.toString(),
-        ethAmountFromInitialPriceAsETH: (Number(ethAmount) / 1e6).toFixed(6) + ' USD'
-      }
-    });
-    
-    // Prominent ETH value log
-    console.log(`🚀 LAUNCHING $${ticker}: Sending ${transactionValue} wei ETH (${(Number(transactionValue) / 1e18).toFixed(6)} ETH) with transaction`);
-    console.log(`💰 Transaction value in hex: 0x${BigInt(transactionValue).toString(16)}`);
-    
-    // Let's also log what the calculateFee call is actually returning
-    if (premineAmount > 0n) {
-      console.log('🔍 CALCULATE FEE DEBUG:', {
-        premineAmountInput: premineAmount.toString(),
-        slippageInput: '0',
-        initialPriceParamsInput: initialPriceParams,
-        calculateFeeOutput: cost.toString(),
-        calculateFeeOutputInETH: (Number(cost) / 1e18).toFixed(18)
-      });
+    console.log(`[FlaunchTransaction] 🚀 Created $${ticker} launch transaction: ${(Number(finalCost) / 1e18).toFixed(6)} ETH${premineAmount > 0n ? ` (${preminePercentage}% premine)` : ''}`);
+      } catch (error) {
+      console.log(`[FlaunchTransaction] ❌ Failed to calculate transaction value: ${error instanceof Error ? error.message : String(error)}`);
+      // Fallback to 0 if calculation fails - transaction may fail but won't throw here
     }
-  } catch (error) {
-    console.error('Failed to calculate transaction value:', error);
-    // Fallback to 0 if calculation fails - transaction may fail but won't throw here
-  }
 
   // Flaunch parameters
   const flaunchParams = {

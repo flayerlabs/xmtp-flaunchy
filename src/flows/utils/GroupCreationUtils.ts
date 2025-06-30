@@ -17,6 +17,7 @@ import {
   LaunchExtractionResult,
 } from "../onboarding/launchExtractionTemplate";
 import { ChainConfig, DEFAULT_CHAIN } from "./ChainSelection";
+import { safeParseJSON } from "../../core/utils/jsonUtils";
 
 export interface FeeReceiver {
   username: string;
@@ -64,7 +65,7 @@ export class GroupCreationUtils {
       const content = response.choices[0]?.message?.content?.trim();
       if (!content) return null;
 
-      const result = JSON.parse(content) as LaunchExtractionResult;
+      const result = safeParseJSON<LaunchExtractionResult>(content);
 
       if (
         result.feeReceivers &&
@@ -109,10 +110,7 @@ export class GroupCreationUtils {
         try {
           address = await context.resolveUsername(receiver.username);
         } catch (error) {
-          console.log(
-            `Failed to resolve username: ${receiver.username}`,
-            error
-          );
+          console.log(`[GroupCreation] ❌ Failed to resolve username: ${receiver.username}`);
         }
       }
 
@@ -135,14 +133,7 @@ export class GroupCreationUtils {
     chainConfig: ChainConfig,
     description?: string
   ): Promise<any> {
-    console.log("🏗️  GROUP DEPLOYMENT CALL CREATION STARTED", {
-      receiverCount: resolvedReceivers.length,
-      creatorAddress,
-      chainConfig: chainConfig.displayName,
-      description,
-    });
-
-    // ENHANCED VALIDATION: Check for inbox IDs that shouldn't be here
+    // Validate receiver addresses
     const invalidReceivers = resolvedReceivers.filter(
       (r) =>
         !r.resolvedAddress ||
@@ -151,7 +142,7 @@ export class GroupCreationUtils {
     );
 
     if (invalidReceivers.length > 0) {
-      console.error("❌ INVALID RECEIVERS DETECTED:", invalidReceivers);
+      console.log(`[GroupCreation] ❌ Invalid addresses: ${invalidReceivers.map(r => r.username).join(', ')}`);
       throw new Error(
         `Invalid receiver addresses detected: ${invalidReceivers
           .map((r) => `${r.username}: ${r.resolvedAddress}`)
@@ -166,19 +157,6 @@ export class GroupCreationUtils {
     const receivers = Array.from(
       new Set(resolvedReceivers.map((r) => r.resolvedAddress!.toLowerCase()))
     ); // Deduplicated addresses
-
-    console.log("📊 RECEIVER VALIDATION AND DEDUPLICATION", {
-      originalCount: resolvedReceivers.length,
-      uniqueAddressCount: receivers.length,
-      receivers: resolvedReceivers.map((r) => ({
-        username: r.username,
-        resolvedAddress: r.resolvedAddress,
-        percentage: r.percentage,
-        isValidAddress:
-          r.resolvedAddress?.startsWith("0x") &&
-          r.resolvedAddress?.length === 42,
-      })),
-    });
 
     // Validate all receivers have resolved addresses
     for (const receiver of resolvedReceivers) {
@@ -224,18 +202,6 @@ export class GroupCreationUtils {
       totalAllocated += share;
     }
 
-    console.log("📈 SHARE CALCULATION COMPLETE", {
-      totalAllocated: totalAllocated.toString(),
-      expectedTotal: TOTAL_SHARE.toString(),
-      uniqueReceivers: Array.from(addressShareMap.entries()).map(
-        ([addr, share]) => ({
-          address: addr,
-          share: share.toString(),
-          percentage: (Number(share) / 100000).toFixed(2) + "%",
-        })
-      ),
-    });
-
     // Validate total shares equal exactly TOTAL_SHARE (allow for small rounding errors)
     const calculatedTotal = Array.from(addressShareMap.values()).reduce(
       (sum, share) => sum + share,
@@ -263,9 +229,6 @@ export class GroupCreationUtils {
         const adjustment =
           calculatedTotal > TOTAL_SHARE ? -difference : difference;
         addressShareMap.set(lastAddress, lastShare + adjustment);
-        console.log(
-          `✅ Adjusted last receiver by ${adjustment} to handle rounding`
-        );
       }
     }
 
@@ -273,7 +236,6 @@ export class GroupCreationUtils {
       (sum, share) => sum + share,
       0n
     );
-    console.log("✅ Total shares validation passed:", finalTotal.toString());
 
     // Calculate recipient shares using deduplicated data
     const recipientShares = Array.from(addressShareMap.entries()).map(
@@ -315,13 +277,7 @@ export class GroupCreationUtils {
     const addressFeeSplitManagerImplementation =
       AddressFeeSplitManagerAddress[chainConfig.id];
 
-    console.log("🔗 CONTRACT ADDRESS LOOKUP", {
-      chainId: chainConfig.id,
-      chainName: chainConfig.name,
-      chainDisplayName: chainConfig.displayName,
-      treasuryManagerFactory,
-      addressFeeSplitManagerImplementation,
-    });
+
 
     if (!treasuryManagerFactory || !addressFeeSplitManagerImplementation) {
       throw new Error(
@@ -375,13 +331,7 @@ export class GroupCreationUtils {
       ],
     };
 
-    console.log("🎯 GROUP DEPLOYMENT TRANSACTION CREATED", {
-      success: true,
-      receiverCount: resolvedReceivers.length,
-      uniqueAddresses: addressShareMap.size,
-      totalShare: finalTotal.toString(),
-      description: finalDescription,
-    });
+    console.log(`[GroupCreation] ✅ Created group deployment transaction for ${resolvedReceivers.length} receivers (${addressShareMap.size} unique addresses)`);
 
     // Return wallet send calls in the correct format
     return walletSendCalls;

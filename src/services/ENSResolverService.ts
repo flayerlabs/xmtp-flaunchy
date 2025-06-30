@@ -77,11 +77,7 @@ export class ENSResolverService {
 
       const query = `query { ${queries} }`;
 
-      console.log('🔍 RESOLVING ADDRESSES', {
-        url: `${this.apiUrl}/graphql`,
-        addresses,
-        query: query.substring(0, 200) + '...'
-      });
+      console.log(`[ENS] 🔍 Resolving ${addresses.length} addresses`);
 
       const response = await fetch(`${this.apiUrl}/graphql`, {
         method: 'POST',
@@ -110,7 +106,6 @@ export class ENSResolverService {
         if (enses && enses.length > 0) {
           const displayName = this.getPreferredDisplayName(enses[0]);
           resultMap.set(address.toLowerCase(), displayName);
-          console.log(`✅ Resolved: ${address} -> ${displayName}`);
         } else {
           // Fallback to shortened address
           const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;

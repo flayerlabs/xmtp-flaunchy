@@ -273,24 +273,9 @@ export class EnhancedMessageCoordinator {
     }
 
     // Skip transaction receipt messages that come as text with '...' content
-    if (typeof message.content === "string") {
-      const trimmedContent = message.content.trim();
-      console.log("🔍 CONTENT CHECK", {
-        originalContent: JSON.stringify(message.content),
-        trimmedContent: JSON.stringify(trimmedContent),
-        isTripleDot: trimmedContent === "...",
-        contentLength: message.content.length,
-        trimmedLength: trimmedContent.length,
-      });
-
-      if (trimmedContent === "...") {
-        console.log("⏭️ SKIPPING TRANSACTION RECEIPT", {
-          content: message.content,
-          senderInboxId: message.senderInboxId,
-          timestamp: new Date().toISOString(),
-        });
-        return false;
-      }
+    if (typeof message.content === "string" && message.content.trim() === "...") {
+      console.log("[MessageCoordinator] ⏭️ Skipping transaction receipt");
+      return false;
     }
 
     const isAttachment = message.contentType?.sameAs(
@@ -382,30 +367,10 @@ export class EnhancedMessageCoordinator {
       const primaryMessage = messages[messages.length - 1];
       const relatedMessages = messages.slice(0, -1);
 
-      // Log coordinated message processing
-      console.log("🔄 PROCESSING COORDINATED MESSAGES", {
-        totalMessages: messages.length,
-        primaryMessage: {
-          id: primaryMessage.id,
-          contentType: primaryMessage.contentType?.typeId || "text",
-          isAttachment: primaryMessage.contentType?.sameAs(
-            ContentTypeRemoteAttachment
-          ),
-          content: primaryMessage.contentType?.sameAs(
-            ContentTypeRemoteAttachment
-          )
-            ? "[ATTACHMENT]"
-            : typeof primaryMessage.content === "string"
-            ? primaryMessage.content.substring(0, 100) + "..."
-            : "[NON-TEXT]",
-        },
-        relatedMessages: relatedMessages.map((msg) => ({
-          id: msg.id,
-          contentType: msg.contentType?.typeId || "text",
-          isAttachment: msg.contentType?.sameAs(ContentTypeRemoteAttachment),
-        })),
-        timestamp: new Date().toISOString(),
-      });
+      const hasAttachment = messages.some(msg => 
+        msg.contentType?.sameAs(ContentTypeRemoteAttachment)
+      );
+      console.log(`[MessageCoordinator] 🔄 Processing ${messages.length} messages${hasAttachment ? ' (with attachment)' : ''}`);
 
       // Get conversation
       const conversation = await this.client.conversations.getConversationById(
@@ -434,15 +399,7 @@ export class EnhancedMessageCoordinator {
       );
 
       if (!shouldProcess) {
-        console.log("🚫 MESSAGE FILTERED OUT", {
-          senderInboxId: senderInboxId.substring(0, 8) + "...",
-          reason: "Not directed at agent and no ongoing process",
-          messageContent:
-            typeof primaryMessage.content === "string"
-              ? primaryMessage.content.substring(0, 50) + "..."
-              : "[NON-TEXT]",
-          timestamp: new Date().toISOString(),
-        });
+        console.log("[MessageCoordinator] 🚫 Message filtered out - not directed at agent");
         return false;
       }
 
@@ -769,12 +726,7 @@ export class EnhancedMessageCoordinator {
         "base64"
       );
 
-      console.log("📊 Image processing details:", {
-        originalDataSize: decryptedAttachment.data.length,
-        base64Size: base64Image.length,
-        filename: decryptedAttachment.filename || "image",
-        mimeType: decryptedAttachment.mimeType || "unknown",
-      });
+      console.log(`[MessageCoordinator] 📊 Processing image (${(decryptedAttachment.data.length / 1024).toFixed(1)}KB)`);
 
       // Upload to IPFS using our existing upload function
       const ipfsResponse = await uploadImageToIPFS({
@@ -783,11 +735,7 @@ export class EnhancedMessageCoordinator {
         name: decryptedAttachment.filename || "image",
       });
 
-      console.log("📋 IPFS upload response:", {
-        IpfsHash: ipfsResponse.IpfsHash,
-        PinSize: ipfsResponse.PinSize,
-        Timestamp: ipfsResponse.Timestamp,
-      });
+
 
       // Validate the IPFS hash
       if (!ipfsResponse.IpfsHash || typeof ipfsResponse.IpfsHash !== "string") {
@@ -880,16 +828,8 @@ export class EnhancedMessageCoordinator {
 
       // Parse the transaction reference content
       const transactionRef = message.content as TransactionReference;
-      console.log("📋 TRANSACTION REFERENCE RECEIVED", {
-        reference: transactionRef.reference,
-        networkId: transactionRef.networkId,
-        namespace: transactionRef.namespace,
-        metadata: transactionRef.metadata,
-      });
-
-      // Fetch the transaction receipt using the hash
       const txHash = transactionRef.reference as `0x${string}`;
-      console.log("🔍 Fetching transaction receipt for hash:", txHash);
+      console.log(`[MessageCoordinator] 🔍 Processing ${pendingTx.type} transaction: ${txHash}`);
 
       // Use default chain from environment
       const defaultChain = getDefaultChain();
@@ -902,14 +842,11 @@ export class EnhancedMessageCoordinator {
       });
 
       try {
-        console.log("⏳ Waiting for transaction to be confirmed...");
         const receipt = await publicClient.waitForTransactionReceipt({
           hash: txHash,
           timeout: 60_000, // 60 second timeout
         });
-        console.log(
-          "✅ Transaction confirmed and receipt fetched successfully"
-        );
+        console.log("[MessageCoordinator] ✅ Transaction confirmed");
 
         // Extract contract address from the receipt logs
         const contractAddress = await this.extractContractAddressFromReceipt(
@@ -1119,8 +1056,9 @@ export class EnhancedMessageCoordinator {
           const networkPath =
             network === "baseSepolia" ? "base-sepolia" : "base";
           await conversation.send(
-            `coin created! CA: ${contractAddress}\n\ntrack your coin's progress: https://mini.flaunch.gg\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`
+            `coin created! CA: ${contractAddress}\n\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`
           );
+          await conversation.send("https://mini.flaunch.gg");
           // For coin creation, add the coin to user's collection
           // Use the group address from the user's onboarding progress (the group they just created)
           const groupAddress =
@@ -1171,8 +1109,9 @@ export class EnhancedMessageCoordinator {
             await this.sessionManager.completeOnboarding(creatorAddress);
 
             // Send onboarding completion message immediately when first coin is launched
-            const completionMessage = `🎉 onboarding complete! you've got groups and coins set up. track your progress at https://mini.flaunch.gg`;
+            const completionMessage = `🎉 onboarding complete! you've got groups and coins set up.`;
             await conversation.send(completionMessage);
+            await conversation.send("https://mini.flaunch.gg");
           }
         }
 

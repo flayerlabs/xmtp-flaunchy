@@ -2,6 +2,7 @@ import { UserState } from "../types/UserState";
 import { FlowContext } from "../types/FlowContext";
 import { BaseFlow } from "./BaseFlow";
 import { IntentClassifier, MessageIntent } from "./IntentClassifier";
+import { safeParseJSON } from "../utils/jsonUtils";
 import OpenAI from "openai";
 
 export type FlowType = 'onboarding' | 'qa' | 'management' | 'coin_launch' | 'group_launch';
@@ -12,6 +13,44 @@ export interface FlowRegistry {
   management: BaseFlow;
   coin_launch: BaseFlow;
   group_launch: BaseFlow;
+}
+
+export interface UnifiedRoutingResult {
+  // Greeting detection
+  isGreeting: boolean;
+  
+  // Transaction-related
+  isTransactionInquiry: boolean;
+  isCancellation: boolean;
+  
+  // Question classification
+  questionType: 'capability' | 'informational' | null;
+  
+  // Group-related detections
+  isGroupForEveryone: boolean;
+  isAddEveryone: boolean;
+  isNewGroupCreation: boolean;
+  isGroupCreationResponse: boolean;
+  isAddToExistingGroup: boolean;
+  isCompleteGroupReplacement: boolean;
+  
+  // Onboarding-related
+  isOnboardingRelated: boolean;
+  isOnboardingQuestion: boolean;
+  isExistingReceiversInquiry: boolean;
+  
+  // Fee/percentage modifications
+  isFeeSplitModification: boolean;
+  isPercentageUpdate: boolean;
+  
+  // Coin launch related
+  isContinuingCoinLaunch: boolean;
+  isMultipleCoinRequest: boolean;
+  
+  // Action classification
+  actionType: 'create_group' | 'launch_coin' | 'modify_existing' | 'inquiry' | 'greeting' | 'other';
+  confidence: number;
+  reasoning: string;
 }
 
 export class FlowRouter {
@@ -47,140 +86,289 @@ export class FlowRouter {
   private async determineFlowType(context: FlowContext): Promise<FlowType> {
     const { userState, messageText } = context;
     
-    console.log(`[FlowRouter] 🎯 ROUTING DECISION for: "${messageText}"`);
-    console.log(`[FlowRouter] 📊 User State: status=${userState.status}, groups=${userState.groups.length}, onboarding=${!!userState.onboardingProgress}, management=${!!userState.managementProgress}, coinLaunch=${!!userState.coinLaunchProgress}, pendingTx=${!!userState.pendingTransaction}`);
+    // Single comprehensive log for routing context
+    console.log(`[FlowRouter] 🎯 ROUTING "${messageText}" | Status: ${userState.status} | Groups: ${userState.groups.length} | Coins: ${userState.coins.length} | PendingTx: ${userState.pendingTransaction?.type || 'none'}`);
     
-    // Get intent classification upfront (we'll need it for multiple decisions)
-    const intentResult = await this.intentClassifier.classifyIntent(messageText, userState, context.hasAttachment);
-    console.log(`[FlowRouter] 🧠 Intent: ${intentResult.intent} (confidence: ${intentResult.confidence.toFixed(2)}) - ${intentResult.reasoning}`);
+    // Unified detection - single API call for all routing decisions
+    const detectionResult = await this.performUnifiedDetection(context, messageText);
+    console.log(`[FlowRouter] 🔍 Detection: ${detectionResult.actionType} (${detectionResult.confidence.toFixed(2)}) | ${detectionResult.reasoning}`);
     
-    // =============================================================================
-    // PRIORITY 1: PENDING TRANSACTION HANDLING
-    // If user has a pending transaction, they need to deal with it first
-    // =============================================================================
-    if (userState.pendingTransaction) {
-      console.log(`[FlowRouter] 🔄 PRIORITY 1: Handling pending ${userState.pendingTransaction.type} transaction`);
-      
-      const isAboutTransaction = await this.isTransactionInquiry(context, messageText);
-      if (isAboutTransaction) {
-        const targetFlow = this.getFlowForPendingTransaction(userState);
-        console.log(`[FlowRouter] ✅ P1 RESULT: Message about pending transaction → ${targetFlow}`);
-        return targetFlow;
+    // Priority 0: Greeting handling
+    if (detectionResult.isGreeting) {
+      if (this.shouldStayInOnboarding(userState)) {
+        console.log(`[FlowRouter] ✅ Greeting + needs onboarding → onboarding`);
+        return 'onboarding';
       } else {
-        console.log(`[FlowRouter] ⏭️ P1 SKIP: Message not about pending transaction, continuing to next priority`);
+        await this.handleCompletedUserGreeting(context);
+        console.log(`[FlowRouter] ✅ Greeting + completed user → management`);
+        return 'management';
       }
     }
     
-    // =============================================================================
-    // PRIORITY 2: INVITED USER WELCOME
-    // Users who were added to groups by others get a welcome message first
-    // =============================================================================
+    // Get intent classification for final routing decisions
+    const intentResult = await this.intentClassifier.classifyIntent(messageText, userState, context.hasAttachment);
+    
+    // Priority 1: Pending transaction handling
+    if (userState.pendingTransaction && detectionResult.isTransactionInquiry) {
+      const targetFlow = this.getFlowForPendingTransaction(userState);
+      console.log(`[FlowRouter] ✅ Pending transaction inquiry → ${targetFlow}`);
+      return targetFlow;
+    }
+    
+    // Priority 2: Invited user welcome
     if (userState.status === 'invited') {
-      console.log(`[FlowRouter] 👋 PRIORITY 2: Invited user needs welcome → management`);
+      console.log(`[FlowRouter] ✅ Invited user → management`);
       return 'management';
     }
 
-    // =============================================================================
-    // PRIORITY 3: IMMEDIATE ACTION ROUTING (HIGH-CONFIDENCE ACTIONS)
-    // =============================================================================
-    console.log(`[FlowRouter] 🎯 PRIORITY 3: Checking for immediate actions`);
-    
-    // ENHANCED: Check for "create group for everyone" patterns that should be one-shot
-    const isGroupForEveryone = await this.detectGroupForEveryone(context, messageText);
-    if (isGroupForEveryone) {
-      console.log(`[FlowRouter] ✅ P3 RESULT: Group for everyone detected → routing to appropriate flow`);
-      // Route to group_launch for users with groups, onboarding for new users
-      if (userState.groups.length > 0) {
-        return 'group_launch';
-      } else {
-        return 'onboarding';
-      }
+    // Priority 3: Immediate high-confidence actions
+    if (detectionResult.isGroupForEveryone) {
+      const targetFlow = userState.groups.length > 0 ? 'group_launch' : 'onboarding';
+      console.log(`[FlowRouter] ✅ Group for everyone → ${targetFlow}`);
+      return targetFlow;
     }
 
-    // Check for immediate high-confidence questions that should bypass other priorities
-    const questionType = await this.detectQuestionType(context, messageText);
-    if (questionType && intentResult.confidence > 0.7) {
-      const targetFlow = questionType === 'informational' ? 'management' : 'qa';
-      console.log(`[FlowRouter] ✅ P3 RESULT: ${questionType} question detected → ${targetFlow}`);
+    if (detectionResult.questionType && intentResult.confidence > 0.7) {
+      const targetFlow = detectionResult.questionType === 'informational' ? 'management' : 'qa';
+      console.log(`[FlowRouter] ✅ High-confidence ${detectionResult.questionType} question → ${targetFlow}`);
       return targetFlow;
-    } else {
-      console.log(`[FlowRouter] ⏭️ P3 SKIP: Not a high-confidence question (questionType=${questionType}, confidence=${intentResult.confidence.toFixed(2)})`);
     }
     
-    // SPECIAL CASE: QA intent (greetings, questions) should override onboarding
-    // Allow natural conversation flow for greetings and general questions
-    if (intentResult.intent === 'qa' && intentResult.confidence >= 0.9) {
-      console.log(`[FlowRouter] 🎯 SPECIAL: High-confidence qa intent (greetings/questions) overrides onboarding → qa`);
+    // Special cases: High-confidence intents that can override onboarding
+    if (intentResult.intent === 'qa' && intentResult.confidence >= 0.9 && !this.shouldStayInOnboarding(userState)) {
+      console.log(`[FlowRouter] ✅ High-confidence QA override → qa`);
       return 'qa';
     }
     
-    // SPECIAL CASE: Management intent with high confidence should override onboarding
-    // for informational queries about existing data
     if (intentResult.intent === 'management' && intentResult.confidence >= 0.9) {
-      console.log(`[FlowRouter] 🎯 SPECIAL: High-confidence management intent overrides onboarding → management`);
+      console.log(`[FlowRouter] ✅ High-confidence management override → management`);
       return 'management';
     }
     
-    // =============================================================================
-    // PRIORITY 4: ONBOARDING (ONLY FOR NEW/INCOMPLETE USERS)
-    // New users or users with incomplete onboarding must complete it first
-    // =============================================================================
+    // Priority 4: Onboarding for new/incomplete users
     if (this.shouldStayInOnboarding(userState)) {
-      console.log(`[FlowRouter] 🎓 PRIORITY 4: User needs onboarding`);
-      
-      // SPECIAL CASE: If user has groups and intent is coin_launch, route to coin_launch
-      // This completes the onboarding flow (they need both groups AND coins)
+      // Special case: Users with groups wanting to launch coins
       if (userState.groups.length > 0 && intentResult.intent === 'coin_launch' && intentResult.confidence >= 0.8) {
-        console.log(`[FlowRouter] ✅ P4 SPECIAL: User has groups + coin launch intent → coin_launch (completing onboarding)`);
+        console.log(`[FlowRouter] ✅ Onboarding user with groups + coin launch intent → coin_launch`);
         return 'coin_launch';
       }
       
-      // Check if this is an onboarding-related interaction
-      const isOnboardingRelated = await this.isOnboardingRelatedInteraction(context, messageText);
-      if (isOnboardingRelated) {
-        console.log(`[FlowRouter] ✅ P4 RESULT: Onboarding-related interaction → onboarding`);
-        return 'onboarding';
-      } else {
-        // Users who need onboarding should ALWAYS go to onboarding
-        // The onboarding flow can handle any type of message and guide them appropriately
-        console.log(`[FlowRouter] ✅ P4 RESULT: User needs onboarding → onboarding`);
-        return 'onboarding';
-      }
-    } else {
-      console.log(`[FlowRouter] ⏭️ P4 SKIP: User doesn't need onboarding (status=${userState.status}, hasProgress=${!!userState.onboardingProgress})`);
+      console.log(`[FlowRouter] ✅ User needs onboarding → onboarding`);
+      return 'onboarding';
     }
     
-    // =============================================================================
-    // PRIORITY 5: ACTIVE FLOW CONTINUATION
-    // If user has active progress, check if they want to continue or start fresh
-    // =============================================================================
+    // Priority 5: Active flow continuation
     const activeFlow = this.getActiveFlow(userState);
     if (activeFlow) {
-      console.log(`[FlowRouter] 🔄 PRIORITY 5: User has active ${activeFlow} progress`);
-      
-      const shouldContinue = await this.shouldContinueActiveFlow(context, activeFlow);
+      const shouldContinue = await this.shouldContinueActiveFlow(context, activeFlow, detectionResult);
       if (shouldContinue) {
-        console.log(`[FlowRouter] ✅ P5 RESULT: Continuing active flow → ${activeFlow}`);
+        console.log(`[FlowRouter] ✅ Continuing active ${activeFlow} flow`);
         return activeFlow;
       } else {
-        // User wants to do something different - clear the active progress
-        console.log(`[FlowRouter] 🧹 P5 CLEAR: User wants to do something different, clearing ${activeFlow} progress`);
+        console.log(`[FlowRouter] 🧹 Clearing ${activeFlow} progress, routing fresh`);
         await this.clearActiveFlowProgress(context, activeFlow);
-        console.log(`[FlowRouter] ⏭️ P5 CONTINUE: Proceeding to fresh intent routing`);
       }
-    } else {
-      console.log(`[FlowRouter] ⏭️ P5 SKIP: No active flow progress`);
     }
     
-    // =============================================================================
-    // PRIORITY 6: FRESH INTENT ROUTING
-    // Route based on classified intent for users with no active progress
-    // =============================================================================
-    console.log(`[FlowRouter] 🎯 PRIORITY 6: Fresh intent routing`);
+    // Priority 6: Fresh intent routing
     const targetFlow = this.intentToFlowType(intentResult.intent, userState);
-    console.log(`[FlowRouter] ✅ P6 RESULT: Intent-based routing → ${targetFlow}`);
+    console.log(`[FlowRouter] ✅ Fresh intent routing: ${intentResult.intent} → ${targetFlow}`);
     
     return targetFlow;
+  }
+
+  // =============================================================================
+  // UNIFIED DETECTION SYSTEM - SINGLE API CALL FOR ALL ROUTING DECISIONS
+  // =============================================================================
+  
+  private async performUnifiedDetection(context: FlowContext, messageText: string): Promise<UnifiedRoutingResult> {
+    if (!messageText) {
+      return this.getEmptyDetectionResult();
+    }
+
+    const { userState } = context;
+    
+    // Build context for the unified detection
+    const userContext = this.buildUserContextForDetection(userState);
+    
+    const prompt = `
+You are analyzing a user message for routing decisions in a crypto token launch bot conversation.
+
+USER CONTEXT:
+${userContext}
+
+USER MESSAGE: "${messageText}"
+
+CRITICAL: Return your response in this exact format:
+
+\`\`\`json
+{...your JSON response here...}
+\`\`\`
+
+Analyze this message and return a JSON object with boolean flags for all possible routing scenarios:
+
+{
+  "isGreeting": boolean,
+  "isTransactionInquiry": boolean,
+  "isCancellation": boolean,
+  "questionType": "capability" | "informational" | null,
+  "isGroupForEveryone": boolean,
+  "isAddEveryone": boolean,
+  "isNewGroupCreation": boolean,
+  "isGroupCreationResponse": boolean,
+  "isAddToExistingGroup": boolean,
+  "isCompleteGroupReplacement": boolean,
+  "isOnboardingRelated": boolean,
+  "isOnboardingQuestion": boolean,
+  "isExistingReceiversInquiry": boolean,
+  "isFeeSplitModification": boolean,
+  "isPercentageUpdate": boolean,
+  "isContinuingCoinLaunch": boolean,
+  "isMultipleCoinRequest": boolean,
+  "actionType": "create_group" | "launch_coin" | "modify_existing" | "inquiry" | "greeting" | "other",
+  "confidence": 0.1-1.0,
+  "reasoning": "brief explanation of the primary classification"
+}
+
+DETECTION RULES:
+
+=== GREETINGS ===
+isGreeting: true for simple greetings like "hi", "hello", "hey", "what's up", "good morning", bot mentions like "hey @flaunchy"
+
+=== TRANSACTION RELATED ===
+isTransactionInquiry: true if asking about pending transaction details, status, modifications
+isCancellation: true for "cancel", "stop", "abort", "nevermind"
+
+=== QUESTIONS ===
+questionType: 
+- "capability" for "can I...", "do you support...", "is it possible..."
+- "informational" for "show my groups", "who are fee receivers", "what groups do I have"
+- null for non-questions
+
+=== GROUP ACTIONS ===
+isGroupForEveryone: true for "create group for everyone", "launch group for everyone", "add everyone", "group for everyone", "start group for everyone"
+isAddEveryone: true for requests to include all chat members
+isNewGroupCreation: true for "create another group", "new group", "additional group"
+isGroupCreationResponse: true if providing group creation details during onboarding (usernames, addresses, percentages)
+isAddToExistingGroup: true for "add @user", "include @person and @user" (small additions)
+isCompleteGroupReplacement: true for messages specifying complete new group with multiple users and equal split
+
+=== ONBOARDING ===
+isOnboardingRelated: true if this relates to ongoing onboarding process
+isOnboardingQuestion: true for questions about fee receivers, group creation process during onboarding
+isExistingReceiversInquiry: true for "who are current receivers?", "show current group"
+
+=== MODIFICATIONS ===
+isFeeSplitModification: true for "change fee split", "modify fee distribution"
+isPercentageUpdate: true for "give user X%", "set user to X%"
+
+=== COIN LAUNCH ===
+isContinuingCoinLaunch: true if continuing an active coin launch process
+isMultipleCoinRequest: true for "launch multiple coins", "create several tokens"
+
+=== ACTION TYPE ===
+Classify the primary action:
+- "create_group": Creating new groups
+- "launch_coin": Launching tokens/coins
+- "modify_existing": Modifying existing groups/coins
+- "inquiry": Asking questions/requesting information
+- "greeting": Simple greetings
+- "other": Everything else
+
+IMPORTANT: Set confidence based on how clear the intent is (0.1-1.0).
+`;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 500
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        return this.getEmptyDetectionResult();
+      }
+
+      const result = safeParseJSON<UnifiedRoutingResult>(content);
+      
+      // Validate and sanitize the result
+      return this.validateDetectionResult(result);
+      
+    } catch (error) {
+      console.error('[FlowRouter] Failed to perform unified detection:', error);
+      return this.getEmptyDetectionResult();
+    }
+  }
+
+  private buildUserContextForDetection(userState: UserState): string {
+    const pendingTxInfo = userState.pendingTransaction ? 
+      `Pending ${userState.pendingTransaction.type} transaction` : 'No pending transaction';
+    
+    return `
+- Status: ${userState.status}
+- Groups: ${userState.groups.length}
+- Coins: ${userState.coins.length}
+- Onboarding Progress: ${userState.onboardingProgress ? 'Yes' : 'No'}
+- Management Progress: ${userState.managementProgress ? 'Yes' : 'No'}
+- Coin Launch Progress: ${userState.coinLaunchProgress ? 'Yes' : 'No'}
+- ${pendingTxInfo}
+`;
+  }
+
+  private getEmptyDetectionResult(): UnifiedRoutingResult {
+    return {
+      isGreeting: false,
+      isTransactionInquiry: false,
+      isCancellation: false,
+      questionType: null,
+      isGroupForEveryone: false,
+      isAddEveryone: false,
+      isNewGroupCreation: false,
+      isGroupCreationResponse: false,
+      isAddToExistingGroup: false,
+      isCompleteGroupReplacement: false,
+      isOnboardingRelated: false,
+      isOnboardingQuestion: false,
+      isExistingReceiversInquiry: false,
+      isFeeSplitModification: false,
+      isPercentageUpdate: false,
+      isContinuingCoinLaunch: false,
+      isMultipleCoinRequest: false,
+      actionType: 'other',
+      confidence: 0.5,
+      reasoning: 'Empty or failed detection'
+    };
+  }
+
+  private validateDetectionResult(result: any): UnifiedRoutingResult {
+    // Ensure all required fields exist with proper types
+    const validated: UnifiedRoutingResult = {
+      isGreeting: Boolean(result.isGreeting),
+      isTransactionInquiry: Boolean(result.isTransactionInquiry),
+      isCancellation: Boolean(result.isCancellation),
+      questionType: ['capability', 'informational'].includes(result.questionType) ? result.questionType : null,
+      isGroupForEveryone: Boolean(result.isGroupForEveryone),
+      isAddEveryone: Boolean(result.isAddEveryone),
+      isNewGroupCreation: Boolean(result.isNewGroupCreation),
+      isGroupCreationResponse: Boolean(result.isGroupCreationResponse),
+      isAddToExistingGroup: Boolean(result.isAddToExistingGroup),
+      isCompleteGroupReplacement: Boolean(result.isCompleteGroupReplacement),
+      isOnboardingRelated: Boolean(result.isOnboardingRelated),
+      isOnboardingQuestion: Boolean(result.isOnboardingQuestion),
+      isExistingReceiversInquiry: Boolean(result.isExistingReceiversInquiry),
+      isFeeSplitModification: Boolean(result.isFeeSplitModification),
+      isPercentageUpdate: Boolean(result.isPercentageUpdate),
+      isContinuingCoinLaunch: Boolean(result.isContinuingCoinLaunch),
+      isMultipleCoinRequest: Boolean(result.isMultipleCoinRequest),
+      actionType: ['create_group', 'launch_coin', 'modify_existing', 'inquiry', 'greeting', 'other'].includes(result.actionType) 
+        ? result.actionType : 'other',
+      confidence: Math.max(0.1, Math.min(1.0, Number(result.confidence) || 0.5)),
+      reasoning: String(result.reasoning || 'No reasoning provided')
+    };
+
+    return validated;
   }
 
   // =============================================================================
@@ -234,18 +422,6 @@ export class FlowRouter {
            !hasGroupsAndCoins;
   }
 
-  private async isOnboardingRelatedInteraction(context: FlowContext, messageText: string): Promise<boolean> {
-    // Check if this is an onboarding-related question
-    const isOnboardingQuestion = await this.isOnboardingRelatedQuestion(context, messageText);
-    if (isOnboardingQuestion) return true;
-    
-    // Check if this is a group creation response during onboarding
-    const isGroupCreationResponse = await this.isGroupCreationResponseDuringOnboarding(context, messageText);
-    if (isGroupCreationResponse) return true;
-    
-    return false;
-  }
-
   private getActiveFlow(userState: UserState): FlowType | null {
     // Check for active progress in order of priority
     if (userState.managementProgress) {
@@ -261,7 +437,7 @@ export class FlowRouter {
     return null;
   }
 
-  private async shouldContinueActiveFlow(context: FlowContext, activeFlow: FlowType): Promise<boolean> {
+  private async shouldContinueActiveFlow(context: FlowContext, activeFlow: FlowType, detectionResult: UnifiedRoutingResult): Promise<boolean> {
     const { messageText } = context;
     
     switch (activeFlow) {
@@ -277,7 +453,7 @@ export class FlowRouter {
         
       case 'coin_launch':
         // For coin launch, check if user wants to continue with the coin launch
-        return await this.isContinuingCoinLaunch(context, messageText);
+        return await this.isContinuingCoinLaunch(context, messageText, detectionResult);
         
       default:
         return true;
@@ -298,178 +474,13 @@ export class FlowRouter {
     }
   }
 
-  private async isTransactionInquiry(context: FlowContext, messageText: string): Promise<boolean> {
-    const { openai, userState } = context;
-    
-    const transactionType = userState.pendingTransaction?.type === 'coin_creation' ? 'coin creation' : 'group creation';
-    
-    const prompt = `
-      User has a pending ${transactionType} transaction and said: "${messageText}"
-      
-      Is this user interacting with their pending ${transactionType} transaction, or are they starting something completely new?
-      
-      ABOUT PENDING TRANSACTION (return "yes"):
-      - Questions about transaction details: "who are the receivers?", "what addresses?", "show transaction"
-      - Modification requests for current transaction: "add @alice to this", "change the percentage"
-      - Cancellation of current transaction: "cancel", "stop", "abort", "nevermind"
-      - Status inquiries about current transaction: "what's the status?", "is it ready?"
-      - Questions about what they're creating: "who's in the group?", "what coin am I creating?"
-      
-      COMPLETELY NEW REQUEST (return "no"):
-      - Starting a different type of creation: "create a group" (when pending is coin), "launch a coin" (when pending is group)
-      - Clear new action requests: "let's start a new group", "I want to create a different group"
-      - Different scope: "launch a group for everyone" vs pending individual coin
-      - Explicit new beginnings: "actually, let's create a group instead"
-      - Unrelated actions: "show my existing groups", "list my coins"
-      - General Q&A questions: "what's my address?", "who am I?", "what can you do?", "how does this work?"
-      - Personal info requests: "what's my wallet address?", "what address am I?"
-      - Help/capability questions: "help", "explain this", "what are your features?"
-      
-      Message: "${messageText}"
-      
-      Return ONLY:
-      "yes" - if they're interacting with the pending ${transactionType} transaction
-      "no" - if they're starting something completely new and unrelated
-    `;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 10
-    });
 
-    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
-  }
 
-  private async detectQuestionType(context: FlowContext, messageText: string): Promise<'capability' | 'informational' | null> {
-    const { openai } = context;
-    
-    const prompt = `
-      User said: "${messageText}"
-      
-      Classify this message into one of these categories:
-      
-      CAPABILITY QUESTIONS (return "capability"):
-      - Questions about what's possible: "can I...", "do you support...", "is it possible..."
-      - Questions about features: "what features...", "what can you do...", "what about..."
-      - Questions about limitations: "can I switch chains?", "do you support sepolia?"
-      - Questions about configuration options: "can I create a group with different fee splits?"
-      - Hypothetical scenarios: "what if...", "is it possible to..."
-      
-      INFORMATIONAL QUERIES (return "informational"):
-      - Requests to see existing data: "show my groups", "list my coins", "what groups do I have?"
-      - Status inquiries: "who are the fee receivers?", "what's my group?", "show fee receivers"
-      - Portfolio/balance requests: "my groups", "my coins", "show my portfolio"
-      - Data listing: "list groups", "list coins", "show groups", "show coins"
-      - Questions asking about current state: "what do I have?", "show me my...", "what are my..."
-      - Possessive questions: "what groups do I have?", "what coins do I own?", "my groups?"
-      
-      ACTION REQUESTS (return "none"):
-      - Commands to perform actions: "let's start a new group", "create a group", "launch a coin"
-      - Imperative statements: "start a group for everyone", "create a group with alice"
-      - Action declarations: "I want to create a group", "let's launch this"
-      
-      FLOW CONTINUATION (return "none"):
-      - Providing requested data: "@alice", "alice.eth", "0x123...", "MyCoin (MCN)"
-      - Confirming actions: "yes", "ok", "do it", "go ahead"
-      - Responding to specific prompts: directly answering what the bot just asked for
-      - Making selections: choosing from options the bot provided
-      
-      IMPORTANT: Questions like "what groups do I have?" are clearly INFORMATIONAL - they ask about existing data.
-      
-      Return ONLY:
-      "capability" - if this is a capability question
-      "informational" - if this is requesting existing data
-      "none" - if this is an action request or flow continuation
-    `;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 15
-    });
 
-    const result = response.choices[0]?.message?.content?.trim()?.toLowerCase();
-    
-    if (result === 'capability') return 'capability';
-    if (result === 'informational') return 'informational';
-    return null;
-  }
 
-  private async isGroupCreationResponseDuringOnboarding(context: FlowContext, messageText: string): Promise<boolean> {
-    const { openai } = context;
-    
-    const prompt = `
-      User is in onboarding flow and was asked about fee receivers for group creation.
-      User said: "${messageText}"
-      
-      Is this user providing group creation details or responding to the group creation question? Look for:
-      - "everyone" (indicating all chat members)
-      - "add everyone"
-      - "create a group for everyone"
-      - "let's create a group for everyone"
-      - "awesome let's create a group for everyone"
-      - Fee receiver specifications (@alice, alice.eth, 0x123...)
-      - Percentage specifications ("me 80%, @alice 20%")
-      - Group member references ("everyone in this chat", "all members")
-      - Responses that indicate they want to proceed with group creation
-      
-      Return ONLY:
-      "yes" - if they're providing group creation details/responses during onboarding
-      "no" - if they're asking about something completely different
-    `;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 10
-    });
-
-    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
-  }
-
-  private async isOnboardingRelatedQuestion(context: FlowContext, messageText: string): Promise<boolean> {
-    const { openai } = context;
-    
-    const prompt = `
-      User is in onboarding and said: "${messageText}"
-      
-      Is this an onboarding-related question that should be answered within the onboarding flow?
-      
-      ONBOARDING-RELATED QUESTIONS (return "yes"):
-      - Questions about fee receivers: "who are the fee receivers?", "what are fee receivers?", "who should receive?"
-      - Questions about fee splitting: "how do fee receivers work?", "who gets the fees?", "how does fee splitting work?"
-      - Questions about groups: "what is a group?", "how do groups work?", "what is group creation?"
-      - Process questions: "how does this work?", "what do I need?", "what should I provide?"
-      - Format questions: "how do I specify?", "what format?", "can you explain?"
-      - Clarification: "I don't understand", "what does this mean?"
-      - Transaction inquiries: "what addresses are in?", "who is in the group?", "who are the receivers?"
-      - Transaction details: "what percentage?", "how much does each?", "what are the splits?"
-      - Transaction status: "show me the transaction", "what's in the transaction?", "transaction details"
-      
-      OTHER QUESTIONS (return "no"):
-      - Questions about existing data: "what groups do I have?", "show my groups"
-      - Capability questions: "can I create groups?", "do you support?"
-      - Action requests: "create a group", "start a group"
-      - General questions: "what can you do?", "how does Flaunch work?"
-      
-      Return ONLY:
-      "yes" - if this is an onboarding-related question
-      "no" - if this is about something else
-    `;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 10
-    });
-
-    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
-  }
 
   private intentToFlowType(intent: MessageIntent, userState?: UserState): FlowType {
     switch (intent) {
@@ -500,6 +511,37 @@ export class FlowRouter {
     }
   }
 
+
+
+  private async handleCompletedUserGreeting(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    // Build suggestions based on what the user can do
+    let suggestions = [];
+    
+    if (userState.groups.length > 0) {
+      suggestions.push("launch coins into your groups");
+      suggestions.push("create additional groups");
+      suggestions.push("check your group stats");
+    }
+    
+    if (userState.coins.length > 0) {
+      suggestions.push("view your portfolio");
+      suggestions.push("check trading activity");
+    }
+    
+    // Always offer general help
+    suggestions.push("ask questions about how everything works");
+    
+    const suggestionText = suggestions.length > 0 ? 
+      ` here's what you can do:\n• ${suggestions.join('\n• ')}` : 
+      ` ask me anything about groups and coin launches!`;
+
+    const response = `hey there!${suggestionText}`;
+    
+    await context.sendResponse(response);
+  }
+
   // Helper method to register or update flows
   updateFlow(flowType: FlowType, flow: BaseFlow): void {
     this.flows[flowType] = flow;
@@ -511,95 +553,10 @@ export class FlowRouter {
     return this.intentToFlowType(intentResult.intent, userState);
   }
 
-  private async isContinuingCoinLaunch(context: FlowContext, messageText: string): Promise<boolean> {
-    const { openai, userState } = context;
-    
-    // Get recent conversation context to understand if user is responding to a request
-    const progress = userState.coinLaunchProgress;
-    let contextInfo = "";
-    
-    if (progress) {
-      const coinData = progress.coinData || {};
-      const missing = [];
-      
-      if (!coinData.name) missing.push('coin name');
-      if (!coinData.ticker) missing.push('ticker');
-      if (!coinData.image) missing.push('image');
-      if (!progress.targetGroupId) missing.push('target group');
-      
-      if (missing.length > 0) {
-        contextInfo = `\n\nIMPORTANT CONTEXT: User has ongoing coin launch progress missing: ${missing.join(', ')}. The agent likely recently asked for this missing information.`;
-      }
-    }
-    
-    const prompt = `
-      User has an ongoing coin launch in progress and said: "${messageText}"${contextInfo}
-      
-      Is this message about continuing/progressing their existing coin launch? Look for:
-      
-      COIN LAUNCH CONTINUATION (return "yes"):
-      - Status inquiries: "where are we at with the coin launch?", "what's the status?", "what do we still need?"
-      - Launch commands: "launch", "launch it", "go ahead", "proceed", "launch now"
-      - Providing missing data: coin names, tickers, images, group selections
-      - Contract addresses (0x...) when target group is missing
-      - Image URLs or attachments when image is missing
-      - Token names/tickers when those are missing
-      - Launch options questions: "what launch options do I have?", "what can I configure?"
-      - Launch defaults questions: "what are the defaults?", "what are default settings?"
-      - Future feature questions about launches: "can I do airdrops?", "what about whitelists?"
-      - Launch parameter adjustments: market cap, duration, prebuy, buybacks
-      
-      DIFFERENT INTENT (return "no"):
-      - Group creation: "create a group", "start a new group", "launch a group", "launch a group and add everyone"
-      - Group management: "what groups do I have?", "list my groups", "show groups"
-      - General greetings: "hey flaunchy!", "hello", "hi"
-      - General questions: "how does this work?", "what can you do?"
-      - Management tasks: "show my coins", "check balances"
-      - Completely unrelated topics
-      
-      SPECIAL CASE: If the user message looks like it could be providing missing data (especially contract addresses, token names, or image URLs), strongly consider it as coin launch continuation.
-      
-      Return ONLY:
-      "yes" - if continuing the coin launch
-      "no" - if asking about something different
-    `;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 10
-    });
-
-    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
+  private async isContinuingCoinLaunch(context: FlowContext, messageText: string, detectionResult: UnifiedRoutingResult): Promise<boolean> {
+    // Use unified detection result instead of separate API call
+    return detectionResult.isContinuingCoinLaunch;
   }
 
-  private async detectGroupForEveryone(context: FlowContext, messageText: string): Promise<boolean> {
-    const { openai } = context;
-    
-    const prompt = `
-      User said: "${messageText}"
-      
-      Is this message indicating a group for everyone?
-      
-      GROUP FOR EVERYONE (return "yes"):
-      - "create a group for everyone"
-      - "add everyone"
-      - "let's create a group for everyone"
-      - "awesome let's create a group for everyone"
-      
-      Return ONLY:
-      "yes" - if this is a group for everyone
-      "no" - if this is not a group for everyone
-    `;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 10
-    });
-
-    return response.choices[0]?.message?.content?.trim()?.toLowerCase() === 'yes';
-  }
 } 

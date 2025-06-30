@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { UserState } from "../types/UserState";
+import { safeParseJSON } from "../utils/jsonUtils";
 
 export type MessageIntent = 
   | 'onboarding'      // First group creation, new user setup
@@ -76,13 +77,10 @@ USER MESSAGE: "${message}"${hasAttachment ? '\nHAS IMAGE ATTACHMENT: true' : ''}
 
 CRITICAL CONTEXT RULES (READ CAREFULLY):
 
-GREETINGS AND CASUAL CONVERSATION (HIGHEST PRIORITY):
-- Simple greetings: "hey", "hello", "hi", "what's up", "hey @flaunchy", "good morning", "good afternoon"
-- Casual conversation starters that don't request specific actions
-- Bot mentions without specific requests: "hey @flaunchy", "@flaunchy hi", "hello flaunchy"
-- These should ALWAYS be classified as qa, regardless of user state or active flows
-- Examples: "Hey @flaunchy", "Hello!", "Hi there", "What's up?", "Good morning", "@flaunchy", "hi flaunchy"
-- Even users in onboarding should get qa for basic greetings to allow natural conversation flow
+IMPORTANT: GREETINGS ARE HANDLED SEPARATELY
+- Simple greetings like "hi", "hello", "hey", "what's up" are now handled by FlowRouter before intent classification
+- Do NOT classify greetings as qa intent anymore
+- The router will detect greetings and route appropriately based on user state
 
 CONVERSATIONAL FLOW CONTINUATION (SECOND PRIORITY):
 - If user is actively in a flow (onboarding/management progress exists), assume they are responding to the bot's request
@@ -133,8 +131,8 @@ INTENT OPTIONS:
 4. management - User wants to view/manage existing groups/coins (but NOT create new groups)
    Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "who are the fee receivers?", "what's my group?", "show fee receivers"
    
-5. qa - General questions, help, conversation, capability questions, greetings, or hypothetical scenarios
-   Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy", "hey @flaunchy", "hello", "hi there", "what's up?"
+5. qa - General questions, help, capability questions, or hypothetical scenarios (NOTE: greetings are handled separately)
+   Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy"
    CAPABILITY/HYPOTHETICAL QUESTIONS: "can I create a group with different fee splits?", "do you support custom splits?", "is it possible to have unequal splits?", "can I make a group where one person gets more?", "what about groups with custom percentages?", "do you allow different fee structures?"
    CHAIN QUESTIONS: "can I switch chains?", "do you support other networks?", "can I launch on sepolia?", "what about ethereum mainnet?" → These are capability questions about unsupported features
    IMPORTANT: Any question seeking information about capabilities or asking "what if" scenarios should be qa, NOT action flows
@@ -159,14 +157,7 @@ CRITICAL: DISTINGUISH QUESTIONS FROM ACTIONS
 
 
 CRITICAL EXAMPLES - QUESTIONS VS ACTIONS:
-GREETINGS AND CASUAL CONVERSATION → qa:
-- "Hey @flaunchy" = qa (greeting)
-- "Hello!" = qa (greeting)
-- "Hi there" = qa (greeting)
-- "What's up?" = qa (casual conversation)
-- "Good morning" = qa (greeting)
-- "@flaunchy" = qa (bot mention without specific request)
-- "hey flaunchy" = qa (casual greeting)
+NOTE: Greetings are handled separately by FlowRouter and should not be classified as qa
 
 QUESTIONS (seeking information) → qa:
 - "What's my address Flaunchy?" = qa (asking for personal info)
@@ -222,6 +213,12 @@ CRITICAL DISTINCTION - TOKEN vs GROUP:
 - "flaunch a token" = coin_launch (platform-specific term for token launch)
 - "create a coin" = coin_launch (cryptocurrency creation)
 - "create a group" = group_launch (fee group creation)
+
+CRITICAL: Return your response in this exact format:
+
+\`\`\`json
+{...your JSON response here...}
+\`\`\`
 
 Respond ONLY with this JSON format:
 {
@@ -288,7 +285,7 @@ Respond ONLY with this JSON format:
 
   private parseIntentResponse(content: string, userState: UserState): IntentResult {
     try {
-      const parsed = JSON.parse(content);
+      const parsed = safeParseJSON(content);
       
       // Validate the response
       const validIntents: MessageIntent[] = ['onboarding', 'coin_launch', 'group_launch', 'management', 'qa', 'confirmation'];

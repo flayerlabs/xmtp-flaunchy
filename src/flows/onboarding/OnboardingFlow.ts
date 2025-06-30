@@ -407,11 +407,17 @@ export class OnboardingFlow extends BaseFlow {
           - "everyone in the chat"
           - "add everyone"
           - "create a group for everyone"
+          - "launch a group for everyone"
+          - "start a group for everyone"
+          - "make a group for everyone"
+          - "set up a group for everyone"
           - "flaunchy create a group for everyone"
           - "group for everyone"
           - "everyone in this chat"
           - "all of us"
           - "all people here"
+          - "launch group for everyone"
+          - "create group for everyone"
           
           Answer only "yes" or "no".`
         }],

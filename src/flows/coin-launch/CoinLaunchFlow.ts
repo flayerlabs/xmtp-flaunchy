@@ -8,6 +8,7 @@ import { getDefaultChain } from "../utils/ChainSelection";
 import { createFlaunchTransaction } from "../utils/FlaunchTransactionUtils";
 import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "./coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
+import { safeParseJSON } from "../../core/utils/jsonUtils";
 
 interface CoinLaunchData {
   name?: string;
@@ -357,13 +358,7 @@ export class CoinLaunchFlow extends BaseFlow {
       const updateMessage = `got it! updated ${parameterUpdates.join(' and ')}.`;
       await this.sendResponse(context, updateMessage);
       
-      // Debug log to show preserved data
-      console.log('🔄 PARAMETER UPDATE - PRESERVED DATA:', {
-        userId: context.userState.userId,
-        preservedCoinData: progress.coinData,
-        preservedTargetGroup: progress.targetGroupId,
-        updatedParameters: parameterUpdates
-      });
+      console.log(`[CoinLaunch] ✅ Parameters updated: ${parameterUpdates.join(', ')}`);
     }
 
     // Check if we have all required data
@@ -523,14 +518,6 @@ export class CoinLaunchFlow extends BaseFlow {
         imageUrl: undefined // We'll handle image URLs separately if needed
       });
 
-      console.log('🔍 COIN EXTRACTION DEBUG:', {
-        userId: context.userState.userId,
-        messageText: messageText,
-        hasAttachment: context.hasAttachment,
-        existingCoinData: existingCoinData,
-        promptLength: prompt.length
-      });
-
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
@@ -539,19 +526,7 @@ export class CoinLaunchFlow extends BaseFlow {
       });
 
       const rawResponse = response.choices[0]?.message?.content || '{}';
-      console.log('🤖 LLM EXTRACTION RESPONSE:', {
-        userId: context.userState.userId,
-        messageText: messageText,
-        rawResponse: rawResponse
-      });
-
-      const extractedData = JSON.parse(rawResponse) as CoinLaunchExtractionResult;
-      
-      console.log('📊 PARSED EXTRACTION DATA:', {
-        userId: context.userState.userId,
-        messageText: messageText,
-        extractedData: extractedData
-      });
+      const extractedData = safeParseJSON<CoinLaunchExtractionResult>(rawResponse);
       
       // Convert to CoinLaunchData format, preserving existing data when new extraction is null/undefined
       const result: CoinLaunchData = {
@@ -577,20 +552,9 @@ export class CoinLaunchFlow extends BaseFlow {
         }
       });
       
-      console.log('✅ FINAL EXTRACTION RESULT:', {
-        userId: context.userState.userId,
-        messageText: messageText,
-        result: result
-      });
-      
       return result;
     } catch (error) {
-      console.error('❌ COIN EXTRACTION ERROR:', {
-        userId: context.userState.userId,
-        messageText: messageText,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
+      console.log(`[CoinLaunch] ❌ Extraction failed: ${error instanceof Error ? error.message : String(error)}`);
       
       this.logError('Failed to extract coin data', error);
       
@@ -690,36 +654,24 @@ export class CoinLaunchFlow extends BaseFlow {
   private findGroup(groups: UserGroup[], identifier: string): UserGroup | null {
     const lowerIdentifier = identifier.toLowerCase();
     
-    // Debug logging
-    console.log('🔍 FIND GROUP DEBUG:', {
-      searchIdentifier: identifier,
-      lowerIdentifier,
-      availableGroups: groups.map(g => ({
-        id: g.id,
-        name: g.name,
-        idLower: g.id.toLowerCase(),
-        nameLower: g.name.toLowerCase()
-      }))
-    });
-    
     // Try exact contract address match
     const exactMatch = groups.find(g => g.id.toLowerCase() === lowerIdentifier);
     if (exactMatch) {
-      console.log('✅ Found exact address match:', exactMatch.name);
+      console.log(`[CoinLaunch] ✅ Found group: ${exactMatch.name}`);
       return exactMatch;
     }
     
     // Try exact group name match
     const nameMatch = groups.find(g => g.name.toLowerCase() === lowerIdentifier);
     if (nameMatch) {
-      console.log('✅ Found exact name match:', nameMatch.name);
+      console.log(`[CoinLaunch] ✅ Found group: ${nameMatch.name}`);
       return nameMatch;
     }
     
     // Try partial group name match
     const partialNameMatch = groups.find(g => g.name.toLowerCase().includes(lowerIdentifier));
     if (partialNameMatch) {
-      console.log('✅ Found partial name match:', partialNameMatch.name);
+      console.log(`[CoinLaunch] ✅ Found group: ${partialNameMatch.name} (partial match)`);
       return partialNameMatch;
     }
     
@@ -736,11 +688,11 @@ export class CoinLaunchFlow extends BaseFlow {
     });
     
     if (partialAddressMatch) {
-      console.log('✅ Found partial address match:', partialAddressMatch.name);
+      console.log(`[CoinLaunch] ✅ Found group: ${partialAddressMatch.name} (address match)`);
       return partialAddressMatch;
     }
     
-    console.log('❌ No group found for identifier:', identifier);
+    console.log(`[CoinLaunch] ❌ No group found for: ${identifier}`);
     return null;
   }
 

@@ -1,6 +1,12 @@
 // Coin launch details extraction template for coin launch flow
 export const coinLaunchExtractionTemplate = `
 # COIN LAUNCH EXTRACTION TASK
+CRITICAL: Return your response in this exact format:
+
+\`\`\`json
+{...your JSON response here...}
+\`\`\`
+
 You must return ONLY a valid JSON object. NO conversation, NO explanation, NO extra text.
 
 EXTRACTION RULES

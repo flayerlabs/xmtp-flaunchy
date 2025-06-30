@@ -4,6 +4,7 @@ import { getCharacterResponse } from "../../../utils/character";
 import { createLaunchExtractionPrompt, LaunchExtractionResult } from "../onboarding/launchExtractionTemplate";
 import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
+import { safeParseJSON } from "../../core/utils/jsonUtils";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -198,7 +199,7 @@ export class QAFlow extends BaseFlow {
         return null;
       }
 
-      const result = JSON.parse(response) as CoinLaunchExtractionResult;
+      const result = safeParseJSON<CoinLaunchExtractionResult>(response);
       
       this.log('🔍 COIN LAUNCH EXTRACTION RESULT', {
         messageText: messageText || '(empty with attachment)',
@@ -242,7 +243,7 @@ export class QAFlow extends BaseFlow {
         return null;
       }
 
-      const result = JSON.parse(response) as LaunchExtractionResult;
+      const result = safeParseJSON<LaunchExtractionResult>(response);
       
       this.log('🔍 LAUNCH EXTRACTION RESULT', {
         messageText: messageText || '(empty with attachment)',
