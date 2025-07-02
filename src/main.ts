@@ -10,9 +10,7 @@ import {
   RemoteAttachmentCodec,
   AttachmentCodec,
 } from "@xmtp/content-type-remote-attachment";
-import { 
-  TransactionReferenceCodec 
-} from "@xmtp/content-type-transaction-reference";
+import { TransactionReferenceCodec } from "@xmtp/content-type-transaction-reference";
 
 // New architecture imports
 import { FileStateStorage } from "./core/storage/StateStorage";
@@ -25,6 +23,7 @@ import { CoinLaunchFlow } from "./flows/coin-launch/CoinLaunchFlow";
 import { GroupLaunchFlow } from "./flows/group-launch/GroupLaunchFlow";
 import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoordinator";
 import { InstallationManager } from "./core/installation/InstallationManager";
+import { XMTPStatusMonitor } from "./services/XMTPStatusMonitor";
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -34,12 +33,12 @@ let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
  */
 async function main() {
   console.log("🚀 Starting Flaunchy with new architecture...");
-  
+
   // Validate and load environment variables
   const { WALLET_KEY, ENCRYPTION_KEY, XMTP_ENV, OPENAI_API_KEY } =
     validateEnvironment([
       "WALLET_KEY",
-      "ENCRYPTION_KEY", 
+      "ENCRYPTION_KEY",
       "XMTP_ENV",
       "OPENAI_API_KEY",
     ]);
@@ -52,7 +51,7 @@ async function main() {
   // Create signer and XMTP client
   const signer = createSigner(WALLET_KEY);
   const encryptionKey = getEncryptionKeyFromHex(ENCRYPTION_KEY);
-  
+
   // Get address for database path
   const identifier = await signer.getIdentifier();
   const address = identifier.identifier;
@@ -71,12 +70,14 @@ async function main() {
       env: XMTP_ENV as XmtpEnv,
       dbPath: path.join(volumePath, `${address}-${XMTP_ENV}`),
       dbEncryptionKey: encryptionKey,
-      retryAttempts: 2
+      retryAttempts: 2,
     });
   } catch (buildError: any) {
-    console.log("⚠️ Could not reuse existing installation, creating new one...");
+    console.log(
+      "⚠️ Could not reuse existing installation, creating new one..."
+    );
     console.log("Build error:", buildError.message);
-    
+
     // Fallback to creating new installation with limit handling
     client = await InstallationManager.createClient(signer, {
       env: XMTP_ENV as XmtpEnv,
@@ -87,15 +88,15 @@ async function main() {
         console.error("🚫 XMTP Installation Limit Exceeded:");
         console.error(error.message);
         console.error("\nSuggested actions:");
-        error.suggestedActions?.forEach(action => console.error(action));
-        
+        error.suggestedActions?.forEach((action) => console.error(action));
+
         // For production apps, you might want to:
         // 1. Notify administrators
         // 2. Try to clean up old installations
         // 3. Use a fallback strategy
-        
+
         return false; // Don't retry by default
-      }
+      },
     });
   }
 
@@ -104,23 +105,25 @@ async function main() {
 
   // Initialize new architecture components
   console.log("🏗️ Initializing new architecture...");
-  
+
   // 1. State storage and session management
-  const stateStorage = new FileStateStorage(path.join(volumePath, "user-states.json"));
+  const stateStorage = new FileStateStorage(
+    path.join(volumePath, "user-states.json")
+  );
   const sessionManager = new SessionManager(stateStorage);
-  
+
   // 2. Initialize flows
   const flows: FlowRegistry = {
     onboarding: new OnboardingFlow(),
     qa: new QAFlow(),
     management: new ManagementFlow(),
     coin_launch: new CoinLaunchFlow(),
-    group_launch: new GroupLaunchFlow()
+    group_launch: new GroupLaunchFlow(),
   };
-  
+
   // 3. Create flow router
   const flowRouter = new FlowRouter(flows, openai);
-  
+
   // 4. Create enhanced message coordinator
   const messageCoordinator = new EnhancedMessageCoordinator(
     client,
@@ -131,32 +134,47 @@ async function main() {
     1000 // 1 second wait time for message coordination
   );
 
+  // 5. Initialize XMTP status monitor
+  const statusMonitor = new XMTPStatusMonitor(volumePath);
+
+  // Start monitoring with restart callback
+  statusMonitor.startMonitoring(() => {
+    console.log("🔄 XMTP status monitor triggered restart");
+    statusMonitor.stopMonitoring();
+    process.exit(0); // Exit with code 0 to trigger restart by process manager
+  });
+
   console.log("✅ Architecture initialized successfully!");
-  
+
   console.log("✓ Syncing conversations...");
   await client.conversations.sync();
-  
+
   console.log("📡 Starting message stream...");
 
   // Start listening for messages
   const stream = client.conversations.streamAllMessages();
-  
+
   for await (const message of await stream) {
     if (message) {
       try {
-        console.log(`📨 New message from ${message.senderInboxId.slice(0, 8)}...`);
-        
+        console.log(
+          `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
+        );
+
         // Process message through the enhanced coordinator
         await messageCoordinator.processMessage(message);
-        
       } catch (error) {
         console.error("❌ Error processing message:", error);
-        
+
         // Try to send an error response
         try {
-          const conversation = await client.conversations.getConversationById(message.conversationId);
+          const conversation = await client.conversations.getConversationById(
+            message.conversationId
+          );
           if (conversation) {
-            await conversation.send("sorry, something went wrong. please try again.");
+            await conversation.send(
+              "sorry, something went wrong. please try again."
+            );
           }
         } catch (sendError) {
           console.error("❌ Could not send error response:", sendError);
@@ -170,4 +188,15 @@ async function main() {
 main().catch((error) => {
   console.error("💥 Fatal error:", error);
   process.exit(1);
-}); 
+});
+
+// Graceful shutdown handling
+process.on("SIGINT", () => {
+  console.log("\n🛑 Received SIGINT, shutting down gracefully...");
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  console.log("\n🛑 Received SIGTERM, shutting down gracefully...");
+  process.exit(0);
+});
