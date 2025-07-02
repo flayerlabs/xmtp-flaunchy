@@ -4,6 +4,7 @@ import type { Character } from "../../../types";
 import type { UserState } from "./UserState";
 import type { SessionManager } from "../session/SessionManager";
 import type { ENSResolverService } from "../../services/ENSResolverService";
+import type { UnifiedRoutingResult } from "../flows/FlowRouter";
 
 export interface FlowContext {
   // Core XMTP objects
@@ -33,6 +34,9 @@ export interface FlowContext {
   attachment?: any;
   relatedMessages?: DecodedMessage[];
   conversationHistory: DecodedMessage[];
+  
+  // Detection results from FlowRouter (avoids redundant LLM calls) 
+  detectionResult?: UnifiedRoutingResult;
   
   // Helper functions
   sendResponse: (message: string) => Promise<void>;

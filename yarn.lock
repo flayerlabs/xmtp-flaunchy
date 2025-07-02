@@ -245,7 +245,9 @@ __metadata:
   resolution: "@examples/xmtp-flaunch@workspace:."
   dependencies:
     "@types/node": "npm:^22.14.1"
+    "@xmtp/content-type-reaction": "npm:^2.0.0"
     "@xmtp/content-type-remote-attachment": "npm:^2.0.2"
+    "@xmtp/content-type-reply": "npm:^2.0.2"
     "@xmtp/content-type-transaction-reference": "npm:^2.0.2"
     "@xmtp/content-type-wallet-send-calls": "npm:^2.0.0"
     "@xmtp/node-sdk": "npm:^3.0.0"
@@ -521,6 +523,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@xmtp/content-type-reaction@npm:^2.0.0":
+  version: 2.0.2
+  resolution: "@xmtp/content-type-reaction@npm:2.0.2"
+  dependencies:
+    "@xmtp/content-type-primitives": "npm:^2.0.2"
+  checksum: 10c0/cbad7e0bd930e565ecaef047966e4ee4df768a4bfdeb8af76c573dab2414ec0e675161d52539b66ac64dfa436aa472b6dd1f29554adfdf7e6ecfe122e711029b
+  languageName: node
+  linkType: hard
+
 "@xmtp/content-type-remote-attachment@npm:^2.0.2":
   version: 2.0.2
   resolution: "@xmtp/content-type-remote-attachment@npm:2.0.2"
@@ -529,6 +540,16 @@ __metadata:
     "@xmtp/content-type-primitives": "npm:^2.0.2"
     "@xmtp/proto": "npm:^3.78.0"
   checksum: 10c0/aacec27d001b4707c3a3c0bf3aa0402839e6e59deced0d777ff21906d21a6771b43bfe07d944d7269ca422a3f0f47bd227bbc6fef181307c3533abdb0606ab72
+  languageName: node
+  linkType: hard
+
+"@xmtp/content-type-reply@npm:^2.0.2":
+  version: 2.0.2
+  resolution: "@xmtp/content-type-reply@npm:2.0.2"
+  dependencies:
+    "@xmtp/content-type-primitives": "npm:^2.0.2"
+    "@xmtp/proto": "npm:^3.78.0"
+  checksum: 10c0/22a11eb19fad83bb4f340940ce7f067181d043eab5f278aeb1401a8ef72c1f7e7aa104c3ad0f6b41802603e6671699b0716219c16946a329f7e1f8e9dbe510c7
   languageName: node
   linkType: hard
 

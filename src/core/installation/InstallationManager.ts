@@ -7,6 +7,12 @@ import {
 import { 
   TransactionReferenceCodec 
 } from "@xmtp/content-type-transaction-reference";
+import { 
+  ReplyCodec 
+} from "@xmtp/content-type-reply";
+import { 
+  ReactionCodec 
+} from "@xmtp/content-type-reaction";
 
 export interface InstallationError {
   type: 'INSTALLATION_LIMIT_EXCEEDED' | 'UNKNOWN_ERROR';
@@ -51,6 +57,8 @@ export class InstallationManager {
       new RemoteAttachmentCodec(),
       new AttachmentCodec(),
       new TransactionReferenceCodec(),
+      new ReplyCodec(),
+      new ReactionCodec(),
     ];
 
     let lastError: Error | null = null;
@@ -233,6 +241,8 @@ export class InstallationManager {
       new RemoteAttachmentCodec(),
       new AttachmentCodec(),
       new TransactionReferenceCodec(),
+      new ReplyCodec(),
+      new ReactionCodec(),
     ];
 
     let lastError: Error | null = null;

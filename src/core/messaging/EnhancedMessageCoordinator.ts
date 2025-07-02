@@ -16,6 +16,18 @@ import {
   type TransactionReference,
 } from "@xmtp/content-type-transaction-reference";
 import {
+  ContentTypeReply,
+  type Reply,
+} from "@xmtp/content-type-reply";
+import {
+  ContentTypeReaction,
+  type Reaction,
+} from "@xmtp/content-type-reaction";
+import {
+  ContentTypeText,
+} from "@xmtp/content-type-text";
+
+import {
   decodeEventLog,
   decodeAbiParameters,
   type Log,
@@ -403,8 +415,21 @@ export class EnhancedMessageCoordinator {
         return false;
       }
 
-      // Send a message to the user to let them know the agent is processing their message
-      await conversation.send("🐾 Thinking...");
+      // Send a paw emoji reaction to let the user know the agent is processing their message
+      // Skip paw reaction in direct messages (1-on-1) since we'll always reply directly
+      const isDirectMessage = await this.isDirectMessage(conversation);
+      if (!isDirectMessage) {
+        const pawReaction: Reaction = {
+          reference: primaryMessage.id,
+          action: "added",
+          content: "🐾",
+          schema: "unicode",
+        };
+        await conversation.send(pawReaction, ContentTypeReaction);
+        console.log("🐾 Sent paw reaction (group chat)");
+      } else {
+        console.log("🐾 Skipped paw reaction (direct message)");
+      }
 
       // Create flow context (using relatedMessages as conversation history for now)
       const context = await this.createFlowContext({
@@ -460,14 +485,12 @@ export class EnhancedMessageCoordinator {
       const textMessage = relatedMessages.find(
         (msg) => !msg.contentType?.sameAs(ContentTypeRemoteAttachment)
       );
-      if (textMessage && typeof textMessage.content === "string") {
-        messageText = textMessage.content.trim();
+      if (textMessage) {
+        messageText = this.extractMessageText(textMessage).trim();
       }
     } else {
-      // Primary message is text
-      if (typeof primaryMessage.content === "string") {
-        messageText = primaryMessage.content.trim();
-      }
+      // Primary message is text (or reply with text)
+      messageText = this.extractMessageText(primaryMessage).trim();
 
       // Check for attachment in related messages
       const attachmentMessage = relatedMessages.find((msg) =>
@@ -510,7 +533,32 @@ export class EnhancedMessageCoordinator {
 
       // Helper functions
       sendResponse: async (message: string) => {
-        await conversation.send(message);
+        // Check if we should use reply format due to intervening messages
+        const shouldUseReply = await this.shouldUseReplyFormat(
+          primaryMessage, 
+          conversation, 
+          this.client.inboxId
+        );
+        
+        if (shouldUseReply) {
+          // Send as a reply to the original message
+          const reply: Reply = {
+            reference: primaryMessage.id,
+            content: message,
+            contentType: ContentTypeText,
+          };
+          
+          console.log("💬 Sending reply due to intervening messages", {
+            referencingMessageId: primaryMessage.id.slice(0, 16) + "...",
+            messagePreview: message.substring(0, 50) + "..."
+          });
+          
+          await conversation.send(reply, ContentTypeReply);
+        } else {
+          // Send as normal text message
+          await conversation.send(message);
+        }
+        
         // Update thread state when agent sends a message
         this.updateThreadWithAgentMessage(conversation.id);
       },
@@ -1438,6 +1486,36 @@ export class EnhancedMessageCoordinator {
     }
   }
 
+  /**
+   * Extract text content from a message, handling different content types properly
+   */
+  private extractMessageText(message: DecodedMessage): string {
+    if (!message.content) {
+      return "";
+    }
+
+    // Handle string content (regular text messages)
+    if (typeof message.content === "string") {
+      return message.content;
+    }
+
+    // Handle reply messages - extract text from reply.content
+    if (message.contentType?.sameAs(ContentTypeReply)) {
+      const replyContent = message.content as Reply;
+      if (replyContent.content && typeof replyContent.content === "string") {
+        console.log("📝 Extracted text from reply message", {
+          originalContent: replyContent.content.substring(0, 50) + "...",
+          referenceId: (replyContent.reference as string)?.slice(0, 16) + "..."
+        });
+        return replyContent.content;
+      }
+      return "";
+    }
+
+    // For other content types, return empty string
+    return "";
+  }
+
   private async shouldProcessMessage(
     primaryMessage: DecodedMessage,
     conversation: any,
@@ -1451,10 +1529,69 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    const messageText =
-      typeof primaryMessage.content === "string" ? primaryMessage.content : "";
+    const messageText = this.extractMessageText(primaryMessage);
     const senderInboxId = primaryMessage.senderInboxId;
     const conversationId = primaryMessage.conversationId;
+
+    // Check if this is a reply to a flaunchy message (high confidence engagement)
+    const isReplyToAgent = await this.isReplyToAgentMessage(primaryMessage);
+    
+    if (isReplyToAgent) {
+      // Special handling for non-text replies (reactions, etc.)
+      if (!messageText || messageText === '[NON-TEXT]' || messageText.trim() === '') {
+        console.log("🐾 NON-TEXT REPLY TO AGENT", {
+          senderInboxId: senderInboxId.slice(0, 8) + "...",
+          conversationId: conversationId.slice(0, 8) + "...",
+          contentType: primaryMessage.contentType?.toString(),
+          content: primaryMessage.content?.toString().substring(0, 50) + "..."
+        });
+        
+        // Update thread but don't process through flow router
+        await this.updateActiveThread(
+          conversationId,
+          senderInboxId,
+          primaryMessage
+        );
+        return false; // Don't continue to flow processing
+      }
+
+
+
+      console.log("💬 REPLY TO AGENT DETECTED - processing with high confidence", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 100) + "...",
+      });
+
+      // Start/update active thread when user replies to agent
+      await this.updateActiveThread(
+        conversationId,
+        senderInboxId,
+        primaryMessage
+      );
+      return true;
+    }
+
+    // CRITICAL: If this is a reply to someone else (not Flaunchy), only process if explicitly @mentioned
+    if (primaryMessage.contentType?.sameAs(ContentTypeReply)) {
+      const hasExplicitMention = this.detectExplicitAgentMention(messageText);
+      
+      if (!hasExplicitMention) {
+        console.log("🚫 REPLY TO OTHER USER - ignoring without explicit @mention", {
+          senderInboxId: senderInboxId.slice(0, 8) + "...",
+          conversationId: conversationId.slice(0, 8) + "...",
+          messageText: messageText.substring(0, 50) + "...",
+          reason: "reply_to_other_without_explicit_mention"
+        });
+        return false;
+      }
+      
+      console.log("✅ REPLY TO OTHER USER with explicit @mention - processing", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 50) + "..."
+      });
+    }
 
     // Fast regex check for obvious mentions (saves LLM calls)
     const hasObviousMention = this.detectObviousAgentMention(messageText);
@@ -1588,6 +1725,44 @@ export class EnhancedMessageCoordinator {
   }
 
   /**
+   * Detect only explicit @mentions of the agent (stricter than obvious mention detection)
+   * Used for reply messages to ensure they only engage when explicitly tagged
+   */
+  private detectExplicitAgentMention(messageText: string): boolean {
+    if (!messageText || typeof messageText !== "string") {
+      return false;
+    }
+
+    const lowerText = messageText.toLowerCase();
+    const agentName = this.character.name.toLowerCase(); // "flaunchy"
+
+    // Only check for explicit @ mention patterns
+    const explicitMentionPatterns = [
+      `@${agentName}`, // @flaunchy
+      `@ ${agentName}`, // @ flaunchy
+    ];
+
+    // Check exact @ mention patterns
+    for (const pattern of explicitMentionPatterns) {
+      if (lowerText.includes(pattern)) {
+        return true;
+      }
+    }
+
+    // Check for @ at start of message followed by agent name
+    if (
+      lowerText.startsWith(`@${agentName}`) ||
+      lowerText.startsWith(`@ ${agentName}`)
+    ) {
+      return true;
+    }
+
+    // Do NOT include casual name mentions - those are handled by detectObviousAgentMention
+    // for non-reply messages only
+    return false;
+  }
+
+  /**
    * Check if message is part of an active conversation thread
    */
   private async isInActiveThread(
@@ -1624,7 +1799,7 @@ export class EnhancedMessageCoordinator {
     }
 
     // Use improved LLM to check if user is still engaging with the bot
-    const messageText = typeof message.content === "string" ? message.content : "";
+    const messageText = this.extractMessageText(message);
     const engagementResult = await this.checkConversationEngagement(
       messageText, 
       conversationId, 
@@ -1856,46 +2031,174 @@ Respond: "YES:reason" or "NO:reason"`;
     }
   }
 
-  // REMOVED: hasCriticalOngoingProcess and isRecentManagementActivity methods
-  // These were causing over-processing by making bot respond to all messages from users with any progress
-  // Bot should ONLY respond when explicitly mentioned or in active conversation thread
-
   /**
-   * Handle errors that might come from users with installation limit issues
+   * Check if the message is a reply to one of the agent's messages
    */
-  private async handleUserInstallationLimitError(
-    error: any,
-    senderAddress?: string
-  ): Promise<void> {
-    const errorMessage = error?.message?.toLowerCase() || "";
-    const isInstallationLimit = [
-      "installation limit",
-      "max installations",
-      "maximum installations",
-      "exceeded installation limit",
-      "12/5 installations",
-    ].some((pattern) => errorMessage.includes(pattern));
+  private async isReplyToAgentMessage(message: DecodedMessage): Promise<boolean> {
+    try {
+      // Check if this message has reply content type
+      if (!message.contentType?.sameAs(ContentTypeReply)) {
+        return false;
+      }
 
-    if (isInstallationLimit && senderAddress) {
-      console.log(
-        `⚠️ User ${senderAddress} appears to have hit XMTP installation limit`
+      const replyContent = message.content as Reply;
+      
+      console.log("🔍 REPLY MESSAGE DEBUG", {
+        contentType: message.contentType.toString(),
+        hasReference: !!replyContent.reference,
+        referenceType: typeof replyContent.reference,
+        referenceValue: replyContent.reference ? (replyContent.reference as string).slice(0, 16) + "..." : 'none',
+        replyContentKeys: Object.keys(replyContent || {}),
+        messageContent: replyContent.content ? replyContent.content.toString().substring(0, 50) + "..." : 'no-content'
+      });
+      
+      // Get the referenced message ID
+      if (!replyContent.reference) {
+        console.log("❌ No reference found in reply content");
+        return false;
+      }
+
+      // Get the conversation to look up the referenced message
+      const conversation = await this.client.conversations.getConversationById(
+        message.conversationId
+      );
+      if (!conversation) {
+        return false;
+      }
+
+      // Get more messages to find the referenced message (increase limit)
+      const messages = await conversation.messages({ limit: 100 });
+      
+      // Enhanced debugging for message ID comparison
+      const referenceId = replyContent.reference as string;
+      
+      // Log first 10 message IDs with full details
+      const messageDetails = messages.slice(0, 10).map((msg: any, index) => ({
+        index,
+        id: msg.id,
+        idType: typeof msg.id,
+        idLength: msg.id?.length,
+        idSliced: msg.id?.slice(0, 16) + "...",
+        isAgent: msg.senderInboxId === this.client.inboxId,
+        sender: msg.senderInboxId?.slice(0, 8) + "...",
+        exactMatch: msg.id === referenceId,
+        sentAt: msg.sentAt
+      }));
+      
+      console.log("🔍 MESSAGE ID COMPARISON", {
+        searchingFor: referenceId,
+        messageDetails
+      });
+      
+      // Find the message being replied to
+      const referencedMessage = messages.find((msg: any) => 
+        msg.id === referenceId
       );
 
-      // You could potentially send them a helpful message if possible
-      const helpMessage = `🚫 It looks like you've hit XMTP's 5-installation limit! 
+      if (!referencedMessage) {
+        console.log("❌ REPLY REFERENCE NOT FOUND - IGNORING MESSAGE", {
+          referenceId: referenceId?.slice(0, 16) + "...",
+          totalMessagesSearched: messages.length,
+          reason: "reference_not_found"
+        });
+        
+        // NO FALLBACK - If it's not a reply to an agent message, ignore it completely
+        return false;
+      }
 
-To fix this:
-• Clean up old XMTP installations from other apps/devices
-• Use the same database/encryption key across deployments
-• Contact XMTP support if you need help managing installations
+      // Check if the referenced message was sent by this agent
+      const isFromAgent = referencedMessage.senderInboxId === this.client.inboxId;
 
-This is a new limit in XMTP 3.0.0 to improve network performance.`;
+      if (isFromAgent) {
+        console.log("✅ Confirmed reply to agent message");
+      }
 
-      // Log for your reference
-      console.log(
-        "📋 Installation limit help message prepared for user:",
-        helpMessage
-      );
+      return isFromAgent;
+    } catch (error) {
+      console.error("Error checking if message is reply to agent:", error);
+      return false;
     }
   }
+
+  /**
+   * Check if we should use reply format due to intervening messages from other users
+   */
+  private async shouldUseReplyFormat(
+    originalMessage: DecodedMessage,
+    conversation: any,
+    agentInboxId: string
+  ): Promise<boolean> {
+    try {
+      // Get recent messages to check for intervening messages
+      const messages = await conversation.messages({ limit: 20 });
+      
+      // Find the index of the original message
+      const originalMessageIndex = messages.findIndex((msg: any) => 
+        msg.id === originalMessage.id
+      );
+      
+      if (originalMessageIndex === -1) {
+        console.log("🔍 Original message not found in recent messages, defaulting to normal message");
+        return false;
+      }
+      
+      // Check messages that came after the original message (before it in the array since newest first)
+      const messagesAfterOriginal = messages.slice(0, originalMessageIndex);
+      
+      // Look for messages from users other than the agent and the original sender
+      const interveningMessages = messagesAfterOriginal.filter((msg: any) => 
+        msg.senderInboxId !== agentInboxId && 
+        msg.senderInboxId !== originalMessage.senderInboxId
+      );
+      
+      const shouldUseReply = interveningMessages.length > 0;
+      
+      if (shouldUseReply) {
+        console.log("📨 Using reply format due to intervening messages", {
+          originalMessageId: originalMessage.id.slice(0, 16) + "...",
+          originalSender: originalMessage.senderInboxId.slice(0, 8) + "...",
+          interveningMessages: interveningMessages.length,
+          interveningSenders: interveningMessages.map((msg: any) => 
+            msg.senderInboxId.slice(0, 8) + "..."
+          )
+        });
+      } else {
+        console.log("📝 Using normal message format - no intervening messages");
+      }
+      
+      return shouldUseReply;
+    } catch (error) {
+      console.error("Error checking for intervening messages:", error);
+      return false; // Default to normal message on error
+    }
+  }
+
+  /**
+   * Check if this is a direct message (1-on-1 conversation)
+   * Skip paw reactions in direct messages since we'll always reply directly
+   */
+  private async isDirectMessage(conversation: any): Promise<boolean> {
+    try {
+      // Get conversation members to determine if it's a direct message
+      // In XMTP, a direct message has exactly 2 members (user + agent)  
+      const members = await conversation.members();
+      const memberCount = members ? members.length : 0;
+      
+      console.log("📊 Conversation type check", {
+        conversationId: conversation.id?.slice(0, 16) + "...",
+        memberCount,
+        isDirectMessage: memberCount === 2
+      });
+      
+      return memberCount === 2;
+      
+    } catch (error) {
+      console.error("Error checking if direct message:", error);
+      // Default to false (assume group chat) if we can't determine
+      // This ensures paw reactions are sent when in doubt
+      return false;
+    }
+  }
+
+
 }

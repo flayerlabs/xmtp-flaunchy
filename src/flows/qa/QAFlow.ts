@@ -143,32 +143,14 @@ export class QAFlow extends BaseFlow {
       }
     }
 
-    // For now, use character to generate a helpful response
-    // TODO: Integrate with knowledge base
-    const response = await getCharacterResponse({
-      openai: context.openai,
-      character: context.character,
-      prompt: `
-        User asked: "${messageText}"
-        
-        User context:
-        - Status: ${context.userState.status}
-        - Has ${context.userState.coins.length} coins
-        - Has ${context.userState.groups.length} groups
-        
-        CRITICAL: Keep your response concise.
-        
-        Provide a helpful but concise response based on your knowledge about:
-        - Group creation and management
-        - Coin launching with Flaunch
-        - Fee splitting mechanisms
-        - Trading and fair launches
-        
-        Use your character's voice but prioritize brevity above all else.
-      `
-    });
-
-    await this.sendResponse(context, response);
+    // Check if this is a capability question about how the agent/system works
+    const isCapabilityQuestion = context.detectionResult?.questionType === 'capability';
+    
+    if (isCapabilityQuestion) {
+      await this.handleCapabilityQuestion(context, messageText);
+    } else {
+      await this.handleGeneralQuestion(context, messageText);
+    }
   }
 
   private async extractCoinLaunchDetails(context: FlowContext): Promise<CoinLaunchExtractionResult | null> {
@@ -305,5 +287,68 @@ export class QAFlow extends BaseFlow {
       "let's start with your first coin - give me a name, ticker, and image. " +
       "after we launch it, we can create another one."
     );
+  }
+
+  /**
+   * Handle capability questions about how the agent/system works
+   */
+  private async handleCapabilityQuestion(context: FlowContext, messageText: string): Promise<void> {
+    // Handle questions about how the agent/system works
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: `
+        User is asking a CAPABILITY question about how you (the agent) or the system works: "${messageText}"
+        
+        Common capability questions and how to answer them:
+        - "How do you make money?" → Explain that you're a bot that helps users create groups and launch coins, you don't make money yourself
+        - "What do you do?" → Explain your role as a memecoin launch assistant
+        - "How does this work?" → Explain the group + coin launch process briefly
+        - "What can you do?" → List your main capabilities
+        
+        IMPORTANT:
+        - Answer about YOU (the agent) and the SYSTEM, not about how users make money
+        - Be clear you're an AI assistant that helps with coin launches
+        - Don't give onboarding guidance unless specifically asked
+        - Keep it concise but informative
+        
+        Use your character's voice but focus on explaining your role and capabilities.
+      `
+    });
+
+    await this.sendResponse(context, response);
+  }
+
+  /**
+   * Handle general guidance questions about using the system
+   */
+  private async handleGeneralQuestion(context: FlowContext, messageText: string): Promise<void> {
+    // Handle general guidance questions about using the system
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: `
+        User asked: "${messageText}"
+        
+        User context:
+        - Status: ${context.userState.status}
+        - Has ${context.userState.coins.length} coins
+        - Has ${context.userState.groups.length} groups
+        
+        This is a GENERAL question about using the system (not about your capabilities).
+        
+        Provide helpful guidance about:
+        - Group creation and management
+        - Coin launching with Flaunch
+        - Fee splitting mechanisms
+        - Trading and fair launches
+        
+        IMPORTANT: If user needs onboarding (status: 'onboarding' or 'new'), gently guide them back to onboarding after answering their question.
+        
+        Use your character's voice but prioritize brevity and helpfulness.
+      `
+    });
+
+    await this.sendResponse(context, response);
   }
 } 

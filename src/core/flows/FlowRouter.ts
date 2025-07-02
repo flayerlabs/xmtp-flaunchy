@@ -93,6 +93,9 @@ export class FlowRouter {
     const detectionResult = await this.performUnifiedDetection(context, messageText);
     console.log(`[FlowRouter] 🔍 Detection: ${detectionResult.actionType} (${detectionResult.confidence.toFixed(2)}) | ${detectionResult.reasoning}`);
     
+    // Add detection result to context so flows can use it without re-detecting
+    context.detectionResult = detectionResult;
+    
     // Priority 0: Greeting handling
     if (detectionResult.isGreeting) {
       if (this.shouldStayInOnboarding(userState)) {
@@ -145,6 +148,13 @@ export class FlowRouter {
       return 'management';
     }
     
+    // Priority 3.5: Non-onboarding questions should go to QA (before forcing to onboarding)
+    if ((detectionResult.actionType === 'inquiry' || detectionResult.actionType === 'other') && 
+        !detectionResult.isOnboardingRelated) {
+      console.log(`[FlowRouter] ✅ Non-onboarding ${detectionResult.actionType} → qa`);
+      return 'qa';
+    }
+    
     // Priority 4: Onboarding for new/incomplete users
     if (this.shouldStayInOnboarding(userState)) {
       // Special case: Users with groups wanting to launch coins
@@ -190,6 +200,14 @@ export class FlowRouter {
     
     // Build context for the unified detection
     const userContext = this.buildUserContextForDetection(userState);
+    const conversationContext = this.buildConversationContextForDetection(context);
+    
+    // Debug logging to see what context is being passed
+    console.log("🔍 CONVERSATION CONTEXT DEBUG", {
+      messageText,
+      historyLength: context.conversationHistory?.length || 0,
+      conversationContext: conversationContext.substring(0, 200) + "..."
+    });
     
     const prompt = `
 You are analyzing a user message for routing decisions in a crypto token launch bot conversation.
@@ -197,15 +215,22 @@ You are analyzing a user message for routing decisions in a crypto token launch 
 USER CONTEXT:
 ${userContext}
 
-USER MESSAGE: "${messageText}"
+RECENT CONVERSATION:
+${conversationContext}
 
-CRITICAL: Return your response in this exact format:
+CURRENT USER MESSAGE: "${messageText}"
+
+CRITICAL INSTRUCTIONS:
+1. ALWAYS consider the recent conversation context when analyzing the current message
+2. If the current message is a clarification, correction, or follow-up to a previous exchange, interpret it in that context
+3. Don't treat messages in isolation - use conversation flow to understand intent
+4. Return your response in this exact format:
 
 \`\`\`json
 {...your JSON response here...}
 \`\`\`
 
-Analyze this message and return a JSON object with boolean flags for all possible routing scenarios:
+Analyze this message IN CONTEXT and return a JSON object with boolean flags for all possible routing scenarios:
 
 {
   "isGreeting": boolean,
@@ -240,10 +265,23 @@ isTransactionInquiry: true if asking about pending transaction details, status, 
 isCancellation: true for "cancel", "stop", "abort", "nevermind"
 
 === QUESTIONS ===
+IMPORTANT: Consider conversation context when classifying questions!
 questionType: 
-- "capability" for "can I...", "do you support...", "is it possible..."
+- "capability" for "can I...", "do you support...", "is it possible...", "how do you make money?" 
 - "informational" for "show my groups", "who are fee receivers", "what groups do I have"
 - null for non-questions
+
+CLARIFICATIONS & FOLLOW-UPS (CRITICAL - LOOK FOR THESE PATTERNS):
+- If user says "Not me - you!" after asking "How do you make money?" → they are asking how the AGENT makes money → capability question with HIGH confidence (0.9+)
+- "I meant..." or "Actually..." = continuation of previous intent  
+- "You, not me" or similar = clarification/correction of previous question
+- Short responses like "yes", "no", "ok" in response to agent questions = continuation
+
+SPECIFIC EXAMPLE TO RECOGNIZE:
+USER: "How do you make money?"
+AGENT: [explains how users make money]
+USER: "Not me - you!" 
+→ This is clearly asking how the AGENT makes money → actionType: "inquiry", questionType: "capability", confidence: 0.9+
 
 === GROUP ACTIONS ===
 isGroupForEveryone: true for "create group for everyone", "launch group for everyone", "add everyone", "group for everyone", "start group for everyone"
@@ -267,22 +305,34 @@ isContinuingCoinLaunch: true if continuing an active coin launch process
 isMultipleCoinRequest: true for "launch multiple coins", "create several tokens"
 
 === ACTION TYPE ===
-Classify the primary action:
+Classify the primary action (CONSIDER CONVERSATION CONTEXT):
 - "create_group": Creating new groups
 - "launch_coin": Launching tokens/coins
 - "modify_existing": Modifying existing groups/coins
-- "inquiry": Asking questions/requesting information
+- "inquiry": Asking questions/requesting information (including clarifications and follow-ups)
 - "greeting": Simple greetings
 - "other": Everything else
 
-IMPORTANT: Set confidence based on how clear the intent is (0.1-1.0).
+CONTEXT-AWARE CLASSIFICATION (CRITICAL PATTERNS):
+- PRIORITY: "Not me - you!" after "How do you make money?" → "inquiry" + "capability" + confidence 0.9+
+- If current message is a clarification/correction of previous question → "inquiry"  
+- If current message continues previous conversation thread → inherit intent from context
+- "You, not me" or similar clarifications → "inquiry" with high confidence
+- Short confirmations in response to agent → continuation of previous flow
+
+DEBUGGING CHECK:
+- Before classifying as "other", ask: "Is this a clarification of the previous message?"
+- If user is correcting/clarifying who they're asking about → "inquiry" not "other"
+
+IMPORTANT: Set confidence based on how clear the intent is (0.1-1.0). 
+Use HIGH confidence (0.8+) for context-supported interpretations.
 `;
 
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
+        temperature: 0.3, // Increased from 0.1 to allow better context interpretation
         max_tokens: 500
       });
 
@@ -315,6 +365,41 @@ IMPORTANT: Set confidence based on how clear the intent is (0.1-1.0).
 - Coin Launch Progress: ${userState.coinLaunchProgress ? 'Yes' : 'No'}
 - ${pendingTxInfo}
 `;
+  }
+
+  private buildConversationContextForDetection(context: FlowContext): string {
+    // Get the last few messages for context (excluding the current message)
+    const recentMessages = context.conversationHistory?.slice(0, 6) || [];
+    
+    if (recentMessages.length === 0) {
+      return "No recent conversation history.";
+    }
+
+    const agentInboxId = context.client.inboxId;
+    const conversationLines = recentMessages.map((msg, index) => {
+      const isAgent = msg.senderInboxId === agentInboxId;
+      const sender = isAgent ? "AGENT" : "USER";
+      const content = this.extractMessageTextForContext(msg);
+      const timestamp = new Date(msg.sentAt).toLocaleTimeString();
+      
+      return `${sender} (${timestamp}): ${content}`;
+    }).reverse(); // Reverse to show chronological order (oldest to newest)
+
+    return conversationLines.join('\n');
+  }
+
+  private extractMessageTextForContext(message: any): string {
+    // Extract text content from message for context
+    if (typeof message.content === 'string') {
+      return message.content.substring(0, 100); // Limit length
+    }
+    
+    // Handle reply messages
+    if (message.content?.content && typeof message.content.content === 'string') {
+      return message.content.content.substring(0, 100);
+    }
+    
+    return '[NON-TEXT]';
   }
 
   private getEmptyDetectionResult(): UnifiedRoutingResult {

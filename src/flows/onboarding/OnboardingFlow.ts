@@ -26,6 +26,13 @@ export class OnboardingFlow extends BaseFlow {
       messageText: messageText?.substring(0, 50)
     });
 
+    // Check for greetings first - give warm welcome before onboarding flow
+    // Use detection result from FlowRouter to avoid redundant LLM calls
+    if (context.detectionResult?.isGreeting) {
+      await this.handleGreeting(context);
+      return;
+    }
+
     // Handle pending transaction updates first
     if (userState.pendingTransaction) {
       // Check if user wants to cancel the transaction
@@ -1384,5 +1391,60 @@ Answer only "yes" or "no".`
       this.logError('Failed to detect complete group replacement intent', error);
       return false;
     }
+  }
+
+
+
+  private async handleGreeting(context: FlowContext): Promise<void> {
+    const { userState } = context;
+    
+    // Determine appropriate greeting response based on user state
+    let greetingPrompt = '';
+    
+    if (userState.groups.length === 0) {
+      // User has no groups - needs to create first group
+      greetingPrompt = `
+        Give a warm, friendly greeting that acknowledges their hello and explains what comes next.
+        
+        Explain that:
+        - You help them launch coins and earn passive income from trading fees
+        - First step is creating a group to split fees with friends
+        - They can @ mention friends or create it just for themselves
+        
+        Keep it conversational and welcoming. Use your character's voice.
+      `;
+    } else if (userState.coins.length === 0) {
+      // User has groups but no coins - needs to launch first coin
+      greetingPrompt = `
+        Give a warm greeting that acknowledges their hello and reminds them of next steps.
+        
+        Mention that:
+        - Their group is set up and ready
+        - Now they can launch their first coin for free
+        - What coin would they like to create?
+        
+        Keep it friendly and encouraging. Use your character's voice.
+      `;
+    } else {
+      // User has both groups and coins - shouldn't be in onboarding
+      greetingPrompt = `
+        Give a friendly greeting acknowledging their hello.
+        
+        Briefly mention they're all set up and can:
+        - Launch more coins
+        - Create additional groups  
+        - Ask questions anytime
+        
+        Keep it warm and conversational. Use your character's voice.
+      `;
+    }
+
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: greetingPrompt
+    });
+    
+    await this.sendResponse(context, response);
   }
 } 
