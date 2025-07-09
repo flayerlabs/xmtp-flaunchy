@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import axios from "axios";
+import { Client } from "@xmtp/node-sdk";
 
 interface RSSItem {
   title: string;
@@ -20,14 +21,25 @@ interface StatusIncident {
   affectedComponents: string[];
 }
 
+interface ApplicationResources {
+  client: Client;
+  statusMonitor: XMTPStatusMonitor;
+  messageStream: any;
+  cleanup: () => Promise<void>;
+}
+
 export class XMTPStatusMonitor {
   private readonly RSS_URL = "https://status.xmtp.org/feed.rss";
   private readonly STATUS_FILE_PATH: string;
-  private readonly CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly CHECK_INTERVAL = 2 * 60 * 1000; // 2 minutes (reduced from 5)
   private startupTime: Date;
   private isMonitoring = false;
   private intervalId?: NodeJS.Timeout;
-  private onRestartCallback?: () => void;
+
+  // Restart management
+  private isRestarting = false;
+  private applicationFactory?: () => Promise<ApplicationResources>;
+  private currentResources?: ApplicationResources;
 
   constructor(volumePath: string = ".data") {
     this.STATUS_FILE_PATH = path.join(volumePath, "xmtp-status-monitor.json");
@@ -149,25 +161,44 @@ export class XMTPStatusMonitor {
   private async checkForNewIssues(): Promise<boolean> {
     try {
       const incidents = await this.fetchRSSFeed();
+      console.log(`📊 Found ${incidents.length} total incidents in RSS feed`);
+
       const statusData = JSON.parse(
         fs.readFileSync(this.STATUS_FILE_PATH, "utf8")
       );
       const lastStartupTime = new Date(statusData.lastStartupTime);
+      console.log(`📅 Last startup time: ${lastStartupTime.toISOString()}`);
 
       // Filter incidents that are:
       // 1. Not resolved AND published after startup time
-      // 2. OR affect Node SDK/Production network and are recent
+      // 2. OR affect Node SDK/Production network and are recent (within last 24 hours)
+      const now = new Date();
+      const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
       const criticalIncidents = incidents.filter((incident) => {
         const isAfterStartup = incident.pubDate > lastStartupTime;
+        const isRecent = incident.pubDate > last24Hours;
         const isNodeSDKIssue = incident.affectedComponents.some(
           (component) =>
             component.toLowerCase().includes("node sdk") ||
-            component.toLowerCase().includes("production network")
+            component.toLowerCase().includes("production network") ||
+            component.toLowerCase().includes("dev network")
         );
+
+        // Log each incident for debugging
+        console.log(`🔍 Checking incident: ${incident.title}`);
+        console.log(`  📅 Published: ${incident.pubDate.toISOString()}`);
+        console.log(`  ✅ Resolved: ${incident.isResolved}`);
+        console.log(
+          `  🎯 Components: ${incident.affectedComponents.join(", ")}`
+        );
+        console.log(`  🕒 After startup: ${isAfterStartup}`);
+        console.log(`  📈 Recent: ${isRecent}`);
+        console.log(`  🔧 Node SDK issue: ${isNodeSDKIssue}`);
 
         return (
           (!incident.isResolved && isAfterStartup) ||
-          (!incident.isResolved && isNodeSDKIssue)
+          (!incident.isResolved && isNodeSDKIssue && isRecent)
         );
       });
 
@@ -191,13 +222,17 @@ export class XMTPStatusMonitor {
       // Check for new resolved issues that might indicate we should restart
       const newResolvedIssues = incidents.filter((incident) => {
         const isAfterStartup = incident.pubDate > lastStartupTime;
+        const isRecent = incident.pubDate > last24Hours;
         const isNodeSDKIssue = incident.affectedComponents.some(
           (component) =>
             component.toLowerCase().includes("node sdk") ||
-            component.toLowerCase().includes("production network")
+            component.toLowerCase().includes("production network") ||
+            component.toLowerCase().includes("dev network")
         );
 
-        return incident.isResolved && isAfterStartup && isNodeSDKIssue;
+        return (
+          incident.isResolved && isAfterStartup && isNodeSDKIssue && isRecent
+        );
       });
 
       if (newResolvedIssues.length > 0) {
@@ -224,15 +259,131 @@ export class XMTPStatusMonitor {
   }
 
   /**
-   * Starts monitoring the RSS feed
+   * Cleanup function to properly close connections before restart
    */
-  public startMonitoring(onRestartCallback?: () => void): void {
+  private async cleanup(): Promise<void> {
+    console.log("🧹 Cleaning up resources before restart...");
+
+    try {
+      if (this.currentResources) {
+        await this.currentResources.cleanup();
+        this.currentResources = undefined;
+      }
+
+      console.log("✅ Cleanup completed");
+    } catch (error) {
+      console.error("❌ Error during cleanup:", error);
+    }
+  }
+
+  /**
+   * Handles application restart
+   */
+  private async handleRestart(): Promise<void> {
+    if (this.isRestarting) {
+      console.log(
+        "⚠️ Restart already in progress, ignoring duplicate restart request"
+      );
+      return;
+    }
+
+    if (!this.applicationFactory) {
+      console.error("❌ No application factory provided, cannot restart");
+      return;
+    }
+
+    this.isRestarting = true;
+    console.log("🔄 XMTP status monitor triggered restart");
+
+    try {
+      // Cleanup current resources
+      await this.cleanup();
+
+      // Wait a moment to ensure cleanup is complete
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Restart the application with monitoring
+      console.log("🚀 Restarting application...");
+      await this.runApplication(true); // true indicates to restart monitoring
+
+      // Reset restart flag after successful restart
+      this.isRestarting = false;
+    } catch (error) {
+      console.error("❌ Error during restart:", error);
+      this.isRestarting = false;
+
+      // If restart fails, try again after a delay
+      console.log("⏳ Retrying restart in 10 seconds...");
+      setTimeout(async () => {
+        await this.handleRestart();
+      }, 10000);
+    }
+  }
+
+  /**
+   * Runs the application using the provided factory
+   */
+  private async runApplication(
+    restartMonitoring: boolean = false
+  ): Promise<void> {
+    if (!this.applicationFactory) {
+      throw new Error("No application factory provided");
+    }
+
+    try {
+      // Create new application resources
+      this.currentResources = await this.applicationFactory();
+
+      // Update startup time
+      this.startupTime = new Date();
+      const statusData = JSON.parse(
+        fs.readFileSync(this.STATUS_FILE_PATH, "utf8")
+      );
+      statusData.lastStartupTime = this.startupTime.toISOString();
+      fs.writeFileSync(
+        this.STATUS_FILE_PATH,
+        JSON.stringify(statusData, null, 2)
+      );
+
+      // Restart monitoring if this is a restart (not initial startup)
+      if (restartMonitoring) {
+        console.log("🔄 Restarting monitoring after application restart...");
+        this.startMonitoring();
+      }
+
+      console.log("✅ Application restarted successfully!");
+    } catch (error) {
+      console.error("❌ Error running application:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Starts the application with monitoring
+   */
+  public async startWithMonitoring(
+    applicationFactory: () => Promise<ApplicationResources>
+  ): Promise<void> {
+    this.applicationFactory = applicationFactory;
+
+    console.log("🚀 Starting application with XMTP status monitoring...");
+
+    // Start the application for the first time
+    await this.runApplication(false); // false since this is initial startup
+
+    // Start monitoring
+    this.startMonitoring();
+  }
+
+  /**
+   * Starts monitoring the RSS feed (internal method)
+   */
+  private startMonitoring(): void {
     if (this.isMonitoring) {
       console.log("⚠️ Status monitor is already running");
       return;
     }
 
-    this.onRestartCallback = onRestartCallback;
     this.isMonitoring = true;
 
     console.log(
@@ -241,16 +392,6 @@ export class XMTPStatusMonitor {
       } minutes)`
     );
     console.log(`📅 Startup time: ${this.startupTime.toISOString()}`);
-
-    // Update startup time in status file
-    const statusData = JSON.parse(
-      fs.readFileSync(this.STATUS_FILE_PATH, "utf8")
-    );
-    statusData.lastStartupTime = this.startupTime.toISOString();
-    fs.writeFileSync(
-      this.STATUS_FILE_PATH,
-      JSON.stringify(statusData, null, 2)
-    );
 
     // Initial check
     this.performCheck();
@@ -266,22 +407,24 @@ export class XMTPStatusMonitor {
    */
   private async performCheck(): Promise<void> {
     try {
+      console.log("🔍 Checking XMTP status...");
       const shouldRestart = await this.checkForNewIssues();
 
       if (shouldRestart) {
+        console.log("🚨 XMTP status indicates restart is needed!");
         console.log("🔄 Initiating restart due to XMTP status changes...");
+
+        // Stop monitoring immediately to prevent multiple restart attempts
         this.stopMonitoring();
 
-        if (this.onRestartCallback) {
-          this.onRestartCallback();
-        } else {
-          // Default restart behavior
-          console.log("🔄 Restarting process...");
-          process.exit(0); // Let process manager restart us
-        }
+        // Execute restart with a slight delay to ensure logs are written
+        setTimeout(async () => {
+          await this.handleRestart();
+        }, 1000);
       }
     } catch (error) {
       console.error("❌ Error during status check:", error);
+      // Continue monitoring even if a single check fails
     }
   }
 
@@ -318,5 +461,31 @@ export class XMTPStatusMonitor {
       startupTime: this.startupTime,
       checkInterval: this.CHECK_INTERVAL,
     };
+  }
+
+  /**
+   * Triggers an immediate restart check (for testing/debugging)
+   */
+  public async triggerImmediateCheck(): Promise<void> {
+    console.log("🔄 Triggering immediate XMTP status check...");
+    await this.performCheck();
+  }
+
+  /**
+   * Forces a restart (for testing/debugging)
+   */
+  public async forceRestart(): Promise<void> {
+    console.log("🔄 Forcing restart...");
+    this.stopMonitoring();
+    await this.handleRestart();
+  }
+
+  /**
+   * Graceful shutdown
+   */
+  public async shutdown(): Promise<void> {
+    console.log("🛑 Shutting down XMTP status monitor...");
+    this.stopMonitoring();
+    await this.cleanup();
   }
 }

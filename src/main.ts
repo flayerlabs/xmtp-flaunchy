@@ -29,9 +29,9 @@ import { XMTPStatusMonitor } from "./services/XMTPStatusMonitor";
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
 
 /**
- * New main application function using the refactored architecture
+ * Creates all application resources and components
  */
-async function main() {
+async function createApplication() {
   console.log("🚀 Starting Flaunchy with new architecture...");
 
   // Validate and load environment variables
@@ -134,15 +134,8 @@ async function main() {
     1000 // 1 second wait time for message coordination
   );
 
-  // 5. Initialize XMTP status monitor
+  // 5. Create status monitor
   const statusMonitor = new XMTPStatusMonitor(volumePath);
-
-  // Start monitoring with restart callback
-  statusMonitor.startMonitoring(() => {
-    console.log("🔄 XMTP status monitor triggered restart");
-    statusMonitor.stopMonitoring();
-    process.exit(0); // Exit with code 0 to trigger restart by process manager
-  });
 
   console.log("✅ Architecture initialized successfully!");
 
@@ -152,35 +145,100 @@ async function main() {
   console.log("📡 Starting message stream...");
 
   // Start listening for messages
-  const stream = client.conversations.streamAllMessages();
+  const stream = await client.conversations.streamAllMessages();
+  let isStreamActive = true;
 
-  for await (const message of await stream) {
-    if (message) {
-      try {
-        console.log(
-          `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
-        );
+  // Process messages in the background
+  const messageProcessingPromise = (async () => {
+    try {
+      for await (const message of stream) {
+        if (!isStreamActive) {
+          console.log("📡 Message stream stopped");
+          break;
+        }
 
-        // Process message through the enhanced coordinator
-        await messageCoordinator.processMessage(message);
-      } catch (error) {
-        console.error("❌ Error processing message:", error);
-
-        // Try to send an error response
-        try {
-          const conversation = await client.conversations.getConversationById(
-            message.conversationId
-          );
-          if (conversation) {
-            await conversation.send(
-              "sorry, something went wrong. please try again."
+        if (message) {
+          try {
+            console.log(
+              `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
             );
+
+            // Process message through the enhanced coordinator
+            await messageCoordinator.processMessage(message);
+          } catch (error) {
+            console.error("❌ Error processing message:", error);
+
+            // Try to send an error response
+            try {
+              const conversation =
+                await client.conversations.getConversationById(
+                  message.conversationId
+                );
+              if (conversation) {
+                await conversation.send(
+                  "sorry, something went wrong. please try again."
+                );
+              }
+            } catch (sendError) {
+              console.error("❌ Could not send error response:", sendError);
+            }
           }
-        } catch (sendError) {
-          console.error("❌ Could not send error response:", sendError);
         }
       }
+    } catch (error) {
+      console.error("❌ Error in message stream:", error);
     }
+  })();
+
+  // Cleanup function
+  const cleanup = async () => {
+    console.log("🧹 Cleaning up application resources...");
+
+    try {
+      // Stop message stream
+      isStreamActive = false;
+      if (stream) {
+        try {
+          await stream.return();
+        } catch (error) {
+          console.warn("⚠️ Error closing message stream:", error);
+        }
+      }
+
+      // Wait for message processing to complete
+      await messageProcessingPromise;
+
+      console.log("✅ Application cleanup completed");
+    } catch (error) {
+      console.error("❌ Error during application cleanup:", error);
+    }
+  };
+
+  return {
+    client,
+    statusMonitor,
+    messageStream: stream,
+    cleanup,
+  };
+}
+
+/**
+ * Main function that starts the application with monitoring
+ */
+async function main() {
+  console.log("🚀 Starting Flaunchy with XMTP status monitoring...");
+
+  try {
+    // Create status monitor
+    const statusMonitor = new XMTPStatusMonitor(volumePath);
+
+    // Start application with monitoring
+    await statusMonitor.startWithMonitoring(createApplication);
+
+    console.log("✅ Application started successfully with monitoring!");
+  } catch (error) {
+    console.error("💥 Fatal error:", error);
+    process.exit(1);
   }
 }
 
@@ -191,12 +249,12 @@ main().catch((error) => {
 });
 
 // Graceful shutdown handling
-process.on("SIGINT", () => {
+process.on("SIGINT", async () => {
   console.log("\n🛑 Received SIGINT, shutting down gracefully...");
   process.exit(0);
 });
 
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
   console.log("\n🛑 Received SIGTERM, shutting down gracefully...");
   process.exit(0);
 });

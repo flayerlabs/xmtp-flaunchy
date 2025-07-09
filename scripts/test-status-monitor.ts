@@ -26,15 +26,24 @@ async function testStatusMonitor() {
 
     // Start monitoring for a short test period
     console.log("\n3. Starting monitoring for 30 seconds...");
-    monitor.startMonitoring(() => {
-      console.log("🔄 Restart callback triggered!");
-      process.exit(0);
-    });
+
+    // Mock application factory for testing
+    const mockApplicationFactory = async () => {
+      return {
+        client: {} as any,
+        statusMonitor: monitor,
+        messageStream: {} as any,
+        cleanup: async () => console.log("Mock cleanup called"),
+      };
+    };
+
+    // Start monitoring with mock factory
+    monitor.startWithMonitoring(mockApplicationFactory);
 
     // Wait 30 seconds then stop
-    setTimeout(() => {
+    setTimeout(async () => {
       console.log("\n4. Stopping monitor...");
-      monitor.stopMonitoring();
+      await monitor.shutdown();
       console.log("✅ Test completed successfully!");
       process.exit(0);
     }, 30000);
