@@ -110,7 +110,9 @@ export class GroupCreationUtils {
         try {
           address = await context.resolveUsername(receiver.username);
         } catch (error) {
-          console.log(`[GroupCreation] ❌ Failed to resolve username: ${receiver.username}`);
+          console.log(
+            `[GroupCreation] ❌ Failed to resolve username: ${receiver.username}`
+          );
         }
       }
 
@@ -142,7 +144,11 @@ export class GroupCreationUtils {
     );
 
     if (invalidReceivers.length > 0) {
-      console.log(`[GroupCreation] ❌ Invalid addresses: ${invalidReceivers.map(r => r.username).join(', ')}`);
+      console.log(
+        `[GroupCreation] ❌ Invalid addresses: ${invalidReceivers
+          .map((r) => r.username)
+          .join(", ")}`
+      );
       throw new Error(
         `Invalid receiver addresses detected: ${invalidReceivers
           .map((r) => `${r.username}: ${r.resolvedAddress}`)
@@ -277,8 +283,6 @@ export class GroupCreationUtils {
     const addressFeeSplitManagerImplementation =
       AddressFeeSplitManagerAddress[chainConfig.id];
 
-
-
     if (!treasuryManagerFactory || !addressFeeSplitManagerImplementation) {
       throw new Error(
         `Contract addresses not configured for chain ${
@@ -331,7 +335,9 @@ export class GroupCreationUtils {
       ],
     };
 
-    console.log(`[GroupCreation] ✅ Created group deployment transaction for ${resolvedReceivers.length} receivers (${addressShareMap.size} unique addresses)`);
+    console.log(
+      `[GroupCreation] ✅ Created group deployment transaction for ${resolvedReceivers.length} receivers (${addressShareMap.size} unique addresses)`
+    );
 
     // Return wallet send calls in the correct format
     return walletSendCalls;
@@ -1160,27 +1166,34 @@ IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}`
       receivers,
       ensResolver
     );
-    const membersList = displayNames.slice(0, 3).join(", ");
-    const moreCount =
-      displayNames.length > 3 ? ` and ${displayNames.length - 3} more` : "";
+
+    // Create numbered list with percentages - show all members
+    const membersList = receivers
+      .map((receiver, index) => {
+        const displayName = displayNames[index];
+        const percentage = receiver.percentage
+          ? ` - ${receiver.percentage.toFixed(1)}%`
+          : "";
+        return `${index + 1}. ${displayName}${percentage}`;
+      })
+      .join("\n");
 
     // Create natural, excited messages based on the action
     if (action === "creating") {
-      return `creating group with ${receivers.length} members: ${membersList}${moreCount}. sign to create!`;
+      return `creating group with ${receivers.length} members:\n${membersList}`;
     } else if (action === "updated") {
-      return `updated group with ${receivers.length} members: ${membersList}${moreCount}. sign to create!`;
+      return `updated group with ${receivers.length} members:\n${membersList}`;
     } else {
       // For 'created' and other actions, generate an excited confirmation
       const memberCount = receivers.length;
-      const allMembersList = `${membersList}${moreCount}`;
 
       // Generate excited messages similar to group introductions
       const excitedMessages = [
-        `ready to create a group for ${memberCount} members: ${allMembersList}! let's make some moves`,
-        `${memberCount}-member group is ready to deploy: ${allMembersList}! ready to dominate`,
-        `transaction ready for ${allMembersList}! time to trade`,
-        `${memberCount} members strong: ${allMembersList}! group is ready to deploy`,
-        `sign to create a group for ${memberCount} members: ${allMembersList}! let's get this bread`,
+        `ready to create a group for ${memberCount} members:\n${membersList}\nlet's make some moves!`,
+        `${memberCount}-member group is ready to deploy:\n${membersList}\nready to dominate!`,
+        `transaction ready:\n${membersList}\ntime to trade!`,
+        `${memberCount} members strong:\n${membersList}\ngroup is ready to deploy!`,
+        `sign to create a group for ${memberCount} members:\n${membersList}\nlet's get this bread!`,
       ];
 
       // Pick a random excited message
