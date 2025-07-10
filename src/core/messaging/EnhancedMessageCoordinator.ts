@@ -409,7 +409,8 @@ export class EnhancedMessageCoordinator {
       const shouldProcess = await this.shouldProcessMessage(
         primaryMessage,
         conversation,
-        userState
+        userState,
+        relatedMessages
       );
 
       if (!shouldProcess) {
@@ -1525,10 +1526,38 @@ export class EnhancedMessageCoordinator {
     return "";
   }
 
+  /**
+   * Extract combined text content from primary message and related messages
+   * This handles cases where text and attachment are sent as separate messages
+   */
+  private extractCombinedMessageText(
+    primaryMessage: DecodedMessage,
+    relatedMessages: DecodedMessage[]
+  ): string {
+    const isAttachment = primaryMessage.contentType?.sameAs(
+      ContentTypeRemoteAttachment
+    );
+
+    if (isAttachment) {
+      // Look for text in related messages
+      const textMessage = relatedMessages.find(
+        (msg) => !msg.contentType?.sameAs(ContentTypeRemoteAttachment)
+      );
+      if (textMessage) {
+        return this.extractMessageText(textMessage).trim();
+      }
+      return "";
+    } else {
+      // Primary message is text (or reply with text)
+      return this.extractMessageText(primaryMessage).trim();
+    }
+  }
+
   private async shouldProcessMessage(
     primaryMessage: DecodedMessage,
     conversation: any,
-    userState: any
+    userState: any,
+    relatedMessages: DecodedMessage[] = []
   ): Promise<boolean> {
     // Always process messages in 1:1 conversations
     const members = await conversation.members();
@@ -1538,9 +1567,22 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    const messageText = this.extractMessageText(primaryMessage);
+    // Extract combined message text from primary message and related messages
+    // This handles cases where text and attachment are sent as separate messages
+    const messageText = this.extractCombinedMessageText(
+      primaryMessage,
+      relatedMessages
+    );
     const senderInboxId = primaryMessage.senderInboxId;
     const conversationId = primaryMessage.conversationId;
+
+    console.log("🔍 COMBINED MESSAGE TEXT EXTRACTION", {
+      conversationId: conversationId.slice(0, 8) + "...",
+      primaryMessageType: primaryMessage.contentType?.typeId || "text",
+      relatedMessagesCount: relatedMessages.length,
+      extractedText: messageText.substring(0, 100) + "...",
+      hasText: messageText.length > 0,
+    });
 
     // Check if this is a reply to a flaunchy message (high confidence engagement)
     const isReplyToAgent = await this.isReplyToAgentMessage(primaryMessage);
