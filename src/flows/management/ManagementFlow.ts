@@ -461,7 +461,7 @@ If no parameters are mentioned, return:
             premineAmount: updatedLaunchParameters.premineAmount || 0,
             buybackPercentage: updatedLaunchParameters.buybackPercentage || 0,
           } as any,
-          targetGroup
+          targetGroup.id
         );
 
         // CoinLaunchFlow already sends a response, so we don't need to send another one

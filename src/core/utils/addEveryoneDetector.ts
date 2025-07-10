@@ -12,14 +12,6 @@ export async function detectAddEveryone(
   const text = messageText || (context.message.content as string);
   if (!text) return false;
 
-  // Check FlowRouter multi-intent flags first (fast path)
-  if (context.multiIntentResult?.flags?.isAddEveryone) {
-    console.log(
-      `[AddEveryoneDetector] ✅ Everyone detected via FlowRouter flags`
-    );
-    return true;
-  }
-
   // Use LLM for accurate detection with typo tolerance
   try {
     const response = await context.openai.chat.completions.create({
