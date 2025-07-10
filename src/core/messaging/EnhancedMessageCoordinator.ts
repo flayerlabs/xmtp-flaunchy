@@ -409,7 +409,8 @@ export class EnhancedMessageCoordinator {
       const shouldProcess = await this.shouldProcessMessage(
         primaryMessage,
         conversation,
-        userState
+        userState,
+        relatedMessages
       );
 
       if (!shouldProcess) {
@@ -1525,10 +1526,38 @@ export class EnhancedMessageCoordinator {
     return "";
   }
 
+  /**
+   * Extract combined text content from primary message and related messages
+   * This handles cases where text and attachment are sent as separate messages
+   */
+  private extractCombinedMessageText(
+    primaryMessage: DecodedMessage,
+    relatedMessages: DecodedMessage[]
+  ): string {
+    const isAttachment = primaryMessage.contentType?.sameAs(
+      ContentTypeRemoteAttachment
+    );
+
+    if (isAttachment) {
+      // Look for text in related messages
+      const textMessage = relatedMessages.find(
+        (msg) => !msg.contentType?.sameAs(ContentTypeRemoteAttachment)
+      );
+      if (textMessage) {
+        return this.extractMessageText(textMessage).trim();
+      }
+      return "";
+    } else {
+      // Primary message is text (or reply with text)
+      return this.extractMessageText(primaryMessage).trim();
+    }
+  }
+
   private async shouldProcessMessage(
     primaryMessage: DecodedMessage,
     conversation: any,
-    userState: any
+    userState: any,
+    relatedMessages: DecodedMessage[] = []
   ): Promise<boolean> {
     // Always process messages in 1:1 conversations
     const members = await conversation.members();
@@ -1538,9 +1567,22 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
-    const messageText = this.extractMessageText(primaryMessage);
+    // Extract combined message text from primary message and related messages
+    // This handles cases where text and attachment are sent as separate messages
+    const messageText = this.extractCombinedMessageText(
+      primaryMessage,
+      relatedMessages
+    );
     const senderInboxId = primaryMessage.senderInboxId;
     const conversationId = primaryMessage.conversationId;
+
+    console.log("🔍 COMBINED MESSAGE TEXT EXTRACTION", {
+      conversationId: conversationId.slice(0, 8) + "...",
+      primaryMessageType: primaryMessage.contentType?.typeId || "text",
+      relatedMessagesCount: relatedMessages.length,
+      extractedText: messageText.substring(0, 100) + "...",
+      hasText: messageText.length > 0,
+    });
 
     // Check if this is a reply to a flaunchy message (high confidence engagement)
     const isReplyToAgent = await this.isReplyToAgentMessage(primaryMessage);
@@ -1822,6 +1864,32 @@ export class EnhancedMessageCoordinator {
       return false;
     }
 
+    // SPECIAL HANDLING: If user has pending transaction or is in active flow, 
+    // always consider them engaged to allow follow-up messages
+    const creatorAddress = await this.getCreatorAddressFromInboxId(senderInboxId);
+    if (creatorAddress) {
+      const userState = await this.sessionManager.getUserState(creatorAddress);
+      const hasActiveFlow = userState.pendingTransaction || 
+                           userState.onboardingProgress ||
+                           userState.managementProgress ||
+                           userState.coinLaunchProgress;
+      
+      if (hasActiveFlow) {
+        console.log("⚡ ACTIVE FLOW DETECTED - skipping engagement check", {
+          conversationId: conversationId.slice(0, 8) + "...",
+          userId: senderInboxId.slice(0, 8) + "...",
+          pendingTx: userState.pendingTransaction?.type,
+          onboarding: !!userState.onboardingProgress,
+          management: !!userState.managementProgress,
+          coinLaunch: !!userState.coinLaunchProgress,
+        });
+        
+        // Update thread activity and return true
+        await this.updateThreadActivity(conversationId, senderInboxId);
+        return true;
+      }
+    }
+
     // Use improved LLM to check if user is still engaging with the bot
     const messageText = this.extractMessageText(message);
     const engagementResult = await this.checkConversationEngagement(
@@ -1915,12 +1983,17 @@ ENGAGED (respond "YES:continuing"):
 - Providing requested information: usernames, addresses, confirmations
 - Direct responses to bot: "yes", "ok", "go ahead"
 - Bot-related requests: "show my groups", "launch a coin"
+- Modification requests: "remove user", "add person", "change percentage", "exclude someone"
+- User management: "remove alice", "add bob", "kick user", "exclude person"
+- Group/coin modifications: "change that", "remove noblet", "add javery", "exclude @user"
 
 DISENGAGED (respond "NO:reason"):
 - Greeting others: "hey alice", "hi bob" → "NO:greeting_others"
-- General chat: "lol", "nice", "cool" → "NO:general_chat"  
+- General chat without bot context: "lol", "nice", "cool" → "NO:general_chat"  
 - Unrelated topics: "what's for lunch?" → "NO:off_topic"
-- Side conversations: talking about non-bot things → "NO:side_conversation"
+- Side conversations about non-bot things → "NO:side_conversation"
+
+IMPORTANT: If user says "remove [username]" or "add [username]" in context of group creation, they are continuing the bot interaction.
 
 Respond: "YES:continuing" or "NO:reason"`;
   }
@@ -2231,6 +2304,18 @@ Respond: "YES:reason" or "NO:reason"`;
       // Default to false (assume group chat) if we can't determine
       // This ensures paw reactions are sent when in doubt
       return false;
+    }
+  }
+
+  private async getCreatorAddressFromInboxId(inboxId: string): Promise<string | undefined> {
+    try {
+      // Use the same pattern as in processCoordinatedMessages
+      const inboxState = await this.client.preferences.inboxStateFromInboxIds([inboxId]);
+      const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
+      return creatorAddress.startsWith("0x") ? creatorAddress : undefined;
+    } catch (error) {
+      console.error("Error getting creator address from inbox ID:", error);
+      return undefined;
     }
   }
 }

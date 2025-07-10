@@ -4,6 +4,7 @@ import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { getDefaultChain } from "../utils/ChainSelection";
 import { ContentTypeWalletSendCalls } from "@xmtp/content-type-wallet-send-calls";
 import { validateWalletSendCalls } from "../utils/WalletSendCallsValidator";
+import { detectAddEveryone } from '../../core/utils/addEveryoneDetector';
 
 /**
  * GroupLaunchFlow handles group creation for users who already have existing groups.
@@ -116,40 +117,7 @@ export class GroupLaunchFlow extends BaseFlow {
    * ENHANCED: More comprehensive detection patterns
    */
   private async detectAddEveryone(context: FlowContext, messageText: string): Promise<boolean> {
-    if (!messageText) return false;
-
-    try {
-      const response = await context.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{
-          role: 'user',
-          content: `Does this message request to include all group chat members? "${messageText}" 
-          
-          Look for requests like:
-          - "everyone"
-          - "for everyone" 
-          - "all members"
-          - "include everyone"
-          - "everyone in the chat"
-          - "everyone in this chat"
-          - "add everyone"
-          - "create a group for everyone"
-          - "let's create a group for everyone"
-          - "group for everyone"
-          - "all of us"
-          - "all people in this chat"
-          
-          Answer only "yes" or "no".`
-        }],
-        temperature: 0.1,
-        max_tokens: 5
-      });
-
-      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
-    } catch (error) {
-      this.logError('Failed to detect add everyone request', error);
-      return false;
-    }
+    return await detectAddEveryone(context, messageText);
   }
 
   /**

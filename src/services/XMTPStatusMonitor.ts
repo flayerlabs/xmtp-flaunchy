@@ -28,6 +28,8 @@ interface ApplicationResources {
   cleanup: () => Promise<void>;
 }
 
+const displayStatusLogs = process.env.DISPLAY_STATUS_LOGS === "true";
+
 export class XMTPStatusMonitor {
   private readonly RSS_URL = "https://status.xmtp.org/feed.rss";
   private readonly STATUS_FILE_PATH: string;
@@ -72,7 +74,9 @@ export class XMTPStatusMonitor {
    */
   private async fetchRSSFeed(): Promise<StatusIncident[]> {
     try {
-      console.log("📡 Fetching XMTP status RSS feed...");
+      if (displayStatusLogs) {
+        console.log("📡 Fetching XMTP status RSS feed...");
+      }
       const response = await axios.get(this.RSS_URL);
 
       if (response.status !== 200) {
@@ -161,13 +165,17 @@ export class XMTPStatusMonitor {
   private async checkForNewIssues(): Promise<boolean> {
     try {
       const incidents = await this.fetchRSSFeed();
-      console.log(`📊 Found ${incidents.length} total incidents in RSS feed`);
+      if (displayStatusLogs) {
+        console.log(`📊 Found ${incidents.length} total incidents in RSS feed`);
+      }
 
       const statusData = JSON.parse(
         fs.readFileSync(this.STATUS_FILE_PATH, "utf8")
       );
       const lastStartupTime = new Date(statusData.lastStartupTime);
-      console.log(`📅 Last startup time: ${lastStartupTime.toISOString()}`);
+      if (displayStatusLogs) {
+        console.log(`📅 Last startup time: ${lastStartupTime.toISOString()}`);
+      }
 
       // Filter incidents that are:
       // 1. Not resolved AND published after startup time
@@ -186,15 +194,17 @@ export class XMTPStatusMonitor {
         );
 
         // Log each incident for debugging
-        console.log(`🔍 Checking incident: ${incident.title}`);
-        console.log(`  📅 Published: ${incident.pubDate.toISOString()}`);
-        console.log(`  ✅ Resolved: ${incident.isResolved}`);
-        console.log(
-          `  🎯 Components: ${incident.affectedComponents.join(", ")}`
-        );
-        console.log(`  🕒 After startup: ${isAfterStartup}`);
-        console.log(`  📈 Recent: ${isRecent}`);
-        console.log(`  🔧 Node SDK issue: ${isNodeSDKIssue}`);
+        if (displayStatusLogs) {
+          console.log(`🔍 Checking incident: ${incident.title}`);
+          console.log(`  📅 Published: ${incident.pubDate.toISOString()}`);
+          console.log(`  ✅ Resolved: ${incident.isResolved}`);
+          console.log(
+            `  🎯 Components: ${incident.affectedComponents.join(", ")}`
+          );
+          console.log(`  🕒 After startup: ${isAfterStartup}`);
+          console.log(`  📈 Recent: ${isRecent}`);
+          console.log(`  🔧 Node SDK issue: ${isNodeSDKIssue}`);
+        }
 
         return (
           (!incident.isResolved && isAfterStartup) ||
@@ -202,7 +212,7 @@ export class XMTPStatusMonitor {
         );
       });
 
-      if (criticalIncidents.length > 0) {
+      if (criticalIncidents.length > 0 && displayStatusLogs) {
         console.log("🚨 Critical XMTP issues detected:");
         criticalIncidents.forEach((incident) => {
           console.log(
@@ -235,7 +245,7 @@ export class XMTPStatusMonitor {
         );
       });
 
-      if (newResolvedIssues.length > 0) {
+      if (newResolvedIssues.length > 0 && displayStatusLogs) {
         console.log("✅ XMTP issues have been resolved since startup:");
         newResolvedIssues.forEach((incident) => {
           console.log(
@@ -250,7 +260,9 @@ export class XMTPStatusMonitor {
         return true;
       }
 
-      console.log("✅ No critical XMTP issues detected");
+      if (displayStatusLogs) {
+        console.log("✅ No critical XMTP issues detected");
+      }
       return false;
     } catch (error) {
       console.error("❌ Error checking for issues:", error);
@@ -407,7 +419,9 @@ export class XMTPStatusMonitor {
    */
   private async performCheck(): Promise<void> {
     try {
-      console.log("🔍 Checking XMTP status...");
+      if (displayStatusLogs) {
+        console.log("🔍 Checking XMTP status...");
+      }
       const shouldRestart = await this.checkForNewIssues();
 
       if (shouldRestart) {

@@ -146,7 +146,12 @@ export class QAFlow extends BaseFlow {
     // Check if this is a capability question about how the agent/system works
     const isCapabilityQuestion = context.detectionResult?.questionType === 'capability';
     
-    if (isCapabilityQuestion) {
+    // Check if this is a status/transaction inquiry
+    const isStatusInquiry = await this.detectStatusInquiry(context, messageText);
+    
+    if (isStatusInquiry) {
+      await this.handleStatusInquiry(context, messageText);
+    } else if (isCapabilityQuestion) {
       await this.handleCapabilityQuestion(context, messageText);
     } else {
       await this.handleGeneralQuestion(context, messageText);
@@ -346,6 +351,116 @@ export class QAFlow extends BaseFlow {
         IMPORTANT: If user needs onboarding (status: 'onboarding' or 'new'), gently guide them back to onboarding after answering their question.
         
         Use your character's voice but prioritize brevity and helpfulness.
+      `
+    });
+
+    await this.sendResponse(context, response);
+  }
+
+  /**
+   * Detect if user is asking about their current status, transactions, or progress
+   */
+  private async detectStatusInquiry(context: FlowContext, messageText: string): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Is this message asking about the user's current status, progress, or pending transactions? "${messageText}"
+          
+          Look for questions like:
+          - "do I have a group being created?"
+          - "what's my status?"
+          - "do I have any pending transactions?"
+          - "what groups do I have?"
+          - "what coins have I launched?"
+          - "am I in onboarding?"
+          - "what's happening with my transaction?"
+          - "where am I in the process?"
+          - "what's my current state?"
+          - "do I have anything pending?"
+          
+          Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+    } catch (error) {
+      this.logError('Failed to detect status inquiry', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle status inquiries about user's current state and progress
+   */
+  private async handleStatusInquiry(context: FlowContext, messageText: string): Promise<void> {
+    const { userState } = context;
+    
+    // Build status information
+    let statusInfo = [];
+    
+    // Current status
+    statusInfo.push(`Status: ${userState.status}`);
+    
+    // Groups
+    if (userState.groups.length > 0) {
+      statusInfo.push(`Groups: ${userState.groups.length} active`);
+    } else {
+      statusInfo.push(`Groups: none created yet`);
+    }
+    
+    // Coins
+    if (userState.coins.length > 0) {
+      statusInfo.push(`Coins: ${userState.coins.length} launched`);
+    } else {
+      statusInfo.push(`Coins: none launched yet`);
+    }
+    
+    // Pending transaction
+    if (userState.pendingTransaction) {
+      const txType = userState.pendingTransaction.type.replace('_', ' ');
+      statusInfo.push(`Pending: ${txType} transaction ready to sign`);
+    } else {
+      statusInfo.push(`Pending: no transactions`);
+    }
+    
+    // Onboarding progress
+    if (userState.onboardingProgress) {
+      const step = userState.onboardingProgress.step || 'unknown';
+      statusInfo.push(`Onboarding: ${step} step`);
+    }
+    
+    // Coin launch progress
+    if (userState.coinLaunchProgress) {
+      const step = userState.coinLaunchProgress.step || 'unknown';
+      statusInfo.push(`Coin launch: ${step} step`);
+    }
+    
+    // Management progress
+    if (userState.managementProgress) {
+      const action = userState.managementProgress.action || 'unknown';
+      statusInfo.push(`Management: ${action} in progress`);
+    }
+    
+    const response = await getCharacterResponse({
+      openai: context.openai,
+      character: context.character,
+      prompt: `
+        User asked: "${messageText}"
+        
+        Current status information:
+        ${statusInfo.join('\n')}
+        
+        Answer their question about their current status/progress using this information.
+        Be direct and informative. If they have a pending transaction, mention they need to sign it.
+        If they're in onboarding, briefly explain what step they're on.
+        
+        Use your character's voice but prioritize clarity and helpfulness.
       `
     });
 
