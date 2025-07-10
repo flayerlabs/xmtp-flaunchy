@@ -1169,7 +1169,6 @@ export class EnhancedMessageCoordinator {
             // Send onboarding completion message immediately when first coin is launched
             const completionMessage = `🎉 onboarding complete! you've got groups and coins set up.`;
             await conversation.send(completionMessage);
-            await conversation.send("https://mini.flaunch.gg");
           }
         }
 
