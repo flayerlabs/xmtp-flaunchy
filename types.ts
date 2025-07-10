@@ -1,6 +1,7 @@
 import type { Client, Conversation, Signer } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import { Address, Hex } from "viem";
 
 /**
  * Configuration for an agent character
@@ -91,3 +92,16 @@ export interface ToolHandler {
 }
 
 export type ToolRegistry = Record<string, ToolHandler>;
+
+export interface TransactionReferenceMessage {
+  content: {
+    transactionReference: {
+      networkId: Hex;
+      reference: Hex;
+      metadata: {
+        transactionType: string;
+        fromAddress: Address;
+      };
+    };
+  };
+}

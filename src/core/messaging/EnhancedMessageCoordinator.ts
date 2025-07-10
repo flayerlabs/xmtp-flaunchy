@@ -4,7 +4,7 @@ import { FlowRouter } from "../flows/FlowRouter";
 import { SessionManager } from "../session/SessionManager";
 import { FlowContext } from "../types/FlowContext";
 import { UserState, UserGroup } from "../types/UserState";
-import { Character } from "../../../types";
+import { Character, TransactionReferenceMessage } from "../../../types";
 import {
   ContentTypeRemoteAttachment,
   type RemoteAttachment,
@@ -15,17 +15,12 @@ import {
   ContentTypeTransactionReference,
   type TransactionReference,
 } from "@xmtp/content-type-transaction-reference";
-import {
-  ContentTypeReply,
-  type Reply,
-} from "@xmtp/content-type-reply";
+import { ContentTypeReply, type Reply } from "@xmtp/content-type-reply";
 import {
   ContentTypeReaction,
   type Reaction,
 } from "@xmtp/content-type-reaction";
-import {
-  ContentTypeText,
-} from "@xmtp/content-type-text";
+import { ContentTypeText } from "@xmtp/content-type-text";
 
 import {
   decodeEventLog,
@@ -285,7 +280,10 @@ export class EnhancedMessageCoordinator {
     }
 
     // Skip transaction receipt messages that come as text with '...' content
-    if (typeof message.content === "string" && message.content.trim() === "...") {
+    if (
+      typeof message.content === "string" &&
+      message.content.trim() === "..."
+    ) {
       console.log("[MessageCoordinator] ⏭️ Skipping transaction receipt");
       return false;
     }
@@ -379,10 +377,14 @@ export class EnhancedMessageCoordinator {
       const primaryMessage = messages[messages.length - 1];
       const relatedMessages = messages.slice(0, -1);
 
-      const hasAttachment = messages.some(msg => 
+      const hasAttachment = messages.some((msg) =>
         msg.contentType?.sameAs(ContentTypeRemoteAttachment)
       );
-      console.log(`[MessageCoordinator] 🔄 Processing ${messages.length} messages${hasAttachment ? ' (with attachment)' : ''}`);
+      console.log(
+        `[MessageCoordinator] 🔄 Processing ${messages.length} messages${
+          hasAttachment ? " (with attachment)" : ""
+        }`
+      );
 
       // Get conversation
       const conversation = await this.client.conversations.getConversationById(
@@ -411,7 +413,9 @@ export class EnhancedMessageCoordinator {
       );
 
       if (!shouldProcess) {
-        console.log("[MessageCoordinator] 🚫 Message filtered out - not directed at agent");
+        console.log(
+          "[MessageCoordinator] 🚫 Message filtered out - not directed at agent"
+        );
         return false;
       }
 
@@ -535,11 +539,11 @@ export class EnhancedMessageCoordinator {
       sendResponse: async (message: string) => {
         // Check if we should use reply format due to intervening messages
         const shouldUseReply = await this.shouldUseReplyFormat(
-          primaryMessage, 
-          conversation, 
+          primaryMessage,
+          conversation,
           this.client.inboxId
         );
-        
+
         if (shouldUseReply) {
           // Send as a reply to the original message
           const reply: Reply = {
@@ -547,18 +551,18 @@ export class EnhancedMessageCoordinator {
             content: message,
             contentType: ContentTypeText,
           };
-          
+
           console.log("💬 Sending reply due to intervening messages", {
             referencingMessageId: primaryMessage.id.slice(0, 16) + "...",
-            messagePreview: message.substring(0, 50) + "..."
+            messagePreview: message.substring(0, 50) + "...",
           });
-          
+
           await conversation.send(reply, ContentTypeReply);
         } else {
           // Send as normal text message
           await conversation.send(message);
         }
-        
+
         // Update thread state when agent sends a message
         this.updateThreadWithAgentMessage(conversation.id);
       },
@@ -774,7 +778,11 @@ export class EnhancedMessageCoordinator {
         "base64"
       );
 
-      console.log(`[MessageCoordinator] 📊 Processing image (${(decryptedAttachment.data.length / 1024).toFixed(1)}KB)`);
+      console.log(
+        `[MessageCoordinator] 📊 Processing image (${(
+          decryptedAttachment.data.length / 1024
+        ).toFixed(1)}KB)`
+      );
 
       // Upload to IPFS using our existing upload function
       const ipfsResponse = await uploadImageToIPFS({
@@ -782,8 +790,6 @@ export class EnhancedMessageCoordinator {
         base64Image,
         name: decryptedAttachment.filename || "image",
       });
-
-
 
       // Validate the IPFS hash
       if (!ipfsResponse.IpfsHash || typeof ipfsResponse.IpfsHash !== "string") {
@@ -875,9 +881,12 @@ export class EnhancedMessageCoordinator {
       }
 
       // Parse the transaction reference content
-      const transactionRef = message.content as TransactionReference;
-      const txHash = transactionRef.reference as `0x${string}`;
-      console.log(`[MessageCoordinator] 🔍 Processing ${pendingTx.type} transaction: ${txHash}`);
+      const transactionRef = (message as TransactionReferenceMessage).content
+        .transactionReference;
+      const txHash = transactionRef.reference;
+      console.log(
+        `[MessageCoordinator] 🔍 Processing ${pendingTx.type} transaction: ${txHash}`
+      );
 
       // Use default chain from environment
       const defaultChain = getDefaultChain();
@@ -1505,7 +1514,7 @@ export class EnhancedMessageCoordinator {
       if (replyContent.content && typeof replyContent.content === "string") {
         console.log("📝 Extracted text from reply message", {
           originalContent: replyContent.content.substring(0, 50) + "...",
-          referenceId: (replyContent.reference as string)?.slice(0, 16) + "..."
+          referenceId: (replyContent.reference as string)?.slice(0, 16) + "...",
         });
         return replyContent.content;
       }
@@ -1535,17 +1544,21 @@ export class EnhancedMessageCoordinator {
 
     // Check if this is a reply to a flaunchy message (high confidence engagement)
     const isReplyToAgent = await this.isReplyToAgentMessage(primaryMessage);
-    
+
     if (isReplyToAgent) {
       // Special handling for non-text replies (reactions, etc.)
-      if (!messageText || messageText === '[NON-TEXT]' || messageText.trim() === '') {
+      if (
+        !messageText ||
+        messageText === "[NON-TEXT]" ||
+        messageText.trim() === ""
+      ) {
         console.log("🐾 NON-TEXT REPLY TO AGENT", {
           senderInboxId: senderInboxId.slice(0, 8) + "...",
           conversationId: conversationId.slice(0, 8) + "...",
           contentType: primaryMessage.contentType?.toString(),
-          content: primaryMessage.content?.toString().substring(0, 50) + "..."
+          content: primaryMessage.content?.toString().substring(0, 50) + "...",
         });
-        
+
         // Update thread but don't process through flow router
         await this.updateActiveThread(
           conversationId,
@@ -1555,13 +1568,14 @@ export class EnhancedMessageCoordinator {
         return false; // Don't continue to flow processing
       }
 
-
-
-      console.log("💬 REPLY TO AGENT DETECTED - processing with high confidence", {
-        senderInboxId: senderInboxId.slice(0, 8) + "...",
-        conversationId: conversationId.slice(0, 8) + "...",
-        messageText: messageText.substring(0, 100) + "...",
-      });
+      console.log(
+        "💬 REPLY TO AGENT DETECTED - processing with high confidence",
+        {
+          senderInboxId: senderInboxId.slice(0, 8) + "...",
+          conversationId: conversationId.slice(0, 8) + "...",
+          messageText: messageText.substring(0, 100) + "...",
+        }
+      );
 
       // Start/update active thread when user replies to agent
       await this.updateActiveThread(
@@ -1575,22 +1589,28 @@ export class EnhancedMessageCoordinator {
     // CRITICAL: If this is a reply to someone else (not Flaunchy), only process if explicitly @mentioned
     if (primaryMessage.contentType?.sameAs(ContentTypeReply)) {
       const hasExplicitMention = this.detectExplicitAgentMention(messageText);
-      
+
       if (!hasExplicitMention) {
-        console.log("🚫 REPLY TO OTHER USER - ignoring without explicit @mention", {
+        console.log(
+          "🚫 REPLY TO OTHER USER - ignoring without explicit @mention",
+          {
+            senderInboxId: senderInboxId.slice(0, 8) + "...",
+            conversationId: conversationId.slice(0, 8) + "...",
+            messageText: messageText.substring(0, 50) + "...",
+            reason: "reply_to_other_without_explicit_mention",
+          }
+        );
+        return false;
+      }
+
+      console.log(
+        "✅ REPLY TO OTHER USER with explicit @mention - processing",
+        {
           senderInboxId: senderInboxId.slice(0, 8) + "...",
           conversationId: conversationId.slice(0, 8) + "...",
           messageText: messageText.substring(0, 50) + "...",
-          reason: "reply_to_other_without_explicit_mention"
-        });
-        return false;
-      }
-      
-      console.log("✅ REPLY TO OTHER USER with explicit @mention - processing", {
-        senderInboxId: senderInboxId.slice(0, 8) + "...",
-        conversationId: conversationId.slice(0, 8) + "...",
-        messageText: messageText.substring(0, 50) + "..."
-      });
+        }
+      );
     }
 
     // Fast regex check for obvious mentions (saves LLM calls)
@@ -1669,8 +1689,6 @@ export class EnhancedMessageCoordinator {
     return false;
   }
 
-
-
   /**
    * Fast regex detection for obvious agent mentions (saves LLM calls)
    * Only catches the most clear-cut cases where we're 100% sure
@@ -1709,9 +1727,15 @@ export class EnhancedMessageCoordinator {
 
     // Check for VERY OBVIOUS direct address to agent
     const obviousPatterns = [
-      new RegExp(`^(hey|hello|hi|ok|yes|sure|alright)\\s+${agentName}\\b`, 'i'), // "hey flaunchy", "ok flaunchy"
-      new RegExp(`^${agentName}\\s+(hey|hello|hi|let|can|help|show|create|add|include|remove|launch|make)`, 'i'), // "flaunchy hey", "flaunchy add", "flaunchy create"
-      new RegExp(`^${agentName}[,\\s]+(help|what|how|can|could|show|let|add|create|launch|include)`, 'i'), // "flaunchy, help me", "flaunchy add javery"
+      new RegExp(`^(hey|hello|hi|ok|yes|sure|alright)\\s+${agentName}\\b`, "i"), // "hey flaunchy", "ok flaunchy"
+      new RegExp(
+        `^${agentName}\\s+(hey|hello|hi|let|can|help|show|create|add|include|remove|launch|make)`,
+        "i"
+      ), // "flaunchy hey", "flaunchy add", "flaunchy create"
+      new RegExp(
+        `^${agentName}[,\\s]+(help|what|how|can|could|show|let|add|create|launch|include)`,
+        "i"
+      ), // "flaunchy, help me", "flaunchy add javery"
     ];
 
     // Check obvious patterns
@@ -1801,12 +1825,12 @@ export class EnhancedMessageCoordinator {
     // Use improved LLM to check if user is still engaging with the bot
     const messageText = this.extractMessageText(message);
     const engagementResult = await this.checkConversationEngagement(
-      messageText, 
-      conversationId, 
+      messageText,
+      conversationId,
       senderInboxId,
       "active_thread"
     );
-    
+
     if (!engagementResult.isEngaged) {
       // Remove this user from the thread - they've moved on
       thread.participatingUsers.delete(senderInboxId);
@@ -1841,9 +1865,10 @@ export class EnhancedMessageCoordinator {
     if (!messageText) return { isEngaged: false, reason: "empty_message" };
 
     try {
-      const contextualPrompt = context === "active_thread" 
-        ? this.buildActiveThreadPrompt(messageText)
-        : this.buildNewMessagePrompt(messageText);
+      const contextualPrompt =
+        context === "active_thread"
+          ? this.buildActiveThreadPrompt(messageText)
+          : this.buildNewMessagePrompt(messageText);
 
       const response = await this.openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -1853,9 +1878,9 @@ export class EnhancedMessageCoordinator {
       });
 
       const result = response.choices[0]?.message?.content?.trim();
-      const [answer, ...reasonParts] = result?.split(':') || [];
+      const [answer, ...reasonParts] = result?.split(":") || [];
       const isEngaged = answer?.toUpperCase() === "YES";
-      const reason = reasonParts.join(':').trim() || answer;
+      const reason = reasonParts.join(":").trim() || answer;
 
       console.log("🤖 ENGAGEMENT CHECK", {
         context,
@@ -2034,7 +2059,9 @@ Respond: "YES:reason" or "NO:reason"`;
   /**
    * Check if the message is a reply to one of the agent's messages
    */
-  private async isReplyToAgentMessage(message: DecodedMessage): Promise<boolean> {
+  private async isReplyToAgentMessage(
+    message: DecodedMessage
+  ): Promise<boolean> {
     try {
       // Check if this message has reply content type
       if (!message.contentType?.sameAs(ContentTypeReply)) {
@@ -2042,16 +2069,20 @@ Respond: "YES:reason" or "NO:reason"`;
       }
 
       const replyContent = message.content as Reply;
-      
+
       console.log("🔍 REPLY MESSAGE DEBUG", {
         contentType: message.contentType.toString(),
         hasReference: !!replyContent.reference,
         referenceType: typeof replyContent.reference,
-        referenceValue: replyContent.reference ? (replyContent.reference as string).slice(0, 16) + "..." : 'none',
+        referenceValue: replyContent.reference
+          ? (replyContent.reference as string).slice(0, 16) + "..."
+          : "none",
         replyContentKeys: Object.keys(replyContent || {}),
-        messageContent: replyContent.content ? replyContent.content.toString().substring(0, 50) + "..." : 'no-content'
+        messageContent: replyContent.content
+          ? replyContent.content.toString().substring(0, 50) + "..."
+          : "no-content",
       });
-      
+
       // Get the referenced message ID
       if (!replyContent.reference) {
         console.log("❌ No reference found in reply content");
@@ -2068,10 +2099,10 @@ Respond: "YES:reason" or "NO:reason"`;
 
       // Get more messages to find the referenced message (increase limit)
       const messages = await conversation.messages({ limit: 100 });
-      
+
       // Enhanced debugging for message ID comparison
       const referenceId = replyContent.reference as string;
-      
+
       // Log first 10 message IDs with full details
       const messageDetails = messages.slice(0, 10).map((msg: any, index) => ({
         index,
@@ -2082,32 +2113,33 @@ Respond: "YES:reason" or "NO:reason"`;
         isAgent: msg.senderInboxId === this.client.inboxId,
         sender: msg.senderInboxId?.slice(0, 8) + "...",
         exactMatch: msg.id === referenceId,
-        sentAt: msg.sentAt
+        sentAt: msg.sentAt,
       }));
-      
+
       console.log("🔍 MESSAGE ID COMPARISON", {
         searchingFor: referenceId,
-        messageDetails
+        messageDetails,
       });
-      
+
       // Find the message being replied to
-      const referencedMessage = messages.find((msg: any) => 
-        msg.id === referenceId
+      const referencedMessage = messages.find(
+        (msg: any) => msg.id === referenceId
       );
 
       if (!referencedMessage) {
         console.log("❌ REPLY REFERENCE NOT FOUND - IGNORING MESSAGE", {
           referenceId: referenceId?.slice(0, 16) + "...",
           totalMessagesSearched: messages.length,
-          reason: "reference_not_found"
+          reason: "reference_not_found",
         });
-        
+
         // NO FALLBACK - If it's not a reply to an agent message, ignore it completely
         return false;
       }
 
       // Check if the referenced message was sent by this agent
-      const isFromAgent = referencedMessage.senderInboxId === this.client.inboxId;
+      const isFromAgent =
+        referencedMessage.senderInboxId === this.client.inboxId;
 
       if (isFromAgent) {
         console.log("✅ Confirmed reply to agent message");
@@ -2131,41 +2163,44 @@ Respond: "YES:reason" or "NO:reason"`;
     try {
       // Get recent messages to check for intervening messages
       const messages = await conversation.messages({ limit: 20 });
-      
+
       // Find the index of the original message
-      const originalMessageIndex = messages.findIndex((msg: any) => 
-        msg.id === originalMessage.id
+      const originalMessageIndex = messages.findIndex(
+        (msg: any) => msg.id === originalMessage.id
       );
-      
+
       if (originalMessageIndex === -1) {
-        console.log("🔍 Original message not found in recent messages, defaulting to normal message");
+        console.log(
+          "🔍 Original message not found in recent messages, defaulting to normal message"
+        );
         return false;
       }
-      
+
       // Check messages that came after the original message (before it in the array since newest first)
       const messagesAfterOriginal = messages.slice(0, originalMessageIndex);
-      
+
       // Look for messages from users other than the agent and the original sender
-      const interveningMessages = messagesAfterOriginal.filter((msg: any) => 
-        msg.senderInboxId !== agentInboxId && 
-        msg.senderInboxId !== originalMessage.senderInboxId
+      const interveningMessages = messagesAfterOriginal.filter(
+        (msg: any) =>
+          msg.senderInboxId !== agentInboxId &&
+          msg.senderInboxId !== originalMessage.senderInboxId
       );
-      
+
       const shouldUseReply = interveningMessages.length > 0;
-      
+
       if (shouldUseReply) {
         console.log("📨 Using reply format due to intervening messages", {
           originalMessageId: originalMessage.id.slice(0, 16) + "...",
           originalSender: originalMessage.senderInboxId.slice(0, 8) + "...",
           interveningMessages: interveningMessages.length,
-          interveningSenders: interveningMessages.map((msg: any) => 
-            msg.senderInboxId.slice(0, 8) + "..."
-          )
+          interveningSenders: interveningMessages.map(
+            (msg: any) => msg.senderInboxId.slice(0, 8) + "..."
+          ),
         });
       } else {
         console.log("📝 Using normal message format - no intervening messages");
       }
-      
+
       return shouldUseReply;
     } catch (error) {
       console.error("Error checking for intervening messages:", error);
@@ -2180,18 +2215,17 @@ Respond: "YES:reason" or "NO:reason"`;
   private async isDirectMessage(conversation: any): Promise<boolean> {
     try {
       // Get conversation members to determine if it's a direct message
-      // In XMTP, a direct message has exactly 2 members (user + agent)  
+      // In XMTP, a direct message has exactly 2 members (user + agent)
       const members = await conversation.members();
       const memberCount = members ? members.length : 0;
-      
+
       console.log("📊 Conversation type check", {
         conversationId: conversation.id?.slice(0, 16) + "...",
         memberCount,
-        isDirectMessage: memberCount === 2
+        isDirectMessage: memberCount === 2,
       });
-      
+
       return memberCount === 2;
-      
     } catch (error) {
       console.error("Error checking if direct message:", error);
       // Default to false (assume group chat) if we can't determine
@@ -2199,6 +2233,4 @@ Respond: "YES:reason" or "NO:reason"`;
       return false;
     }
   }
-
-
 }
