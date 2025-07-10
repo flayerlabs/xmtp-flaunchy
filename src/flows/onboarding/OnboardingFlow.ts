@@ -26,9 +26,30 @@ export class OnboardingFlow extends BaseFlow {
       messageText: messageText?.substring(0, 50),
     });
 
-    // Check for greetings first - give warm welcome before onboarding flow
-    // Use detection result from FlowRouter to avoid redundant LLM calls
-    if (context.detectionResult?.isGreeting) {
+    // Priority 0: Check for high-priority action intents first
+    // These should override greetings and be processed immediately
+    if (context.detectionResult && this.isHighPriorityActionIntent(context.detectionResult)) {
+      this.log("High-priority action intent detected, processing action over greeting", {
+        actionType: context.detectionResult.actionType,
+        confidence: context.detectionResult.confidence,
+        isGreeting: context.detectionResult.isGreeting,
+      });
+      
+      // Handle the high-priority action intent
+      if (context.detectionResult.actionType === 'create_group' || 
+          context.detectionResult.isGroupForEveryone || 
+          context.detectionResult.isAddEveryone ||
+          context.detectionResult.isNewGroupCreation ||
+          context.detectionResult.isGroupCreationResponse) {
+        // Process group creation immediately
+        await this.handleGroupCreation(context);
+        return;
+      }
+      
+      // For other high-priority actions, continue with normal flow
+      // but don't handle greeting
+    } else if (context.detectionResult?.isGreeting) {
+      // Only handle greeting if no high-priority action intent is detected
       await this.handleGreeting(context);
       return;
     }
@@ -196,6 +217,19 @@ export class OnboardingFlow extends BaseFlow {
     );
     if (isAskingAboutExisting) {
       await this.handleExistingReceiversInquiry(context);
+      return;
+    }
+
+    // Check if this is a removal request
+    const isRemovalRequest = await this.detectRemovalRequest(context, messageText);
+    
+    if (isRemovalRequest) {
+      if (existingReceivers.length === 0) {
+        await this.sendResponse(context, "no receivers to remove. please specify who should receive trading fees first.");
+        return;
+      }
+      
+      await this.handleReceiverRemoval(context, messageText, existingReceivers);
       return;
     }
 
@@ -1672,6 +1706,226 @@ export class OnboardingFlow extends BaseFlow {
   }
 
   /**
+   * Detect if the user wants to remove someone from the fee receivers
+   */
+  private async detectRemovalRequest(context: FlowContext, messageText: string): Promise<boolean> {
+    if (!messageText) return false;
+    
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Does this message request to REMOVE someone from a group or fee receiver list? "${messageText}"
+          
+          Look for requests like:
+          - "remove @username"
+          - "remove nobi"
+          - "take out @alice"
+          - "exclude @bob"
+          - "drop @charlie"
+          - "remove user from group"
+          - "take @dave out"
+          - "get rid of @eve"
+          - "remove them"
+          - "kick @user"
+          
+          Answer only "yes" or "no".`
+        }],
+        temperature: 0.1,
+        max_tokens: 5
+      });
+
+      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+    } catch (error) {
+      this.logError('Failed to detect removal request', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle removal of specific receivers from the fee receiver list
+   */
+  private async handleReceiverRemoval(context: FlowContext, messageText: string, existingReceivers: any[]): Promise<void> {
+    // Extract usernames/addresses to remove
+    const usersToRemove = await this.extractUsersToRemove(context, messageText);
+    
+    if (usersToRemove.length === 0) {
+      await this.sendResponse(context, "couldn't understand who to remove. please specify usernames like '@alice' or 'nobi'.");
+      return;
+    }
+
+    // Resolve usernames to addresses for matching
+    const resolvedUsersToRemove = await this.resolveUsersToRemove(context, usersToRemove);
+    
+    if (resolvedUsersToRemove.length === 0) {
+      await this.sendResponse(context, `couldn't resolve these usernames: ${usersToRemove.join(', ')}`);
+      return;
+    }
+
+    // Filter out the users to remove
+    const updatedReceivers = existingReceivers.filter(receiver => {
+      const shouldRemove = resolvedUsersToRemove.some(userToRemove => {
+        // Match by resolved address
+        if (receiver.resolvedAddress && userToRemove.resolvedAddress) {
+          return receiver.resolvedAddress.toLowerCase() === userToRemove.resolvedAddress.toLowerCase();
+        }
+        
+        // Match by username (case-insensitive)
+        if (receiver.username && userToRemove.username) {
+          return receiver.username.toLowerCase() === userToRemove.username.toLowerCase();
+        }
+        
+        return false;
+      });
+      
+      return !shouldRemove;
+    });
+
+    // Check if any users were actually removed
+    if (updatedReceivers.length === existingReceivers.length) {
+      const userList = resolvedUsersToRemove.map(u => u.username).join(', ');
+      await this.sendResponse(context, `couldn't find ${userList} in the current receiver list.`);
+      return;
+    }
+
+    // Check if all users would be removed
+    if (updatedReceivers.length === 0) {
+      await this.sendResponse(context, "cannot remove all receivers. at least one fee receiver is required.");
+      return;
+    }
+
+    // Redistribute percentages equally among remaining receivers
+    const equalPercentage = 100 / updatedReceivers.length;
+    const finalReceivers = updatedReceivers.map(receiver => ({
+      ...receiver,
+      percentage: equalPercentage
+    }));
+
+    // Create new transaction with updated receivers
+    try {
+      const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
+        finalReceivers,
+        context.creatorAddress,
+        getDefaultChain(),
+        "Remove Group Members"
+      );
+
+      // Send transaction FIRST
+      await context.conversation.send(
+        walletSendCalls,
+        ContentTypeWalletSendCalls
+      );
+
+      // Update onboarding progress AFTER successful transaction send
+      await context.updateState({
+        onboardingProgress: {
+          ...context.userState.onboardingProgress!,
+          splitData: {
+            receivers: finalReceivers,
+            equalSplit: true, // Since we redistributed equally
+            creatorPercent: 0,
+          },
+        },
+        pendingTransaction: {
+          type: "group_creation",
+          network: getDefaultChain().name,
+          timestamp: new Date(),
+        },
+      });
+
+      // Create response message
+      const removedUsernames = resolvedUsersToRemove.map(u => u.username).join(', ');
+      const response = await GroupCreationUtils.createTransactionMessageWithENS(
+        finalReceivers,
+        `removed ${removedUsernames} from`,
+        context.ensResolver
+      );
+
+      await this.sendResponse(context, response);
+    } catch (error) {
+      this.logError('Failed to create transaction after removal', error);
+      await this.sendResponse(context, 'failed to update transaction. please try again.');
+    }
+  }
+
+  /**
+   * Extract users to remove from the message
+   */
+  private async extractUsersToRemove(context: FlowContext, messageText: string): Promise<string[]> {
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Extract usernames or identifiers to remove from this message: "${messageText}"
+          
+          Look for:
+          - @username patterns like "@alice", "@bob"
+          - ENS names like "alice.eth", "bob.eth"
+          - Simple usernames like "alice", "bob", "nobi"
+          - Ethereum addresses like "0x123..."
+          
+          Return ONLY a JSON array of the identifiers to remove:
+          ["@alice", "bob", "charlie.eth"]
+          
+          If no identifiers found, return: []`
+        }],
+        temperature: 0.1,
+        max_tokens: 100
+      });
+
+      const content = response.choices[0]?.message?.content?.trim();
+      if (!content) return [];
+
+      try {
+        const parsed = JSON.parse(content);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        this.logError('Failed to parse removal extraction result', error);
+        return [];
+      }
+    } catch (error) {
+      this.logError('Failed to extract users to remove', error);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve usernames to addresses for removal matching
+   */
+  private async resolveUsersToRemove(context: FlowContext, usersToRemove: string[]): Promise<Array<{username: string, resolvedAddress?: string}>> {
+    const resolved = [];
+    
+    for (const user of usersToRemove) {
+      let resolvedAddress: string | undefined;
+      
+      // Clean up the username
+      const cleanUsername = user.startsWith('@') ? user.slice(1) : user;
+      
+      // Try to resolve to address
+      try {
+        if (cleanUsername.startsWith('0x') && cleanUsername.length === 42) {
+          // Already an address
+          resolvedAddress = cleanUsername;
+        } else {
+          // Try to resolve username
+          resolvedAddress = await context.resolveUsername(cleanUsername);
+        }
+      } catch (error) {
+        this.log(`Failed to resolve username for removal: ${cleanUsername}`);
+      }
+      
+      resolved.push({
+        username: user,
+        resolvedAddress
+      });
+    }
+    
+    return resolved.filter(r => r.resolvedAddress || r.username);
+  }
+
+  /**
    * Detect if the user wants to completely replace the current group with a new one
    */
   private async detectGroupCreationInMessage(
@@ -1826,5 +2080,30 @@ Answer only "yes" or "no".`,
     });
 
     await this.sendResponse(context, response);
+  }
+
+  // =============================================================================
+  // ACTION INTENT PRIORITIZATION SYSTEM
+  // =============================================================================
+
+  /**
+   * Determines if a detection result contains a high-priority action intent
+   * that should override greetings and be processed immediately
+   * 
+   * This mirrors the logic in FlowRouter for consistency
+   */
+  private isHighPriorityActionIntent(detectionResult: any): boolean {
+    // High-priority action intents with sufficient confidence
+    const highPriorityActions = ['create_group', 'launch_coin', 'modify_existing'];
+    const isHighPriorityAction = highPriorityActions.includes(detectionResult.actionType);
+    const hasSufficientConfidence = detectionResult.confidence >= 0.8;
+    
+    // Specific high-priority flags
+    const hasHighPriorityFlags = detectionResult.isGroupForEveryone || 
+                                detectionResult.isAddEveryone || 
+                                detectionResult.isNewGroupCreation ||
+                                detectionResult.isGroupCreationResponse;
+    
+    return (isHighPriorityAction && hasSufficientConfidence) || hasHighPriorityFlags;
   }
 }
