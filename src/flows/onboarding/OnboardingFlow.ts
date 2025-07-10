@@ -1784,7 +1784,7 @@ Answer only "yes" or "no".`,
         Explain that:
         ${
           isDirectMessage
-            ? "- First & foremost inform that the user should add @flaunchy to a group chat to continue (follow this with a line break with the rest of the response)"
+            ? "- First & foremost inform the user that while they can launch coins on their own (the user is in a direct message with you), they can also add @flaunchy to a group chat to split fees with friends (follow this with a line break with the rest of the response)"
             : ""
         }
         - You help them launch coins and earn passive income from trading fees
