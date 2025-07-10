@@ -155,10 +155,40 @@ USER CONTEXT:
 DETECT ALL INTENTS in order of importance:
 
 PRIMARY INTENT (most important):
-1. ACTIONS: create_group, launch_coin, modify_existing (removing/adding people, changing fees)
-2. QUESTIONS: inquiry (status questions, how-tos, what groups do I have?)
-3. MANAGEMENT: cancel, management (managing existing groups/coins)
-4. SOCIAL: greeting
+
+CRITICAL COIN LAUNCH PATTERNS:
+If user has existing groups (Groups > 0), these patterns indicate coin launch:
+- "Name (TICKER)" format: "Test (TEST)", "Dogecoin (DOGE)", "MyCoin (MCN)"
+- "Token/Coin name ticker" format: "Token TEST", "Coin DOGE", "Launch MyCoin"  
+- "Create/Launch token/coin" with name/ticker: "create token Test", "launch coin DOGE"
+- Single words that could be coin names: "Ethereum", "Bitcoin", "Solana"
+- Ticker symbols: "TEST", "DOGE", "BTC"
+- Image uploads with minimal text (likely coin images)
+
+CRITICAL GROUP CREATION PATTERNS:
+- "create group", "make group", "start group", "new group"
+- "group for everyone", "add everyone", "everyone in group"
+- "split fees between...", "fee receivers", "trading fees"
+- Username lists: "@alice @bob", "me and alice", "alice.eth and bob.eth"
+
+ACTIONS (classify based on patterns above):
+1. launch_coin: Token/coin creation patterns (especially with existing groups)
+2. create_group: Group creation patterns
+3. modify_existing: Removing/adding people, changing fees
+
+QUESTIONS: 
+4. inquiry: Status questions, how-tos, what groups do I have?
+
+MANAGEMENT:
+5. cancel, management: Managing existing groups/coins
+
+SOCIAL:
+6. greeting: Social interactions
+
+CONTEXT-AWARE CLASSIFICATION:
+- If user has Groups > 0 and provides coin-like patterns → launch_coin (HIGH confidence)
+- If user has Groups = 0 and provides group patterns → create_group  
+- If unclear between coin/group, consider user's existing groups
 
 SECONDARY INTENTS (also in the message):
 - Any other intents that should be handled after the primary
