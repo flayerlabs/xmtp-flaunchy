@@ -33,7 +33,7 @@ const displayStatusLogs = process.env.DISPLAY_STATUS_LOGS === "true";
 export class XMTPStatusMonitor {
   private readonly RSS_URL = "https://status.xmtp.org/feed.rss";
   private readonly STATUS_FILE_PATH: string;
-  private readonly CHECK_INTERVAL = 2 * 60 * 1000; // 2 minutes (reduced from 5)
+  private readonly CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
   private startupTime: Date;
   private isMonitoring = false;
   private intervalId?: NodeJS.Timeout;

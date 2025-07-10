@@ -421,20 +421,14 @@ export class EnhancedMessageCoordinator {
       }
 
       // Send a paw emoji reaction to let the user know the agent is processing their message
-      // Skip paw reaction in direct messages (1-on-1) since we'll always reply directly
-      const isDirectMessage = await this.isDirectMessage(conversation);
-      if (!isDirectMessage) {
-        const pawReaction: Reaction = {
-          reference: primaryMessage.id,
-          action: "added",
-          content: "🐾",
-          schema: "unicode",
-        };
-        await conversation.send(pawReaction, ContentTypeReaction);
-        console.log("🐾 Sent paw reaction (group chat)");
-      } else {
-        console.log("🐾 Skipped paw reaction (direct message)");
-      }
+      const pawReaction: Reaction = {
+        reference: primaryMessage.id,
+        action: "added",
+        content: "🐾",
+        schema: "unicode",
+      };
+      await conversation.send(pawReaction, ContentTypeReaction);
+      console.log("🐾 Sent paw reaction");
 
       // Create flow context (using relatedMessages as conversation history for now)
       const context = await this.createFlowContext({

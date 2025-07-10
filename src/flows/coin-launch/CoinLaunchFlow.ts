@@ -453,7 +453,7 @@ export class CoinLaunchFlow extends BaseFlow {
 
       // Deduplicate fee receivers - combine shares for duplicate addresses (case-insensitive)
       const addressShareMap = new Map<Address, bigint>();
-      const VALID_SHARE_TOTAL = 10000000n; // 100.00000% in contract format (5 decimals)
+      const VALID_SHARE_TOTAL = 100_00000n; // 100.00000% in contract format (5 decimals)
       
       // First pass: calculate equal share per unique address (case-insensitive)
       const uniqueFeeReceivers = [...new Set(feeReceivers.map(addr => addr.toLowerCase() as Address))];

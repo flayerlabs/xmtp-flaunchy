@@ -6,11 +6,6 @@ import { WalletSendCallsCodec } from "@xmtp/content-type-wallet-send-calls";
 import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
 import { flaunchy } from "../characters/flaunchy";
-import {
-  RemoteAttachmentCodec,
-  AttachmentCodec,
-} from "@xmtp/content-type-remote-attachment";
-import { TransactionReferenceCodec } from "@xmtp/content-type-transaction-reference";
 
 // New architecture imports
 import { FileStateStorage } from "./core/storage/StateStorage";
@@ -224,8 +219,6 @@ async function createApplication() {
  * Main function that starts the application with monitoring
  */
 async function main() {
-  console.log("🚀 Starting Flaunchy with XMTP status monitoring...");
-
   try {
     // Create status monitor
     const statusMonitor = new XMTPStatusMonitor(volumePath);
