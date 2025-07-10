@@ -27,7 +27,6 @@ export interface UnifiedRoutingResult {
   questionType: 'capability' | 'informational' | null;
   
   // Group-related detections
-  isGroupForEveryone: boolean;
   isAddEveryone: boolean;
   isNewGroupCreation: boolean;
   isGroupCreationResponse: boolean;
@@ -69,8 +68,7 @@ export interface MultiIntentResult {
     isGreeting: boolean;
     isTransactionInquiry: boolean;
     isCancellation: boolean;
-    isGroupForEveryone: boolean;
-    isAddEveryone: boolean;
+    isAddEveryone: boolean; // Consolidated: covers "everyone", "all of us", "create group for everyone", etc.
     isOnboardingRelated: boolean;
     isStatusInquiry: boolean;
   };
@@ -102,7 +100,9 @@ export class FlowRouter {
       // 3. Add multi-intent result to context so flows can handle secondary intents
       context.multiIntentResult = multiIntentResult;
       
-      console.log(`[FlowRouter] 🎯 Primary: ${multiIntentResult.primaryIntent.action} → ${primaryFlow} | Secondary: [${multiIntentResult.secondaryIntents.map(s => s.action).join(', ')}]`);
+      // Enhanced logging with all detection details
+      console.log(`[FlowRouter] 🎯 Primary: ${multiIntentResult.primaryIntent.action} (${multiIntentResult.primaryIntent.confidence.toFixed(2)}) → ${primaryFlow} | Secondary: [${multiIntentResult.secondaryIntents.map(s => `${s.action}(${s.confidence.toFixed(2)})`).join(', ')}]`);
+      console.log(`[FlowRouter] 🏷️  Flags: ${Object.entries(multiIntentResult.flags).filter(([_, value]) => value).map(([key, _]) => key).join(', ') || 'none'}`);
       
       // 4. Process with primary flow
       const flow = this.flows[primaryFlow];
@@ -128,7 +128,6 @@ export class FlowRouter {
           isGreeting: false,
           isTransactionInquiry: false,
           isCancellation: false,
-          isGroupForEveryone: false,
           isAddEveryone: false,
           isOnboardingRelated: false,
           isStatusInquiry: false
@@ -168,8 +167,7 @@ FLAGS (detect these patterns):
 - isGreeting: Contains greeting words
 - isTransactionInquiry: Asking about pending transactions/status
 - isCancellation: Wants to cancel something  
-- isGroupForEveryone: "create group for everyone", "add everyone"
-- isAddEveryone: "everyone", "all of us", "all members"
+- isAddEveryone: "everyone", "all of us", "all members", "create group for everyone", "add everyone" (be tolerant of typos like "ebeyrone" for "everyone")
 - isOnboardingRelated: Related to first-time setup
 - isStatusInquiry: "do I have", "what's my status", "what groups"
 
@@ -193,13 +191,13 @@ Return JSON:
     "isGreeting": boolean,
     "isTransactionInquiry": boolean,
     "isCancellation": boolean,
-    "isGroupForEveryone": boolean,
     "isAddEveryone": boolean,
     "isOnboardingRelated": boolean,
     "isStatusInquiry": boolean
   }
 }
-\`\`\``
+\`\`\`
+        `,
         }],
         temperature: 0.1,
         max_tokens: 800
@@ -237,7 +235,6 @@ Return JSON:
           isGreeting: messageText.toLowerCase().includes('hey') || messageText.toLowerCase().includes('hello'),
           isTransactionInquiry: messageText.toLowerCase().includes('transaction') || messageText.toLowerCase().includes('pending'),
           isCancellation: messageText.toLowerCase().includes('cancel'),
-          isGroupForEveryone: messageText.toLowerCase().includes('everyone'),
           isAddEveryone: messageText.toLowerCase().includes('everyone'),
           isOnboardingRelated: false,
           isStatusInquiry: messageText.toLowerCase().includes('do i have') || messageText.toLowerCase().includes('status')
@@ -269,7 +266,6 @@ Return JSON:
         isGreeting: Boolean(result.flags?.isGreeting),
         isTransactionInquiry: Boolean(result.flags?.isTransactionInquiry),
         isCancellation: Boolean(result.flags?.isCancellation),
-        isGroupForEveryone: Boolean(result.flags?.isGroupForEveryone),
         isAddEveryone: Boolean(result.flags?.isAddEveryone),
         isOnboardingRelated: Boolean(result.flags?.isOnboardingRelated),
         isStatusInquiry: Boolean(result.flags?.isStatusInquiry)

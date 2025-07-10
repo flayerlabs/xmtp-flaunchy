@@ -5,6 +5,7 @@ import { getCharacterResponse } from "../../../utils/character";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { getDefaultChain } from "../utils/ChainSelection";
 import { CoinLaunchFlow } from "../coin-launch/CoinLaunchFlow";
+import { detectAddEveryone } from '../../core/utils/addEveryoneDetector';
 
 export class OnboardingFlow extends BaseFlow {
   private coinLaunchFlow: CoinLaunchFlow;
@@ -37,8 +38,7 @@ export class OnboardingFlow extends BaseFlow {
       
       // Handle the high-priority action intent
       if (context.detectionResult.actionType === 'create_group' || 
-          context.detectionResult.isGroupForEveryone || 
-          context.detectionResult.isAddEveryone ||
+                context.detectionResult.isAddEveryone ||
           context.detectionResult.isNewGroupCreation ||
           context.detectionResult.isGroupCreationResponse) {
         // Process group creation immediately
@@ -206,25 +206,31 @@ export class OnboardingFlow extends BaseFlow {
   private async handleGroupCreation(context: FlowContext): Promise<void> {
     const messageText = this.extractMessageText(context);
 
+    console.log(`[OnboardingFlow] 🔄 handleGroupCreation: "${messageText}"`);
+
     // Get existing receivers from the onboarding progress if available
     const existingReceivers =
       context.userState.onboardingProgress?.splitData?.receivers || [];
 
-    // Check if user is asking about existing receivers
-    const isAskingAboutExisting = await this.detectExistingReceiversInquiry(
-      context,
-      messageText
-    );
-    if (isAskingAboutExisting) {
-      await this.handleExistingReceiversInquiry(context);
-      return;
+    console.log(`[OnboardingFlow] 📋 Existing receivers: ${existingReceivers.length}`);
+    
+    if (existingReceivers.length > 0) {
+      console.log(`[OnboardingFlow] 📋 Existing receiver details:`, existingReceivers.map(r => ({
+        username: r.username,
+        resolvedAddress: r.resolvedAddress,
+        percentage: r.percentage
+      })));
     }
 
-    // Check if this is a removal request
+    // Check if this is a removal request FIRST (highest priority)
     const isRemovalRequest = await this.detectRemovalRequest(context, messageText);
     
+    console.log(`[OnboardingFlow] 🗑️ Is removal request: ${isRemovalRequest}`);
+    
     if (isRemovalRequest) {
+      console.log(`[OnboardingFlow] ✅ Processing removal request`);
       if (existingReceivers.length === 0) {
+        console.log(`[OnboardingFlow] ⚠️ No existing receivers to remove`);
         await this.sendResponse(context, "no receivers to remove. please specify who should receive trading fees first.");
         return;
       }
@@ -233,14 +239,32 @@ export class OnboardingFlow extends BaseFlow {
       return;
     }
 
-    // Check if this is a request to add everyone from the chat
-    const isAddEveryone = await this.detectAddEveryone(context, messageText);
+    // Check if this is a request to add everyone from the chat (SECOND priority)
+    // This should come BEFORE existing receivers inquiry to catch "everyone" requests
+    const isAddEveryone = await this.detectAddEveryone(context);
+
+    console.log(`[OnboardingFlow] 👥 Is add everyone: ${isAddEveryone}`);
 
     if (isAddEveryone) {
+      console.log(`[OnboardingFlow] ✅ Processing add everyone`);
       await this.addEveryoneFromChat(context);
       return;
     }
 
+    // Check if user is asking about existing receivers (THIRD priority)
+    const isAskingAboutExisting = await this.detectExistingReceiversInquiry(
+      context,
+      messageText
+    );
+    if (isAskingAboutExisting) {
+      console.log(`[OnboardingFlow] ❓ Detected existing receivers inquiry`);
+      await this.handleExistingReceiversInquiry(context);
+      return;
+    }
+
+    console.log(`[OnboardingFlow] 🔄 Continuing to regular group creation flow`);
+
+    // Continue with rest of the method...
     // Check if user is trying to add to an existing group (ONLY when pending transaction exists)
     // Without a pending transaction, treat all messages as complete new group specifications
     const isAddToExisting = await this.detectAddToExistingGroup(
@@ -319,7 +343,7 @@ export class OnboardingFlow extends BaseFlow {
           result = await GroupCreationUtils.createGroupFromMessage(
             context,
             getDefaultChain(),
-            "Extract Receivers"
+            "Create Group - Extract Receivers"
           );
         } catch (error) {
           const errorMessage =
@@ -513,61 +537,11 @@ export class OnboardingFlow extends BaseFlow {
     }
   }
 
-  private async detectAddEveryone(
-    context: FlowContext,
-    messageText: string
-  ): Promise<boolean> {
-    if (!messageText) return false;
-
-    try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Does this message request to include ALL group chat members? "${messageText}" 
-          
-          Look for requests like:
-          - "everyone"
-          - "for everyone" 
-          - "all members"
-          - "include everyone"
-          - "everyone in the chat"
-          - "add everyone"
-          - "create a group for everyone"
-          - "launch a group for everyone"
-          - "start a group for everyone"
-          - "make a group for everyone"
-          - "set up a group for everyone"
-          - "flaunchy create a group for everyone"
-          - "group for everyone"
-          - "everyone in this chat"
-          - "all of us"
-          - "all people here"
-          - "launch group for everyone"
-          - "create group for everyone"
-          
-          Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 5,
-      });
-
-      const result =
-        response.choices[0]?.message?.content?.trim().toLowerCase() === "yes";
-
-      console.log("[OnboardingFlow] Everyone detection:", {
-        messageText: messageText.substring(0, 50),
-        result,
-        userId: context.userState.userId.substring(0, 8) + "...",
-      });
-
-      return result;
-    } catch (error) {
-      this.logError("Failed to detect add everyone intent", error);
-      return false;
-    }
+  /**
+   * Detects if the user wants to add everyone to the group
+   */
+  private async detectAddEveryone(context: FlowContext): Promise<boolean> {
+    return await detectAddEveryone(context);
   }
 
   private async addEveryoneFromChat(context: FlowContext): Promise<void> {
@@ -629,7 +603,7 @@ export class OnboardingFlow extends BaseFlow {
           feeReceivers,
           context.creatorAddress,
           defaultChain,
-          "Create Group with All Members"
+          "Create Group - All Members"
         );
       } catch (error) {
         const errorMessage =
@@ -956,7 +930,7 @@ export class OnboardingFlow extends BaseFlow {
             updatedReceivers,
             context.creatorAddress,
             getDefaultChain(),
-            "Create Group with Added Members"
+            "Create Group - Added Members"
           );
         } catch (error) {
           const errorMessage =
@@ -1493,7 +1467,7 @@ export class OnboardingFlow extends BaseFlow {
           redistributedReceivers,
           context.creatorAddress,
           getDefaultChain(),
-          "Update Group Percentages"
+          "Create Group - Updated Percentages"
         );
       } catch (error) {
         const errorMessage =
@@ -1711,6 +1685,28 @@ export class OnboardingFlow extends BaseFlow {
   private async detectRemovalRequest(context: FlowContext, messageText: string): Promise<boolean> {
     if (!messageText) return false;
     
+    // First check with simple regex for common removal patterns
+    const removalPatterns = [
+      /\bremove\s+@?\w+/i,
+      /\btake\s+out\s+@?\w+/i,
+      /\bexclude\s+@?\w+/i,
+      /\bdrop\s+@?\w+/i,
+      /\bkick\s+@?\w+/i,
+      /\bget\s+rid\s+of\s+@?\w+/i,
+      /\bremove\s+[\w.]+\.eth/i,
+      /\bremove\s+[\w.]+\.base\.eth/i
+    ];
+    
+    const hasRemovalPattern = removalPatterns.some(pattern => pattern.test(messageText));
+    
+    console.log(`[OnboardingFlow] 🔍 Removal detection: "${messageText}" | Regex match: ${hasRemovalPattern}`);
+    
+    if (hasRemovalPattern) {
+      console.log(`[OnboardingFlow] ✅ Removal detected via regex`);
+      return true;
+    }
+    
+    // Fallback to LLM if regex doesn't match
     try {
       const response = await context.openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -1721,6 +1717,7 @@ export class OnboardingFlow extends BaseFlow {
           Look for requests like:
           - "remove @username"
           - "remove nobi"
+          - "Flaunchy remove noblet.base.eth"
           - "take out @alice"
           - "exclude @bob"
           - "drop @charlie"
@@ -1736,7 +1733,10 @@ export class OnboardingFlow extends BaseFlow {
         max_tokens: 5
       });
 
-      return response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      const llmResult = response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
+      console.log(`[OnboardingFlow] 🧠 LLM removal detection: ${llmResult}`);
+      
+      return llmResult;
     } catch (error) {
       this.logError('Failed to detect removal request', error);
       return false;
@@ -1747,10 +1747,15 @@ export class OnboardingFlow extends BaseFlow {
    * Handle removal of specific receivers from the fee receiver list
    */
   private async handleReceiverRemoval(context: FlowContext, messageText: string, existingReceivers: any[]): Promise<void> {
+    console.log(`[OnboardingFlow] 🗑️ handleReceiverRemoval: "${messageText}" | Existing: ${existingReceivers.length}`);
+    
     // Extract usernames/addresses to remove
     const usersToRemove = await this.extractUsersToRemove(context, messageText);
     
+    console.log(`[OnboardingFlow] 🔍 Extracted users to remove:`, usersToRemove);
+    
     if (usersToRemove.length === 0) {
+      console.log(`[OnboardingFlow] ⚠️ No users to remove extracted`);
       await this.sendResponse(context, "couldn't understand who to remove. please specify usernames like '@alice' or 'nobi'.");
       return;
     }
@@ -1758,7 +1763,11 @@ export class OnboardingFlow extends BaseFlow {
     // Resolve usernames to addresses for matching
     const resolvedUsersToRemove = await this.resolveUsersToRemove(context, usersToRemove);
     
+    console.log(`[OnboardingFlow] 🔍 Resolved users to remove:`, resolvedUsersToRemove);
+    console.log(`[OnboardingFlow] 🔍 Existing receivers:`, existingReceivers.map(r => ({ username: r.username, address: r.resolvedAddress })));
+    
     if (resolvedUsersToRemove.length === 0) {
+      console.log(`[OnboardingFlow] ⚠️ No users to remove resolved`);
       await this.sendResponse(context, `couldn't resolve these usernames: ${usersToRemove.join(', ')}`);
       return;
     }
@@ -1768,22 +1777,56 @@ export class OnboardingFlow extends BaseFlow {
       const shouldRemove = resolvedUsersToRemove.some(userToRemove => {
         // Match by resolved address
         if (receiver.resolvedAddress && userToRemove.resolvedAddress) {
-          return receiver.resolvedAddress.toLowerCase() === userToRemove.resolvedAddress.toLowerCase();
+          const match = receiver.resolvedAddress.toLowerCase() === userToRemove.resolvedAddress.toLowerCase();
+          if (match) {
+            console.log(`[OnboardingFlow] 🎯 Address match found: ${receiver.resolvedAddress} === ${userToRemove.resolvedAddress}`);
+          }
+          return match;
         }
         
-        // Match by username (case-insensitive)
+        // Match by username (case-insensitive, normalize @ symbol and domain extensions)
         if (receiver.username && userToRemove.username) {
-          return receiver.username.toLowerCase() === userToRemove.username.toLowerCase();
+          // Normalize usernames by removing @ symbol and domain extensions for consistent comparison
+          const normalizeUsername = (username: string) => {
+            let normalized = username.startsWith('@') ? username.slice(1).toLowerCase() : username.toLowerCase();
+            
+            // Remove domain extensions (.base.eth, .eth)
+            if (normalized.endsWith('.base.eth')) {
+              normalized = normalized.replace('.base.eth', '');
+            } else if (normalized.endsWith('.eth')) {
+              normalized = normalized.replace('.eth', '');
+            }
+            
+            return normalized;
+          };
+          
+          const receiverNormalized = normalizeUsername(receiver.username);
+          const userToRemoveNormalized = normalizeUsername(userToRemove.username);
+          
+          console.log(`[OnboardingFlow] 🔍 Comparing usernames: "${receiver.username}" (normalized: "${receiverNormalized}") vs "${userToRemove.username}" (normalized: "${userToRemoveNormalized}")`);
+          
+          const match = receiverNormalized === userToRemoveNormalized;
+          if (match) {
+            console.log(`[OnboardingFlow] 🎯 Username match found: ${receiver.username} (${receiverNormalized}) === ${userToRemove.username} (${userToRemoveNormalized})`);
+          } else {
+            console.log(`[OnboardingFlow] ❌ No username match: "${receiverNormalized}" !== "${userToRemoveNormalized}"`);
+          }
+          return match;
         }
         
         return false;
       });
       
+      console.log(`[OnboardingFlow] 🔍 Receiver ${receiver.username} | shouldRemove: ${shouldRemove} | keeping: ${!shouldRemove}`);
       return !shouldRemove;
     });
 
+    console.log(`[OnboardingFlow] 📋 Updated receivers after filtering: ${updatedReceivers.length}`);
+    console.log(`[OnboardingFlow] 📋 Remaining receivers:`, updatedReceivers.map(r => r.username));
+
     // Check if any users were actually removed
     if (updatedReceivers.length === existingReceivers.length) {
+      console.log(`[OnboardingFlow] ⚠️ No users were actually removed`);
       const userList = resolvedUsersToRemove.map(u => u.username).join(', ');
       await this.sendResponse(context, `couldn't find ${userList} in the current receiver list.`);
       return;
@@ -1791,9 +1834,12 @@ export class OnboardingFlow extends BaseFlow {
 
     // Check if all users would be removed
     if (updatedReceivers.length === 0) {
+      console.log(`[OnboardingFlow] ⚠️ All users would be removed`);
       await this.sendResponse(context, "cannot remove all receivers. at least one fee receiver is required.");
       return;
     }
+
+    console.log(`[OnboardingFlow] ✅ Proceeding with removal. ${existingReceivers.length} → ${updatedReceivers.length} receivers`);
 
     // Redistribute percentages equally among remaining receivers
     const equalPercentage = 100 / updatedReceivers.length;
@@ -1802,14 +1848,21 @@ export class OnboardingFlow extends BaseFlow {
       percentage: equalPercentage
     }));
 
+    console.log(`[OnboardingFlow] 📊 Final receivers with equal distribution:`, finalReceivers.map(r => ({
+      username: r.username,
+      percentage: r.percentage
+    })));
+
     // Create new transaction with updated receivers
     try {
       const walletSendCalls = await GroupCreationUtils.createGroupDeploymentCalls(
         finalReceivers,
         context.creatorAddress,
         getDefaultChain(),
-        "Remove Group Members"
+        "Create Group - Removed Members"
       );
+
+      console.log(`[OnboardingFlow] 🔗 Created transaction for ${finalReceivers.length} receivers`);
 
       // Send transaction FIRST
       await context.conversation.send(
@@ -1842,6 +1895,7 @@ export class OnboardingFlow extends BaseFlow {
         context.ensResolver
       );
 
+      console.log(`[OnboardingFlow] ✅ Removal completed successfully`);
       await this.sendResponse(context, response);
     } catch (error) {
       this.logError('Failed to create transaction after removal', error);
@@ -1879,10 +1933,15 @@ export class OnboardingFlow extends BaseFlow {
       if (!content) return [];
 
       try {
-        const parsed = JSON.parse(content);
+        // Try to extract JSON from markdown code blocks first
+        const jsonMatch = content.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+        const jsonString = jsonMatch ? jsonMatch[1] : content;
+        
+        const parsed = JSON.parse(jsonString);
         return Array.isArray(parsed) ? parsed : [];
       } catch (error) {
         this.logError('Failed to parse removal extraction result', error);
+        console.log(`[OnboardingFlow] Raw LLM response: "${content}"`);
         return [];
       }
     } catch (error) {
@@ -2099,8 +2158,7 @@ Answer only "yes" or "no".`,
     const hasSufficientConfidence = detectionResult.confidence >= 0.8;
     
     // Specific high-priority flags
-    const hasHighPriorityFlags = detectionResult.isGroupForEveryone || 
-                                detectionResult.isAddEveryone || 
+        const hasHighPriorityFlags = detectionResult.isAddEveryone || 
                                 detectionResult.isNewGroupCreation ||
                                 detectionResult.isGroupCreationResponse;
     
