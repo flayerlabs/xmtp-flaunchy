@@ -35,13 +35,18 @@ export class GraphQLService {
   private apiUrl: string;
 
   constructor() {
-    this.apiUrl = process.env.PUBLIC_API_URL || process.env.API_URL || '';
+    this.apiUrl = process.env.PUBLIC_API_URL || process.env.API_URL || "";
     if (!this.apiUrl) {
-      throw new Error('API_URL orPUBLIC_API_URL environment variable is required');
+      throw new Error(
+        "API_URL orPUBLIC_API_URL environment variable is required"
+      );
     }
   }
 
-  async fetchGroupData(groupAddresses: string[], chainConfig?: ChainConfig): Promise<GroupData[]> {
+  async fetchGroupData(
+    groupAddresses: string[],
+    chainConfig?: ChainConfig
+  ): Promise<GroupData[]> {
     if (groupAddresses.length === 0) {
       return [];
     }
@@ -49,7 +54,7 @@ export class GraphQLService {
     const query = `
       query {
         addressFeeSplitManagers(where:{
-          id_in: [${groupAddresses.map(addr => `"${addr}"`).join(', ')}]
+          id_in: [${groupAddresses.map((addr) => `"${addr}"`).join(", ")}]
         }) {
           id
           recipients {
@@ -77,43 +82,56 @@ export class GraphQLService {
     try {
       // Prepare headers
       const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       };
 
       // Add chain header if not Base Mainnet
-      if (chainConfig && chainConfig.name !== 'base') {
-        headers['x-chain-id'] = chainConfig.id.toString();
+      if (chainConfig && chainConfig.name !== "base") {
+        headers["x-chain-id"] = chainConfig.id.toString();
       }
 
-      console.log(`[GraphQL] 🔍 Fetching ${groupAddresses.length} groups on ${chainConfig ? chainConfig.displayName : 'Base Mainnet'}`);
+      console.log(
+        `[GraphQL] 🔍 Fetching ${groupAddresses.length} groups on ${
+          chainConfig ? chainConfig.displayName : "Base Mainnet"
+        }`
+      );
 
       const response = await fetch(`${this.apiUrl}/graphql`, {
-        method: 'POST',
+        method: "POST",
         headers,
         body: JSON.stringify({ query }),
       });
 
       if (!response.ok) {
-        throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+        throw new Error(
+          `GraphQL request failed: ${response.status} ${response.statusText}`
+        );
       }
 
       const result: GraphQLResponse = await response.json();
 
       if (result.errors) {
-        console.error('GraphQL errors:', result.errors);
-        throw new Error(`GraphQL errors: ${result.errors.map(e => e.message).join(', ')}`);
+        console.error("GraphQL errors:", result.errors);
+        throw new Error(
+          `GraphQL errors: ${result.errors.map((e) => e.message).join(", ")}`
+        );
       }
 
-      console.log(`[GraphQL] ✅ Fetched ${result.data.addressFeeSplitManagers.length} groups`);
+      console.log(
+        `[GraphQL] ✅ Fetched ${result.data.addressFeeSplitManagers.length} groups`
+      );
 
       return result.data.addressFeeSplitManagers;
     } catch (error) {
-      console.error('Failed to fetch group data:', error);
+      console.error("Failed to fetch group data:", error);
       throw error;
     }
   }
 
-  async fetchSingleGroupData(groupAddress: string, chainConfig?: ChainConfig): Promise<GroupData | null> {
+  async fetchSingleGroupData(
+    groupAddress: string,
+    chainConfig?: ChainConfig
+  ): Promise<GroupData | null> {
     const results = await this.fetchGroupData([groupAddress], chainConfig);
     return results.length > 0 ? results[0] : null;
   }
@@ -121,14 +139,20 @@ export class GraphQLService {
   /**
    * Fetch groups by chain - returns groups filtered by the specified chain
    */
-  async fetchGroupsByChain(groupAddresses: string[], chainConfig: ChainConfig): Promise<{ groups: GroupData[], chainInfo: { name: string, displayName: string } }> {
+  async fetchGroupsByChain(
+    groupAddresses: string[],
+    chainConfig: ChainConfig
+  ): Promise<{
+    groups: GroupData[];
+    chainInfo: { name: string; displayName: string };
+  }> {
     const groups = await this.fetchGroupData(groupAddresses, chainConfig);
     return {
       groups,
       chainInfo: {
         name: chainConfig.name,
-        displayName: chainConfig.displayName
-      }
+        displayName: chainConfig.displayName,
+      },
     };
   }
-} 
+}

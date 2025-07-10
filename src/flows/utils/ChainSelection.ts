@@ -3,7 +3,7 @@ import { numToHex } from "../../../utils/hex";
 
 export interface ChainConfig {
   id: number;
-  name: 'base' | 'baseSepolia'; // Match viem naming convention
+  name: "base" | "baseSepolia"; // Match viem naming convention
   displayName: string;
   hexId: string;
   viemChain: typeof base | typeof baseSepolia;
@@ -11,26 +11,26 @@ export interface ChainConfig {
 }
 
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
-  'base': {
+  base: {
     id: base.id,
-    name: 'base',
-    displayName: 'Base Mainnet',
+    name: "base",
+    displayName: "Base Mainnet",
     hexId: numToHex(base.id),
     viemChain: base,
-    isTestnet: false
+    isTestnet: false,
   },
-  'baseSepolia': {
+  baseSepolia: {
     id: baseSepolia.id,
-    name: 'baseSepolia',
-    displayName: 'Base Sepolia',
+    name: "baseSepolia",
+    displayName: "Base Sepolia",
     hexId: numToHex(baseSepolia.id),
     viemChain: baseSepolia,
-    isTestnet: true
-  }
+    isTestnet: true,
+  },
 };
 
 // Default chain is Base Mainnet
-export const DEFAULT_CHAIN = SUPPORTED_CHAINS['base'];
+export const DEFAULT_CHAIN = SUPPORTED_CHAINS["base"];
 
 /**
  * Get default chain based on NETWORK environment variable
@@ -39,12 +39,10 @@ export const DEFAULT_CHAIN = SUPPORTED_CHAINS['base'];
  */
 export function getDefaultChain(): ChainConfig {
   const networkEnv = process.env.NETWORK;
-  
+
   if (networkEnv && SUPPORTED_CHAINS[networkEnv]) {
     return SUPPORTED_CHAINS[networkEnv];
   }
-  
+
   return DEFAULT_CHAIN;
 }
-
- 

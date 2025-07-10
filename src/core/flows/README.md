@@ -11,7 +11,7 @@ The flow routing system uses LLM-based intent classification to determine user i
 The `IntentClassifier` uses GPT-3.5-turbo to classify user messages into one of five intent categories:
 
 - **onboarding** - User wants to create their first group or is new
-- **coin_launch** - User wants to launch a coin into an existing group  
+- **coin_launch** - User wants to launch a coin into an existing group
 - **management** - User wants to view/manage existing groups/coins
 - **qa** - General questions, help, or conversation
 - **confirmation** - Confirming a previous request
@@ -52,6 +52,7 @@ The system considers user context when routing:
 ## Configuration
 
 The classifier uses:
+
 - Model: `gpt-3.5-turbo` (lightweight for speed)
 - Temperature: `0.1` (low for consistent classification)
 - Max tokens: `150` (sufficient for JSON response)
@@ -59,6 +60,7 @@ The classifier uses:
 ## Error Handling
 
 The system includes robust fallback mechanisms:
+
 - OpenAI API errors → Fallback to user state-based routing
 - Invalid JSON responses → Default to Q&A flow
-- Network issues → Graceful degradation with logging 
+- Network issues → Graceful degradation with logging

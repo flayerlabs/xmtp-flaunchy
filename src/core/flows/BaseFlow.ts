@@ -70,15 +70,19 @@ export abstract class BaseFlow {
   }
 
   // Centralized cancellation detection
-  protected async detectCancellation(context: FlowContext, messageText: string): Promise<boolean> {
+  protected async detectCancellation(
+    context: FlowContext,
+    messageText: string
+  ): Promise<boolean> {
     if (!messageText) return false;
 
     try {
       const response = await context.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{
-          role: 'user',
-          content: `Does this message request to CANCEL or STOP a pending transaction? "${messageText}" 
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `Does this message request to CANCEL or STOP a pending transaction? "${messageText}" 
           
           Look for requests like:
           - "cancel"
@@ -92,24 +96,26 @@ export abstract class BaseFlow {
           - "cancel it"
           - "abort that"
           
-          Answer only "yes" or "no".`
-        }],
+          Answer only "yes" or "no".`,
+          },
+        ],
         temperature: 0.1,
-        max_tokens: 5
+        max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content?.trim().toLowerCase() === 'yes';
-      
+      const result =
+        response.choices[0]?.message?.content?.trim().toLowerCase() === "yes";
+
       if (result) {
-        this.log('Cancellation detected', {
+        this.log("Cancellation detected", {
           messageText: messageText.substring(0, 50),
-          userId: context.userState.userId.substring(0, 8) + "..."
+          userId: context.userState.userId.substring(0, 8) + "...",
         });
       }
-      
+
       return result;
     } catch (error) {
-      this.logError('Failed to detect cancellation intent', error);
+      this.logError("Failed to detect cancellation intent", error);
       return false;
     }
   }
@@ -121,16 +127,18 @@ export abstract class BaseFlow {
       pendingTransaction: undefined,
       managementProgress: undefined,
       // Clear onboarding group data if it exists
-      onboardingProgress: context.userState.onboardingProgress ? {
-        ...context.userState.onboardingProgress,
-        splitData: undefined
-      } : undefined,
+      onboardingProgress: context.userState.onboardingProgress
+        ? {
+            ...context.userState.onboardingProgress,
+            splitData: undefined,
+          }
+        : undefined,
       // Clear coin launch progress if it exists
-      coinLaunchProgress: undefined
+      coinLaunchProgress: undefined,
     });
-    
-    this.log('Transaction cancelled', {
-      userId: context.userState.userId.substring(0, 8) + "..."
+
+    this.log("Transaction cancelled", {
+      userId: context.userState.userId.substring(0, 8) + "...",
     });
   }
 }

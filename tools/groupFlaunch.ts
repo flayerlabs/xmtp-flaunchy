@@ -27,17 +27,13 @@ export const groupFlaunchSchema = z.object({
     .min(1)
     .max(60)
     .optional()
-    .describe(
-      "Fair launch duration in minutes. Between 1 and 60 minutes"
-    ),
+    .describe("Fair launch duration in minutes. Between 1 and 60 minutes"),
   preminePercentage: z
     .number()
     .min(0)
     .max(100)
     .optional()
-    .describe(
-      "Percentage of tokens to premine (prebuy). Between 0 and 100%"
-    ),
+    .describe("Percentage of tokens to premine (prebuy). Between 0 and 100%"),
   buybackPercentage: z
     .number()
     .min(0)
@@ -88,14 +84,14 @@ const createGroupFlaunchCalls = async ({
 
     for (const member of members) {
       console.log(`Processing member: ${member.inboxId}`);
-      
+
       // Skip the sender and the bot
       if (
         member.inboxId !== senderInboxId &&
         member.inboxId !== client.inboxId
       ) {
         console.log(`  → Including member ${member.inboxId} as fee receiver`);
-        
+
         // Get the address for this member
         const memberInboxState =
           await client.preferences.inboxStateFromInboxIds([member.inboxId]);
@@ -111,20 +107,24 @@ const createGroupFlaunchCalls = async ({
           console.log(`  → Could not get address for member ${member.inboxId}`);
         }
       } else {
-        const reason = member.inboxId === senderInboxId ? 'sender' : 'bot';
+        const reason = member.inboxId === senderInboxId ? "sender" : "bot";
         console.log(`  → Skipping member ${member.inboxId} (${reason})`);
       }
     }
 
-    console.log(`Total fee receivers before deduplication: ${feeReceivers.length}`);
+    console.log(
+      `Total fee receivers before deduplication: ${feeReceivers.length}`
+    );
     console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
 
     // Deduplicate fee receivers - combine shares for duplicate addresses (case-insensitive)
     const addressShareMap = new Map<Address, bigint>();
     const VALID_SHARE_TOTAL = 100_00000n; // 5 decimals as BigInt
-    
+
     // First pass: calculate equal share per unique address (case-insensitive)
-    const uniqueFeeReceivers = [...new Set(feeReceivers.map(addr => addr.toLowerCase() as Address))];
+    const uniqueFeeReceivers = [
+      ...new Set(feeReceivers.map((addr) => addr.toLowerCase() as Address)),
+    ];
     const totalParticipants = BigInt(uniqueFeeReceivers.length + 1); // +1 for the creator
     const sharePerAddress = VALID_SHARE_TOTAL / totalParticipants;
     const remainder = VALID_SHARE_TOTAL % totalParticipants;
@@ -136,18 +136,26 @@ const createGroupFlaunchCalls = async ({
       addressShareMap.set(normalizedAddress, currentShare + sharePerAddress);
     }
 
-    console.log(`Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`);
-    console.log(`Deduplicated fee receiver shares:`, Array.from(addressShareMap.entries()).map(([addr, share]) => ({
-      address: addr,
-      share: share.toString(),
-      percentage: (Number(share) / Number(VALID_SHARE_TOTAL) * 100).toFixed(2) + '%'
-    })));
+    console.log(
+      `Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`
+    );
+    console.log(
+      `Deduplicated fee receiver shares:`,
+      Array.from(addressShareMap.entries()).map(([addr, share]) => ({
+        address: addr,
+        share: share.toString(),
+        percentage:
+          ((Number(share) / Number(VALID_SHARE_TOTAL)) * 100).toFixed(2) + "%",
+      }))
+    );
 
     // Generate initialize data for the fee split manager using deduplicated addresses
-    const recipientShares = Array.from(addressShareMap.entries()).map(([receiver, share]) => ({
-      recipient: receiver,
-      share: share,
-    }));
+    const recipientShares = Array.from(addressShareMap.entries()).map(
+      ([receiver, share]) => ({
+        recipient: receiver,
+        share: share,
+      })
+    );
 
     // Creator gets the base share plus any rounding remainder to ensure a valid share total
     const creatorShare = sharePerAddress + remainder;
@@ -181,13 +189,14 @@ const createGroupFlaunchCalls = async ({
     console.log("Prepared group flaunch params:", {
       creatorShare,
       recipientShares,
-      initializeData
+      initializeData,
     });
 
     // Calculate creator fee allocation based on buyback percentage
     let adjustedCreatorFeeAllocationPercent = creatorFeeAllocationPercent;
     if (args.buybackPercentage) {
-      adjustedCreatorFeeAllocationPercent = creatorFeeAllocationPercent - args.buybackPercentage;
+      adjustedCreatorFeeAllocationPercent =
+        creatorFeeAllocationPercent - args.buybackPercentage;
     }
 
     // Use centralized transaction creation function
@@ -204,7 +213,7 @@ const createGroupFlaunchCalls = async ({
       fairLaunchDuration: (args.fairLaunchDuration || 0) * 60, // Convert to seconds
       startingMarketCapUSD: args.startingMarketCap ?? 1000,
       creatorFeeAllocationPercent: adjustedCreatorFeeAllocationPercent,
-      preminePercentage: args.preminePercentage || 0
+      preminePercentage: args.preminePercentage || 0,
     });
   } catch (error) {
     console.error("Error in createFlaunchCalls:", error);

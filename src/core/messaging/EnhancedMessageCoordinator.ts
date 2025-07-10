@@ -995,18 +995,27 @@ export class EnhancedMessageCoordinator {
             );
           } else {
             // NEW: For chat group model, extract receivers from transaction logs
-            console.log("📋 No stored receivers found, extracting from transaction logs...");
+            console.log(
+              "📋 No stored receivers found, extracting from transaction logs..."
+            );
             try {
-              const extractedReceivers = await this.extractReceiversFromTransactionLogs(
-                receipt,
-                creatorAddress
-              );
+              const extractedReceivers =
+                await this.extractReceiversFromTransactionLogs(
+                  receipt,
+                  creatorAddress
+                );
               if (extractedReceivers.length > 0) {
                 receivers = extractedReceivers;
-                console.log("✅ Successfully extracted receivers from transaction logs:", receivers);
+                console.log(
+                  "✅ Successfully extracted receivers from transaction logs:",
+                  receivers
+                );
               }
             } catch (error) {
-              console.error("Failed to extract receivers from transaction logs:", error);
+              console.error(
+                "Failed to extract receivers from transaction logs:",
+                error
+              );
             }
           }
 
@@ -1125,62 +1134,80 @@ export class EnhancedMessageCoordinator {
             `coin created! CA: ${contractAddress}\n\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`
           );
           await conversation.send("https://mini.flaunch.gg");
-          
+
           // Check if this was a first launch and store manager address
           if (pendingTx.launchParameters?.isFirstLaunch) {
-            console.log("🔍 First launch detected - extracting and storing manager address");
-            
+            console.log(
+              "🔍 First launch detected - extracting and storing manager address"
+            );
+
             // Extract manager address from transaction receipt
-            const managerAddress = await this.extractManagerAddressFromReceipt(receipt);
-            
+            const managerAddress = await this.extractManagerAddressFromReceipt(
+              receipt
+            );
+
             if (managerAddress) {
               // Use conversation ID as the key for chat room manager mapping
               const chatRoomId = conversation.id;
-              
+
               // Store the manager address for ALL chat room members
               const members = await conversation.members();
               const updatePromises = [];
-              
+
               for (const member of members) {
                 // Skip the bot
                 if (member.inboxId !== this.client.inboxId) {
                   // Get member's address
-                  const memberInboxState = await this.client.preferences.inboxStateFromInboxIds([member.inboxId]);
-                  if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
-                    const memberAddress = memberInboxState[0].identifiers[0].identifier;
-                    
+                  const memberInboxState =
+                    await this.client.preferences.inboxStateFromInboxIds([
+                      member.inboxId,
+                    ]);
+                  if (
+                    memberInboxState.length > 0 &&
+                    memberInboxState[0].identifiers.length > 0
+                  ) {
+                    const memberAddress =
+                      memberInboxState[0].identifiers[0].identifier;
+
                     // Get member's current state
-                    const memberState = await this.sessionManager.getUserState(memberAddress);
-                    
+                    const memberState = await this.sessionManager.getUserState(
+                      memberAddress
+                    );
+
                     // Update their chat room managers mapping
                     const updatedManagers = {
                       ...memberState.chatRoomManagers,
-                      [chatRoomId]: managerAddress
+                      [chatRoomId]: managerAddress,
                     };
-                    
+
                     // Queue the update
                     updatePromises.push(
                       this.sessionManager.updateUserState(memberAddress, {
-                        chatRoomManagers: updatedManagers
+                        chatRoomManagers: updatedManagers,
                       })
                     );
                   }
                 }
               }
-              
+
               // Execute all updates
               await Promise.all(updatePromises);
-              
-              console.log("✅ Stored manager address for all chat room members", {
-                chatRoomId,
-                managerAddress,
-                totalMembers: updatePromises.length
-              });
+
+              console.log(
+                "✅ Stored manager address for all chat room members",
+                {
+                  chatRoomId,
+                  managerAddress,
+                  totalMembers: updatePromises.length,
+                }
+              );
             } else {
-              console.error("❌ Failed to extract manager address from first launch receipt");
+              console.error(
+                "❌ Failed to extract manager address from first launch receipt"
+              );
             }
           }
-          
+
           // For coin creation, add the coin to user's collection
           // Use the group address from the user's onboarding progress (the group they just created)
           const groupAddress =
@@ -1391,7 +1418,9 @@ export class EnhancedMessageCoordinator {
     }
   }
 
-  private async extractManagerAddressFromReceipt(receipt: any): Promise<string | null> {
+  private async extractManagerAddressFromReceipt(
+    receipt: any
+  ): Promise<string | null> {
     try {
       if (!receipt || !receipt.logs || !Array.isArray(receipt.logs)) {
         throw new Error("Invalid receipt or logs");
@@ -1419,7 +1448,9 @@ export class EnhancedMessageCoordinator {
         }
       }
 
-      console.log("❌ No ManagerDeployed event found in logs for manager address extraction");
+      console.log(
+        "❌ No ManagerDeployed event found in logs for manager address extraction"
+      );
       return null;
     } catch (error) {
       console.error(
@@ -1966,16 +1997,19 @@ export class EnhancedMessageCoordinator {
       return false;
     }
 
-    // SPECIAL HANDLING: If user has pending transaction or is in active flow, 
+    // SPECIAL HANDLING: If user has pending transaction or is in active flow,
     // always consider them engaged to allow follow-up messages
-    const creatorAddress = await this.getCreatorAddressFromInboxId(senderInboxId);
+    const creatorAddress = await this.getCreatorAddressFromInboxId(
+      senderInboxId
+    );
     if (creatorAddress) {
       const userState = await this.sessionManager.getUserState(creatorAddress);
-      const hasActiveFlow = userState.pendingTransaction || 
-                           userState.onboardingProgress ||
-                           userState.managementProgress ||
-                           userState.coinLaunchProgress;
-      
+      const hasActiveFlow =
+        userState.pendingTransaction ||
+        userState.onboardingProgress ||
+        userState.managementProgress ||
+        userState.coinLaunchProgress;
+
       if (hasActiveFlow) {
         console.log("⚡ ACTIVE FLOW DETECTED - skipping engagement check", {
           conversationId: conversationId.slice(0, 8) + "...",
@@ -1985,7 +2019,7 @@ export class EnhancedMessageCoordinator {
           management: !!userState.managementProgress,
           coinLaunch: !!userState.coinLaunchProgress,
         });
-        
+
         // Update thread activity and return true
         await this.updateThreadActivity(conversationId, senderInboxId);
         return true;
@@ -2418,10 +2452,14 @@ Respond: "YES:reason" or "NO:reason"`;
     }
   }
 
-  private async getCreatorAddressFromInboxId(inboxId: string): Promise<string | undefined> {
+  private async getCreatorAddressFromInboxId(
+    inboxId: string
+  ): Promise<string | undefined> {
     try {
       // Use the same pattern as in processCoordinatedMessages
-      const inboxState = await this.client.preferences.inboxStateFromInboxIds([inboxId]);
+      const inboxState = await this.client.preferences.inboxStateFromInboxIds([
+        inboxId,
+      ]);
       const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
       return creatorAddress.startsWith("0x") ? creatorAddress : undefined;
     } catch (error) {

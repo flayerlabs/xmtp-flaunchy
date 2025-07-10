@@ -2,11 +2,11 @@ import OpenAI from "openai";
 import { UserState } from "../types/UserState";
 import { safeParseJSON } from "../utils/jsonUtils";
 
-export type MessageIntent = 
-  | 'coin_launch'     // Launch coin (automatically creates group if needed)
-  | 'management'      // Query/manage existing groups/coins
-  | 'qa'              // General questions, help, conversation
-  | 'confirmation';   // Confirming previous agent request
+export type MessageIntent =
+  | "coin_launch" // Launch coin (automatically creates group if needed)
+  | "management" // Query/manage existing groups/coins
+  | "qa" // General questions, help, conversation
+  | "confirmation"; // Confirming previous agent request
 
 export interface IntentResult {
   intent: MessageIntent;
@@ -17,34 +17,47 @@ export interface IntentResult {
 export class IntentClassifier {
   constructor(private openai: OpenAI) {}
 
-  async classifyIntent(message: string, userState: UserState, hasAttachment: boolean = false): Promise<IntentResult> {
+  async classifyIntent(
+    message: string,
+    userState: UserState,
+    hasAttachment: boolean = false
+  ): Promise<IntentResult> {
     // Early detection for image-only coin launches
     if (hasAttachment && (!message || message.trim().length < 20)) {
       // User uploaded an image with minimal text - likely coin launch
       return {
-        intent: 'coin_launch',
+        intent: "coin_launch",
         confidence: 0.9,
-        reasoning: 'Image attachment with minimal text detected - likely coin launch information'
+        reasoning:
+          "Image attachment with minimal text detected - likely coin launch information",
       };
     }
 
     // First check if user has ongoing management progress
-    if (userState.managementProgress && userState.managementProgress.action === 'creating_group') {
+    if (
+      userState.managementProgress &&
+      userState.managementProgress.action === "creating_group"
+    ) {
       return {
-        intent: 'management',
+        intent: "management",
         confidence: 0.95,
-        reasoning: 'User has ongoing group creation progress - continuing with management flow'
+        reasoning:
+          "User has ongoing group creation progress - continuing with management flow",
       };
     }
 
     // Note: Removed explicit group creation pre-check to let LLM handle question vs action distinction
 
-    const prompt = this.buildClassificationPrompt(message, userState, hasAttachment);
-    
+    const prompt = this.buildClassificationPrompt(
+      message,
+      userState,
+      hasAttachment
+    );
+
     try {
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo', // Lightweight model for speed
-        messages: [{ role: 'user', content: prompt }],
+        model: "gpt-3.5-turbo", // Lightweight model for speed
+        messages: [{ role: "user", content: prompt }],
         temperature: 0.1, // Low temperature for consistent classification
         max_tokens: 150,
       });
@@ -56,21 +69,25 @@ export class IntentClassifier {
 
       return this.parseIntentResponse(content, userState);
     } catch (error) {
-      console.error('Intent classification failed:', error);
+      console.error("Intent classification failed:", error);
       return this.getFallbackIntent(userState);
     }
   }
 
-  private buildClassificationPrompt(message: string, userState: UserState, hasAttachment: boolean = false): string {
+  private buildClassificationPrompt(
+    message: string,
+    userState: UserState,
+    hasAttachment: boolean = false
+  ): string {
     const userContext = this.buildUserContext(userState);
-    
+
     return `
 You are classifying user messages for a simplified crypto token launch bot.
 
 USER CONTEXT:
 ${userContext}
 
-USER MESSAGE: "${message}"${hasAttachment ? '\nHAS IMAGE ATTACHMENT: true' : ''}
+USER MESSAGE: "${message}"${hasAttachment ? "\nHAS IMAGE ATTACHMENT: true" : ""}
 
 SIMPLIFIED BOT ARCHITECTURE:
 The bot is now a dedicated coin launcher that automatically splits fees between chat group members.
@@ -130,61 +147,76 @@ Respond ONLY with this JSON format:
     const status = userState.status;
     const groupCount = userState.groups.length;
     const coinCount = userState.coins.length;
-    
+
     let context = `Status: ${status}\n`;
     context += `Groups: ${groupCount}\n`;
     context += `Coins: ${coinCount}\n`;
-    
-    // Add pending transaction context  
+
+    // Add pending transaction context
     if (userState.pendingTransaction) {
       context += `PENDING TRANSACTION: ${userState.pendingTransaction.type} on ${userState.pendingTransaction.network}\n`;
     }
-    
+
     // Add management progress context
     if (userState.managementProgress) {
       context += `MANAGEMENT IN PROGRESS: ${userState.managementProgress.action} (${userState.managementProgress.step})\n`;
     }
-    
+
     // Add coin launch progress context (this is when user is actively launching coins)
     if (userState.coinLaunchProgress) {
       context += `COIN LAUNCH IN PROGRESS: Step ${userState.coinLaunchProgress.step}\n`;
       if (userState.coinLaunchProgress.coinData) {
         const coinData = userState.coinLaunchProgress.coinData;
-        context += `- Active coin launch: name=${coinData.name || 'missing'}, ticker=${coinData.ticker || 'missing'}, image=${coinData.image ? 'provided' : 'missing'}\n`;
+        context += `- Active coin launch: name=${
+          coinData.name || "missing"
+        }, ticker=${coinData.ticker || "missing"}, image=${
+          coinData.image ? "provided" : "missing"
+        }\n`;
       }
     }
-    
+
     if (groupCount > 0) {
-      const groupInfo = userState.groups.map(g => 
-        `${g.id.slice(0, 6)}...${g.id.slice(-4)} (${g.coins.length} coins)`
-      ).join(', ');
+      const groupInfo = userState.groups
+        .map(
+          (g) =>
+            `${g.id.slice(0, 6)}...${g.id.slice(-4)} (${g.coins.length} coins)`
+        )
+        .join(", ");
       context += `Group details: ${groupInfo}`;
     }
-    
+
     return context;
   }
 
-  private parseIntentResponse(content: string, userState: UserState): IntentResult {
+  private parseIntentResponse(
+    content: string,
+    userState: UserState
+  ): IntentResult {
     try {
       const parsed = safeParseJSON(content);
-      
+
       // Validate the response
-      const validIntents: MessageIntent[] = ['coin_launch', 'management', 'qa', 'confirmation'];
+      const validIntents: MessageIntent[] = [
+        "coin_launch",
+        "management",
+        "qa",
+        "confirmation",
+      ];
       if (!validIntents.includes(parsed.intent)) {
-        console.warn('Invalid intent returned:', parsed.intent);
+        console.warn("Invalid intent returned:", parsed.intent);
         return this.getFallbackIntent(userState);
       }
-      
+
       // Ensure confidence is within bounds
       const confidence = Math.max(0.1, Math.min(1.0, parsed.confidence || 0.5));
-      
+
       return {
         intent: parsed.intent,
         confidence,
-        reasoning: parsed.reasoning || 'No reasoning provided'
+        reasoning: parsed.reasoning || "No reasoning provided",
       };
     } catch (error) {
-      console.error('Failed to parse intent response:', content, error);
+      console.error("Failed to parse intent response:", content, error);
       return this.getFallbackIntent(userState);
     }
   }
@@ -192,11 +224,9 @@ Respond ONLY with this JSON format:
   private getFallbackIntent(userState: UserState): IntentResult {
     // Simplified fallback: default to Q&A since the agent now explains how it works
     return {
-      intent: 'qa',
+      intent: "qa",
       confidence: 0.5,
-      reasoning: 'Fallback: Default to Q&A for explanation and help'
+      reasoning: "Fallback: Default to Q&A for explanation and help",
     };
   }
-
-
-} 
+}

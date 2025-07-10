@@ -165,26 +165,29 @@ export function createLaunchExtractionPrompt(context: {
   imageUrl?: string;
 }): string {
   let prompt = launchDetailsExtractionTemplate;
-  
+
   // Replace template variables
-  prompt = prompt.replace('{{message}}', context.message);
-  
+  prompt = prompt.replace("{{message}}", context.message);
+
   if (context.hasAttachment) {
-    prompt = prompt.replace('{{#if hasAttachment}}', '').replace('{{/if}}', '');
-    prompt = prompt.replace('{{attachmentType}}', context.attachmentType || 'unknown');
+    prompt = prompt.replace("{{#if hasAttachment}}", "").replace("{{/if}}", "");
+    prompt = prompt.replace(
+      "{{attachmentType}}",
+      context.attachmentType || "unknown"
+    );
   } else {
     // Remove the attachment section
-    prompt = prompt.replace(/{{#if hasAttachment}}[\s\S]*?{{\/if}}/g, '');
+    prompt = prompt.replace(/{{#if hasAttachment}}[\s\S]*?{{\/if}}/g, "");
   }
-  
+
   if (context.imageUrl) {
-    prompt = prompt.replace('{{#if imageUrl}}', '').replace('{{/if}}', '');
-    prompt = prompt.replace('{{imageUrl}}', context.imageUrl);
+    prompt = prompt.replace("{{#if imageUrl}}", "").replace("{{/if}}", "");
+    prompt = prompt.replace("{{imageUrl}}", context.imageUrl);
   } else {
     // Remove the image URL section
-    prompt = prompt.replace(/{{#if imageUrl}}[\s\S]*?{{\/if}}/g, '');
+    prompt = prompt.replace(/{{#if imageUrl}}[\s\S]*?{{\/if}}/g, "");
   }
-  
+
   return prompt;
 }
 
@@ -199,9 +202,9 @@ export interface LaunchExtractionResult {
     receivers: Array<{
       identifier: string;
       percentage: number | null;
-      type: 'username' | 'ens' | 'address' | 'self';
+      type: "username" | "ens" | "address" | "self";
     }> | null;
-    splitType: 'equal' | 'percentage' | 'self_only' | null;
+    splitType: "equal" | "percentage" | "self_only" | null;
     confidence: number;
   };
-} 
+}

@@ -214,9 +214,9 @@ async function main() {
       console.error("🚫 XMTP Installation Limit Exceeded:");
       console.error(error.message);
       console.error("\nSuggested actions:");
-      error.suggestedActions?.forEach(action => console.error(action));
+      error.suggestedActions?.forEach((action) => console.error(action));
       return false; // Don't retry by default
-    }
+    },
   });
 
   // Initialize the MessageCoordinator with the client instance and a wait time (e.g., 1 second)
@@ -253,11 +253,16 @@ async function main() {
       // Process only non-readReceipt messages
       if (message.contentType?.typeId !== "readReceipt") {
         // Skip transaction receipt messages that come as '...'
-        if (typeof message.content === 'string' && message.content.trim() === '...') {
-          console.log(`[MessageCoordinator] Skipping transaction receipt message from ${message.senderInboxId}`);
+        if (
+          typeof message.content === "string" &&
+          message.content.trim() === "..."
+        ) {
+          console.log(
+            `[MessageCoordinator] Skipping transaction receipt message from ${message.senderInboxId}`
+          );
           continue;
         }
-        
+
         // Pass the message to the coordinator. The coordinator will decide when and how to call the processor.
         await messageCoordinator.processMessage(message, async (messages) => {
           // The processor callback receives an array of messages (1 or 2).
