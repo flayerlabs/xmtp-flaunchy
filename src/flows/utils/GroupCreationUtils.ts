@@ -32,7 +32,7 @@ export interface GroupCreationResult {
 }
 
 /**
- * Utility class for shared group creation logic between OnboardingFlow and ManagementFlow
+ * Utility class for shared group creation logic used by ManagementFlow and automatic group creation
  */
 export class GroupCreationUtils {
   /**

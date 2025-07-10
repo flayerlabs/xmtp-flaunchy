@@ -267,6 +267,8 @@ export async function createFlaunchTransaction(
     merkleIPFSHash: "",
   };
 
+  console.log("🚀 Flaunch transaction manager data:", treasuryManagerParams);
+
   // Encode function call
   const functionData = encodeFunctionData({
     abi: FlaunchZapAbi,
@@ -278,6 +280,9 @@ export async function createFlaunchTransaction(
       treasuryManagerParams,
     ],
   });
+
+  // Log out the raw encoded calldata for debugging
+  console.log("📝 Raw encoded calldata:", functionData);
 
   // Create wallet send calls
   const walletSendCalls: WalletSendCalls = {

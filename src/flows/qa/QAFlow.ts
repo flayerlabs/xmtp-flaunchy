@@ -1,7 +1,7 @@
 import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
 import { getCharacterResponse } from "../../../utils/character";
-import { createLaunchExtractionPrompt, LaunchExtractionResult } from "../onboarding/launchExtractionTemplate";
+// Note: createLaunchExtractionPrompt import removed - was used for onboarding flow which has been removed
 import { createCoinLaunchExtractionPrompt, CoinLaunchExtractionResult } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { safeParseJSON } from "../../core/utils/jsonUtils";
@@ -86,62 +86,7 @@ export class QAFlow extends BaseFlow {
       }
     }
 
-    // If user is in onboarding, check for coin details and fee receivers and store them
-    if (context.userState.status === 'onboarding' && context.userState.onboardingProgress) {
-      const extraction = await this.extractLaunchDetails(context);
-      if (extraction) {
-        let hasUpdates = false;
-        let updatedProgress = { ...context.userState.onboardingProgress };
-
-        // Store coin details if found
-        if (extraction.tokenDetails && (extraction.tokenDetails.name || extraction.tokenDetails.ticker || extraction.tokenDetails.image)) {
-          const currentCoinData = context.userState.onboardingProgress.coinData || { name: undefined, ticker: undefined, image: undefined };
-          const updatedCoinData = {
-            name: extraction.tokenDetails.name || currentCoinData.name,
-            ticker: extraction.tokenDetails.ticker || currentCoinData.ticker,
-            image: extraction.tokenDetails.image || currentCoinData.image
-          };
-
-          this.log('Coin details detected in QA flow, storing for onboarding', {
-            userId: context.userState.userId,
-            coinData: updatedCoinData
-          });
-
-          updatedProgress.coinData = updatedCoinData;
-          hasUpdates = true;
-        }
-
-        // Store fee receiver data if found
-        if (extraction.feeReceivers && extraction.feeReceivers.receivers && extraction.feeReceivers.receivers.length > 0) {
-          this.log('Fee receivers detected in QA flow, storing for onboarding', {
-            userId: context.userState.userId,
-            receivers: extraction.feeReceivers.receivers,
-            splitType: extraction.feeReceivers.splitType
-          });
-
-          // Convert extraction format to onboarding progress format
-          const convertedReceivers = extraction.feeReceivers.receivers.map(receiver => ({
-            username: receiver.type === 'self' ? context.creatorAddress : receiver.identifier,
-            resolvedAddress: receiver.type === 'self' ? context.creatorAddress : undefined,
-            percentage: receiver.percentage || undefined
-          }));
-
-          updatedProgress.splitData = {
-            receivers: convertedReceivers,
-            equalSplit: extraction.feeReceivers.splitType === 'equal',
-            creatorPercent: 0
-          };
-          hasUpdates = true;
-        }
-
-        // Update state if we found any data
-        if (hasUpdates) {
-          await context.updateState({
-            onboardingProgress: updatedProgress
-          });
-        }
-      }
-    }
+    // Note: Onboarding flow has been removed - users now launch coins directly with automatic group creation
 
     // Check if this is a capability question about how the agent/system works
     const isCapabilityQuestion = context.detectionResult?.questionType === 'capability';
@@ -203,49 +148,7 @@ export class QAFlow extends BaseFlow {
     }
   }
 
-  private async extractLaunchDetails(context: FlowContext): Promise<LaunchExtractionResult | null> {
-    const messageText = this.extractMessageText(context);
-    
-    // Allow extraction even with empty message if there's an attachment
-    if (!messageText && !context.hasAttachment) {
-      return null;
-    }
-
-    try {
-      const extractionPrompt = createLaunchExtractionPrompt({ 
-        message: messageText || '',
-        hasAttachment: context.hasAttachment,
-        attachmentType: context.hasAttachment ? 'image' : undefined
-      });
-      
-      const completion = await context.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: extractionPrompt }],
-        temperature: 0.1,
-        max_tokens: 1000
-      });
-
-      const response = completion.choices[0]?.message?.content;
-      if (!response) {
-        return null;
-      }
-
-      const result = safeParseJSON<LaunchExtractionResult>(response);
-      
-      this.log('🔍 LAUNCH EXTRACTION RESULT', {
-        messageText: messageText || '(empty with attachment)',
-        hasAttachment: context.hasAttachment,
-        tokenDetails: result.tokenDetails,
-        feeReceivers: result.feeReceivers,
-        timestamp: new Date().toISOString()
-      });
-
-      return result;
-    } catch (error) {
-      this.logError('Failed to extract launch details', error);
-      return null;
-    }
-  }
+  // Note: extractLaunchDetails method removed - was used for onboarding flow which has been removed
 
   /**
    * Detect if user is asking to launch multiple coins at once
@@ -305,19 +208,28 @@ export class QAFlow extends BaseFlow {
       prompt: `
         User is asking a CAPABILITY question about how you (the agent) or the system works: "${messageText}"
         
+        SIMPLIFIED WORKFLOW TO EXPLAIN:
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
+        
+        Key points about the new system:
+        - You automatically create groups for everyone in the chat when they launch coins
+        - No manual group creation needed - it's all handled automatically
+        - Users just need to launch coins and the fee splitting happens automatically
+        - Everyone in the chat group becomes part of the group and splits trading fees
+        
         Common capability questions and how to answer them:
-        - "How do you make money?" → Explain that you're a bot that helps users create groups and launch coins, you don't make money yourself
-        - "What do you do?" → Explain your role as a memecoin launch assistant
-        - "How does this work?" → Explain the group + coin launch process briefly
-        - "What can you do?" → List your main capabilities
+        - "How do you make money?" → Explain that you're a bot that helps launch coins, you don't make money yourself
+        - "What do you do?" → Explain your role as a simplified coin launcher that automatically handles groups
+        - "How does this work?" → Explain the simplified workflow: just launch coins and automatic group creation
+        - "What can you do?" → Explain coin launching with automatic fee splitting
         
         IMPORTANT:
         - Answer about YOU (the agent) and the SYSTEM, not about how users make money
-        - Be clear you're an AI assistant that helps with coin launches
-        - Don't give onboarding guidance unless specifically asked
+        - Be clear you're an AI assistant that launches coins and automatically creates groups
+        - Emphasize the simplicity - no complex setup needed
         - Keep it concise but informative
         
-        Use your character's voice but focus on explaining your role and capabilities.
+        Use your character's voice but focus on explaining your role and the simplified workflow.
       `
     });
 
@@ -342,13 +254,16 @@ export class QAFlow extends BaseFlow {
         
         This is a GENERAL question about using the system (not about your capabilities).
         
-        Provide helpful guidance about:
-        - Group creation and management
-        - Coin launching with Flaunch
-        - Fee splitting mechanisms
-        - Trading and fair launches
+        SIMPLIFIED WORKFLOW TO EXPLAIN:
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
         
-        IMPORTANT: If user needs onboarding (status: 'onboarding' or 'new'), gently guide them back to onboarding after answering their question.
+        Provide helpful guidance about:
+        - Coin launching with automatic group creation
+        - Fee splitting mechanisms (automatic for everyone in chat)
+        - Trading and fair launches
+        - No complex setup needed - just launch coins
+        
+        IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.
         
         Use your character's voice but prioritize brevity and helpfulness.
       `
@@ -429,11 +344,7 @@ export class QAFlow extends BaseFlow {
       statusInfo.push(`Pending: no transactions`);
     }
     
-    // Onboarding progress
-    if (userState.onboardingProgress) {
-      const step = userState.onboardingProgress.step || 'unknown';
-      statusInfo.push(`Onboarding: ${step} step`);
-    }
+    // Note: Onboarding progress removed - onboarding flow has been removed
     
     // Coin launch progress
     if (userState.coinLaunchProgress) {

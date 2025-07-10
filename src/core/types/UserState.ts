@@ -8,6 +8,7 @@ export interface UserState {
   groups: UserGroup[];
   preferences: UserPreferences;
   pendingTransaction?: PendingTransaction;
+  chatRoomManagers?: Record<string, string>; // Map of chat group ID to manager address
   createdAt: Date;
   updatedAt: Date;
 }
@@ -112,6 +113,7 @@ export interface PendingTransaction {
     premineAmount?: number;
     buybackPercentage?: number;
     targetGroupId?: string;
+    isFirstLaunch?: boolean;
   };
   network: 'base' | 'baseSepolia';
   timestamp: Date;

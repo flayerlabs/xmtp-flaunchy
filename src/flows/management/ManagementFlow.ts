@@ -13,7 +13,7 @@ import { getCharacterResponse } from "../../../utils/character";
 import { GroupStorageService } from "../../services/GroupStorageService";
 import { safeParseJSON } from "../../core/utils/jsonUtils";
 
-type ManagementAction = 'list_groups' | 'list_coins' | 'add_coin' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
+type ManagementAction = 'list_groups' | 'list_coins' | 'claim_fees' | 'check_fees' | 'cancel_transaction' | 'general_help' | 'answer_question';
 
 export class ManagementFlow extends BaseFlow {
   private coinLaunchFlow: CoinLaunchFlow;
@@ -968,66 +968,16 @@ If no parameters are mentioned, return:
   // private async cancelTransaction method is now inherited from BaseFlow
 
   private async handleOngoingProcess(context: FlowContext): Promise<void> {
-    const progress = context.userState.managementProgress!;
+    // Management progress is now simplified - no group creation
+    // Any ongoing processes should be cleared since groups are auto-created
+    await context.updateState({
+      managementProgress: undefined
+    });
     
-    if (progress.action === 'creating_group') {
-      await this.handleGroupCreation(context);
-    } else if (progress.action === 'adding_coin') {
-      await this.coinLaunchFlow.processMessage(context);
-    }
+    await this.sendResponse(context, "what would you like to do? you can check your groups, coins, or fees.");
   }
 
-  private async handleGroupCreation(context: FlowContext): Promise<void> {
-    const messageText = this.extractMessageText(context);
-    
-    // Check for "add everyone"
-    if (await this.isAddEveryone(context, messageText)) {
-      await this.addEveryoneFromChat(context);
-      return;
-    }
 
-    // Use shared utility for group creation
-    let result;
-    try {
-      result = await GroupCreationUtils.createGroupFromMessage(
-        context,
-        getDefaultChain(),
-        "Create Additional Group"
-      );
-    } catch (error) {
-      // Use shared error handling for consistency
-      const errorMessage = GroupCreationUtils.handleGroupCreationError(error);
-      await this.sendResponse(context, errorMessage);
-      return;
-    }
-
-    if (result) {
-      // Clear management progress and set pending transaction
-      await context.updateState({
-        managementProgress: undefined,
-        pendingTransaction: {
-          type: 'group_creation',
-          network: result.chainConfig.name,
-          timestamp: new Date()
-        }
-      });
-
-      // Send transaction
-      if (validateWalletSendCalls(result.walletSendCalls)) {
-        await context.conversation.send(result.walletSendCalls, ContentTypeWalletSendCalls);
-        
-        // Use ENS-resolved transaction message
-        const message = await GroupCreationUtils.createTransactionMessageWithENS(
-          result.resolvedReceivers, 
-          'created',
-          context.ensResolver
-        );
-        await this.sendResponse(context, message);
-      }
-    } else {
-      await this.sendResponse(context, "who should receive trading fees? tag usernames or say 'everyone'.");
-    }
-  }
 
   private async classifyAction(messageText: string, context: FlowContext): Promise<ManagementAction> {
     try {
@@ -1040,7 +990,6 @@ If no parameters are mentioned, return:
           Actions:
           - list_groups: Show user's groups, group info, "my groups", "show groups"
           - list_coins: Show user's coins, coin info, "my coins", "show coins"  
-          - add_coin: Launch/create new coin, "launch coin", "create coin"
           - claim_fees: Claim/withdraw fees, "claim fees", "withdraw"
           - check_fees: Check fee balances, "how much fees", "check balance"
           - cancel_transaction: Cancel pending transaction, "cancel", "stop transaction"
@@ -1068,9 +1017,6 @@ If no parameters are mentioned, return:
         break;
       case 'list_coins':
         await this.listCoins(context);
-        break;
-      case 'add_coin':
-        await this.addCoin(context);
         break;
       case 'claim_fees':
         await this.claimFees(context);
@@ -1102,13 +1048,13 @@ If no parameters are mentioned, return:
     const currentNetworkGroups = userState.groups.filter(group => group.chainName === currentChain.name);
     
     if (currentNetworkGroups.length === 0) {
-      await this.sendResponse(context, `no groups on ${currentChain.displayName} yet. create one first to get started!`);
+      await this.sendResponse(context, `no group for this chat group on ${currentChain.displayName} yet. launch a coin and I'll automatically create a group for everyone in this chat!`);
       return;
     }
 
     try {
       // Format the response using standardized display
-      let message = `your ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}:\n\n`;
+      let message = `this chat group's group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}:\n\n`;
       
       for (const group of currentNetworkGroups) {
         const balance = await this.getGroupBalance(group, context.creatorAddress);
@@ -1125,7 +1071,7 @@ If no parameters are mentioned, return:
       
     } catch (error) {
       this.logError('Failed to get group details', error);
-      await this.sendResponse(context, `you have ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}.`);
+      await this.sendResponse(context, `this chat group has ${currentNetworkGroups.length} group${currentNetworkGroups.length > 1 ? 's' : ''} on ${currentChain.displayName}.`);
       await this.sendMiniAppUrl(context);
     }
   }
@@ -1140,9 +1086,9 @@ If no parameters are mentioned, return:
     
     if (currentNetworkCoins.length === 0) {
       if (currentNetworkGroups.length === 0) {
-        await this.sendResponse(context, `no coins or groups on ${currentChain.displayName} yet. create a group first to get started!`);
+        await this.sendResponse(context, `no coins launched in this chat group on ${currentChain.displayName} yet. launch a coin and I'll automatically create a group for everyone!`);
       } else {
-        await this.sendResponse(context, `no coins on ${currentChain.displayName} yet. launch one into your existing group!`);
+        await this.sendResponse(context, `no coins launched in this chat group on ${currentChain.displayName} yet. launch one and it'll use the chat group's group!`);
       }
       return;
     }
@@ -1168,24 +1114,8 @@ If no parameters are mentioned, return:
   }
 
   private async createGroup(context: FlowContext): Promise<void> {
-    const messageText = this.extractMessageText(context);
-    
-    // Check for "add everyone" in the message
-    if (await this.isAddEveryone(context, messageText)) {
-      await this.addEveryoneFromChat(context);
-      return;
-    }
-
-    // Start group creation progress
-    await context.updateState({
-      managementProgress: {
-        action: 'creating_group',
-        step: 'collecting_fee_receivers',
-        startedAt: new Date()
-      }
-    });
-
-    await this.sendResponse(context, "who should receive trading fees? tag usernames or say 'everyone'.");
+    // Groups are no longer created manually - they're created automatically when launching coins
+    await this.sendResponse(context, "groups are created automatically when you launch coins! each chat group has one group shared by everyone. just launch a coin and I'll handle the group creation behind the scenes.");
   }
 
   private async addCoin(context: FlowContext): Promise<void> {
@@ -1206,7 +1136,7 @@ If no parameters are mentioned, return:
     const currentNetworkGroups = userState.groups.filter(group => group.chainName === currentChain.name);
     
     if (currentNetworkGroups.length === 0) {
-      await this.sendResponse(context, `no groups on ${currentChain.displayName} to check fees for.`);
+      await this.sendResponse(context, `no group for this chat group on ${currentChain.displayName} to check fees for.`);
       return;
     }
 
@@ -1225,7 +1155,7 @@ If no parameters are mentioned, return:
   }
 
   private async generalHelp(context: FlowContext): Promise<void> {
-    await this.sendResponse(context, "i can help you:\n- list coins and groups\n- launch coins and create groups\n- show claimable balances");
+    await this.sendResponse(context, "i can help you:\n- list coins and groups\n- launch coins (groups created automatically)\n- show claimable balances");
   }
 
   private async answerQuestion(context: FlowContext): Promise<void> {

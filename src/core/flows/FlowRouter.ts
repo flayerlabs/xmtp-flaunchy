@@ -5,14 +5,12 @@ import { IntentClassifier, MessageIntent } from "./IntentClassifier";
 import { safeParseJSON } from "../utils/jsonUtils";
 import OpenAI from "openai";
 
-export type FlowType = 'onboarding' | 'qa' | 'management' | 'coin_launch' | 'group_launch';
+export type FlowType = 'qa' | 'management' | 'coin_launch';
 
 export interface FlowRegistry {
-  onboarding: BaseFlow;
   qa: BaseFlow;
   management: BaseFlow;
   coin_launch: BaseFlow;
-  group_launch: BaseFlow;
 }
 
 export interface UnifiedRoutingResult {
@@ -26,18 +24,6 @@ export interface UnifiedRoutingResult {
   // Question classification
   questionType: 'capability' | 'informational' | null;
   
-  // Group-related detections
-  isAddEveryone: boolean;
-  isNewGroupCreation: boolean;
-  isGroupCreationResponse: boolean;
-  isAddToExistingGroup: boolean;
-  isCompleteGroupReplacement: boolean;
-  
-  // Onboarding-related
-  isOnboardingRelated: boolean;
-  isOnboardingQuestion: boolean;
-  isExistingReceiversInquiry: boolean;
-  
   // Fee/percentage modifications
   isFeeSplitModification: boolean;
   isPercentageUpdate: boolean;
@@ -47,7 +33,7 @@ export interface UnifiedRoutingResult {
   isMultipleCoinRequest: boolean;
   
   // Action classification
-  actionType: 'create_group' | 'launch_coin' | 'modify_existing' | 'inquiry' | 'greeting' | 'other';
+  actionType: 'coin_launch' | 'modify_existing' | 'inquiry' | 'greeting' | 'other';
   confidence: number;
   reasoning: string;
 }
@@ -55,21 +41,19 @@ export interface UnifiedRoutingResult {
 export interface MultiIntentResult {
   primaryIntent: {
     type: 'action' | 'question' | 'management' | 'social' | 'other';
-    action: 'create_group' | 'launch_coin' | 'modify_existing' | 'inquiry' | 'greeting' | 'cancel' | 'management' | 'other';
+    action: 'coin_launch' | 'modify_existing' | 'inquiry' | 'greeting' | 'cancel' | 'management' | 'other';
     confidence: number;
     reasoning: string;
   };
   secondaryIntents: Array<{
     type: 'action' | 'question' | 'management' | 'social' | 'other';
-    action: 'create_group' | 'launch_coin' | 'modify_existing' | 'inquiry' | 'greeting' | 'cancel' | 'management' | 'other';
+    action: 'coin_launch' | 'modify_existing' | 'inquiry' | 'greeting' | 'cancel' | 'management' | 'other';
     confidence: number;
   }>;
   flags: {
     isGreeting: boolean;
     isTransactionInquiry: boolean;
     isCancellation: boolean;
-    isAddEveryone: boolean; // Consolidated: covers "everyone", "all of us", "create group for everyone", etc.
-    isOnboardingRelated: boolean;
     isStatusInquiry: boolean;
   };
 }
@@ -128,8 +112,6 @@ export class FlowRouter {
           isGreeting: false,
           isTransactionInquiry: false,
           isCancellation: false,
-          isAddEveryone: false,
-          isOnboardingRelated: false,
           isStatusInquiry: false
         }
       };
@@ -157,7 +139,7 @@ DETECT ALL INTENTS in order of importance:
 PRIMARY INTENT (most important):
 
 CRITICAL COIN LAUNCH PATTERNS:
-If user has existing groups (Groups > 0), these patterns indicate coin launch:
+These patterns always indicate coin launch (chat group group must be created first):
 - "Name (TICKER)" format: "Test (TEST)", "Dogecoin (DOGE)", "MyCoin (MCN)"
 - "Token/Coin name ticker" format: "Token TEST", "Coin DOGE", "Launch MyCoin"  
 - "Create/Launch token/coin" with name/ticker: "create token Test", "launch coin DOGE"
@@ -165,30 +147,23 @@ If user has existing groups (Groups > 0), these patterns indicate coin launch:
 - Ticker symbols: "TEST", "DOGE", "BTC"
 - Image uploads with minimal text (likely coin images)
 
-CRITICAL GROUP CREATION PATTERNS:
-- "create group", "make group", "start group", "new group"
-- "group for everyone", "add everyone", "everyone in group"
-- "split fees between...", "fee receivers", "trading fees"
-- Username lists: "@alice @bob", "me and alice", "alice.eth and bob.eth"
-
 ACTIONS (classify based on patterns above):
-1. launch_coin: Token/coin creation patterns (especially with existing groups)
-2. create_group: Group creation patterns
-3. modify_existing: Removing/adding people, changing fees
+1. coin_launch: Token/coin creation patterns (creates chat group group automatically if needed)
+2. modify_existing: Modifying coin parameters or pending transactions
 
 QUESTIONS: 
-4. inquiry: Status questions, how-tos, what groups do I have?
+3. inquiry: Status questions, how-tos, what coins do I have?, what's our chat group group?
 
 MANAGEMENT:
-5. cancel, management: Managing existing groups/coins
+4. cancel, management: Managing existing coins or viewing chat group group
 
 SOCIAL:
-6. greeting: Social interactions
+5. greeting: Social interactions
 
 CONTEXT-AWARE CLASSIFICATION:
-- If user has Groups > 0 and provides coin-like patterns → launch_coin (HIGH confidence)
-- If user has Groups = 0 and provides group patterns → create_group  
-- If unclear between coin/group, consider user's existing groups
+- Chat group model: each chat group has exactly ONE group shared by everyone
+- Coin launch patterns always → coin_launch (creates group automatically if first coin in chat)
+- Questions about existing coins or chat group group → inquiry
 
 SECONDARY INTENTS (also in the message):
 - Any other intents that should be handled after the primary
@@ -197,16 +172,14 @@ FLAGS (detect these patterns):
 - isGreeting: Contains greeting words
 - isTransactionInquiry: Asking about pending transactions/status
 - isCancellation: Wants to cancel something  
-- isAddEveryone: "everyone", "all of us", "all members", "create group for everyone", "add everyone" (be tolerant of typos like "ebeyrone" for "everyone")
-- isOnboardingRelated: Related to first-time setup
-- isStatusInquiry: "do I have", "what's my status", "what groups"
+- isStatusInquiry: "do I have", "what's my status", "what coins", "what's our group"
 
 Return JSON:
 \`\`\`json
 {
   "primaryIntent": {
     "type": "action|question|management|social",
-    "action": "create_group|launch_coin|modify_existing|inquiry|greeting|cancel|management|other",
+    "action": "coin_launch|modify_existing|inquiry|greeting|cancel|management|other",
     "confidence": 0.0-1.0,
     "reasoning": "why this is primary"
   },
@@ -221,8 +194,6 @@ Return JSON:
     "isGreeting": boolean,
     "isTransactionInquiry": boolean,
     "isCancellation": boolean,
-    "isAddEveryone": boolean,
-    "isOnboardingRelated": boolean,
     "isStatusInquiry": boolean
   }
 }
@@ -265,8 +236,6 @@ Return JSON:
           isGreeting: messageText.toLowerCase().includes('hey') || messageText.toLowerCase().includes('hello'),
           isTransactionInquiry: messageText.toLowerCase().includes('transaction') || messageText.toLowerCase().includes('pending'),
           isCancellation: messageText.toLowerCase().includes('cancel'),
-          isAddEveryone: messageText.toLowerCase().includes('everyone'),
-          isOnboardingRelated: false,
           isStatusInquiry: messageText.toLowerCase().includes('do i have') || messageText.toLowerCase().includes('status')
         }
       };
@@ -278,7 +247,7 @@ Return JSON:
    */
   private validateMultiIntentResult(result: any): MultiIntentResult {
     const validTypes = ['action', 'question', 'management', 'social', 'other'];
-    const validActions = ['create_group', 'launch_coin', 'modify_existing', 'inquiry', 'greeting', 'cancel', 'management', 'other'];
+    const validActions = ['coin_launch', 'modify_existing', 'inquiry', 'greeting', 'cancel', 'management', 'other'];
 
     return {
       primaryIntent: {
@@ -296,8 +265,6 @@ Return JSON:
         isGreeting: Boolean(result.flags?.isGreeting),
         isTransactionInquiry: Boolean(result.flags?.isTransactionInquiry),
         isCancellation: Boolean(result.flags?.isCancellation),
-        isAddEveryone: Boolean(result.flags?.isAddEveryone),
-        isOnboardingRelated: Boolean(result.flags?.isOnboardingRelated),
         isStatusInquiry: Boolean(result.flags?.isStatusInquiry)
       }
     };
@@ -305,11 +272,12 @@ Return JSON:
 
   /**
    * Determine primary flow based on primary intent and user state
+   * SIMPLIFIED: Agent is now just a coin launcher with automatic group creation
    */
   private getPrimaryFlow(multiIntentResult: MultiIntentResult, userState: UserState): FlowType {
     const { primaryIntent, flags } = multiIntentResult;
     
-    // CLEAN PRIORITY LOGIC BASED ON USER INTENT
+    // SIMPLIFIED PRIORITY LOGIC
 
     // Priority 1: High-confidence status inquiries always go to QA
     if (primaryIntent.action === 'inquiry' && 
@@ -322,32 +290,19 @@ Return JSON:
     // Priority 2: Action intents (what user wants to DO)
     if (primaryIntent.type === 'action') {
       switch (primaryIntent.action) {
-        case 'create_group':
-          // Route based on user's current state
-          if (userState.groups.length === 0) {
-            console.log(`[FlowRouter] ✅ Create first group → onboarding`);
-            return 'onboarding';
-          } else {
-            console.log(`[FlowRouter] ✅ Create additional group → group_launch`);
-            return 'group_launch';
-          }
+        // Note: create_group is no longer a valid action since groups are auto-created
           
-        case 'launch_coin':
-          if (userState.groups.length === 0) {
-            console.log(`[FlowRouter] ✅ Launch coin (no groups) → onboarding`);
-            return 'onboarding';
-          } else {
-            console.log(`[FlowRouter] ✅ Launch coin → coin_launch`);
-            return 'coin_launch';
-          }
+        case 'coin_launch':
+          // All coin launches go to coin_launch flow (handles auto group creation)
+          console.log(`[FlowRouter] ✅ Launch coin → coin_launch`);
+          return 'coin_launch';
           
         case 'modify_existing':
           // Handle modifications in the appropriate context
           if (userState.pendingTransaction) {
             if (userState.pendingTransaction.type === 'group_creation') {
-              const targetFlow = userState.status === 'onboarding' ? 'onboarding' : 'management';
-              console.log(`[FlowRouter] ✅ Modify pending group → ${targetFlow}`);
-              return targetFlow;
+              console.log(`[FlowRouter] ✅ Modify pending group → management`);
+              return 'management';
             } else if (userState.pendingTransaction.type === 'coin_creation') {
               console.log(`[FlowRouter] ✅ Modify pending coin → coin_launch`);
               return 'coin_launch';
@@ -370,65 +325,26 @@ Return JSON:
       return 'management';
     }
 
-    // Priority 5: Social/Greetings - route based on user needs
+    // Priority 5: Social/Greetings - route to QA for explanation
     if (primaryIntent.type === 'social' || primaryIntent.action === 'greeting') {
-      if (this.shouldStayInOnboarding(userState)) {
-        console.log(`[FlowRouter] ✅ Greeting + needs onboarding → onboarding`);
-        return 'onboarding';
-      } else {
-        console.log(`[FlowRouter] ✅ Greeting + completed user → management`);
-        return 'management';
-      }
-    }
-
-    // Priority 6: Other/Unknown intents - route based on user state
-    if (primaryIntent.type === 'other' || primaryIntent.action === 'other') {
-      if (this.shouldStayInOnboarding(userState)) {
-        console.log(`[FlowRouter] ✅ Other + needs onboarding → onboarding`);
-        return 'onboarding';
-      } else {
-        console.log(`[FlowRouter] ✅ Other + completed user → qa`);
-        return 'qa';
-      }
-    }
-
-    // Priority 7: Fallback - route based on user state
-    if (this.shouldStayInOnboarding(userState)) {
-      console.log(`[FlowRouter] ✅ Fallback + needs onboarding → onboarding`);
-      return 'onboarding';
-    } else {
-      console.log(`[FlowRouter] ✅ Fallback → qa`);
+      console.log(`[FlowRouter] ✅ Greeting → qa (explain how agent works)`);
       return 'qa';
     }
+
+    // Priority 6: Other/Unknown intents - route to QA for help
+    if (primaryIntent.type === 'other' || primaryIntent.action === 'other') {
+      console.log(`[FlowRouter] ✅ Other → qa (help and explanation)`);
+      return 'qa';
+    }
+
+    // Priority 7: Fallback - route to QA
+    console.log(`[FlowRouter] ✅ Fallback → qa`);
+    return 'qa';
   }
 
   // =============================================================================
   // HELPER METHODS
   // =============================================================================
-
-  /**
-   * Determines if user should stay in onboarding flow
-   */
-  private shouldStayInOnboarding(userState: UserState): boolean {
-    // User is in onboarding status
-    if (userState.status === 'onboarding') {
-      return true;
-    }
-
-    // User has no groups and no onboarding progress
-    if (userState.groups.length === 0 && !userState.onboardingProgress) {
-      return true;
-    }
-
-    // User has partial onboarding progress but no completed groups
-    if (userState.onboardingProgress && 
-        userState.onboardingProgress.step !== 'completed' && 
-        userState.groups.length === 0) {
-      return true;
-    }
-
-    return false;
-  }
 
   /**
    * Update a flow in the registry

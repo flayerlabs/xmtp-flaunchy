@@ -225,7 +225,7 @@ export class EnhancedMessageCoordinator {
     }
   > = new Map();
 
-  // Thread timeout - if no activity for 5 minutes, consider thread inactive
+  // Thread timeout - if no activity for 30 minutes, consider thread inactive
   // This ensures bot doesn't continue responding to users who've moved on
   private readonly THREAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -971,14 +971,14 @@ export class EnhancedMessageCoordinator {
           const chainId = defaultChain.id;
           const chainName = defaultChain.name;
 
-          // FIXED: Use stored receiver data instead of transaction logs for better accuracy
+          // NEW: Extract receivers from transaction logs for chat group model
           let receivers: Array<{
             username: string;
             resolvedAddress: string;
             percentage: number;
           }> = [];
 
-          // Always use stored data for receiver information since it preserves original usernames
+          // Try stored data first (for legacy onboarding/management flows)
           const storedReceivers =
             currentProgress?.splitData?.receivers ||
             userState.managementProgress?.groupCreationData?.receivers ||
@@ -999,10 +999,24 @@ export class EnhancedMessageCoordinator {
               "📋 Using stored receivers (filtered for valid addresses):",
               receivers
             );
+          } else {
+            // NEW: For chat group model, extract receivers from transaction logs
+            console.log("📋 No stored receivers found, extracting from transaction logs...");
+            try {
+              const extractedReceivers = await this.extractReceiversFromTransactionLogs(
+                receipt,
+                creatorAddress
+              );
+              if (extractedReceivers.length > 0) {
+                receivers = extractedReceivers;
+                console.log("✅ Successfully extracted receivers from transaction logs:", receivers);
+              }
+            } catch (error) {
+              console.error("Failed to extract receivers from transaction logs:", error);
+            }
           }
 
-          // REMOVED: Fallback to transaction sender as this was causing the inbox ID issue
-          // If no valid receivers found, this is an error condition
+          // If still no receivers found, this is an error condition
           if (receivers.length === 0) {
             console.error(
               "❌ CRITICAL: No valid fee receivers found for group creation"
@@ -1117,6 +1131,62 @@ export class EnhancedMessageCoordinator {
             `coin created! CA: ${contractAddress}\n\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`
           );
           await conversation.send("https://mini.flaunch.gg");
+          
+          // Check if this was a first launch and store manager address
+          if (pendingTx.launchParameters?.isFirstLaunch) {
+            console.log("🔍 First launch detected - extracting and storing manager address");
+            
+            // Extract manager address from transaction receipt
+            const managerAddress = await this.extractManagerAddressFromReceipt(receipt);
+            
+            if (managerAddress) {
+              // Use conversation ID as the key for chat room manager mapping
+              const chatRoomId = conversation.id;
+              
+              // Store the manager address for ALL chat room members
+              const members = await conversation.members();
+              const updatePromises = [];
+              
+              for (const member of members) {
+                // Skip the bot
+                if (member.inboxId !== this.client.inboxId) {
+                  // Get member's address
+                  const memberInboxState = await this.client.preferences.inboxStateFromInboxIds([member.inboxId]);
+                  if (memberInboxState.length > 0 && memberInboxState[0].identifiers.length > 0) {
+                    const memberAddress = memberInboxState[0].identifiers[0].identifier;
+                    
+                    // Get member's current state
+                    const memberState = await this.sessionManager.getUserState(memberAddress);
+                    
+                    // Update their chat room managers mapping
+                    const updatedManagers = {
+                      ...memberState.chatRoomManagers,
+                      [chatRoomId]: managerAddress
+                    };
+                    
+                    // Queue the update
+                    updatePromises.push(
+                      this.sessionManager.updateUserState(memberAddress, {
+                        chatRoomManagers: updatedManagers
+                      })
+                    );
+                  }
+                }
+              }
+              
+              // Execute all updates
+              await Promise.all(updatePromises);
+              
+              console.log("✅ Stored manager address for all chat room members", {
+                chatRoomId,
+                managerAddress,
+                totalMembers: updatePromises.length
+              });
+            } else {
+              console.error("❌ Failed to extract manager address from first launch receipt");
+            }
+          }
+          
           // For coin creation, add the coin to user's collection
           // Use the group address from the user's onboarding progress (the group they just created)
           const groupAddress =
@@ -1324,6 +1394,45 @@ export class EnhancedMessageCoordinator {
         error
       );
       throw error;
+    }
+  }
+
+  private async extractManagerAddressFromReceipt(receipt: any): Promise<string | null> {
+    try {
+      if (!receipt || !receipt.logs || !Array.isArray(receipt.logs)) {
+        throw new Error("Invalid receipt or logs");
+      }
+
+      // Look for the ManagerDeployed event (topic: 0xb9eeb0ca3259038acb2879e65ccb1f2a6433df58eefa491654cc6607b01944d4)
+      const managerDeployedTopic =
+        "0xb9eeb0ca3259038acb2879e65ccb1f2a6433df58eefa491654cc6607b01944d4";
+
+      for (const log of receipt.logs) {
+        if (
+          log.topics &&
+          log.topics.length > 1 &&
+          log.topics[0] === managerDeployedTopic
+        ) {
+          // Found the ManagerDeployed event, extract manager address from topic[1]
+          const managerAddressHex = log.topics[1];
+          // Remove padding zeros to get the actual address
+          const managerAddress = `0x${managerAddressHex.slice(-40)}`;
+          console.log(
+            "✅ Found manager address from ManagerDeployed event:",
+            managerAddress
+          );
+          return managerAddress;
+        }
+      }
+
+      console.log("❌ No ManagerDeployed event found in logs for manager address extraction");
+      return null;
+    } catch (error) {
+      console.error(
+        "Failed to extract manager address from transaction logs:",
+        error
+      );
+      return null;
     }
   }
 
@@ -2007,12 +2116,19 @@ USER MESSAGE: "${messageText}"
 Does this message want to engage with flaunchy?
 
 ENGAGE (respond "YES:reason"):
-- Bot commands: "create a group", "launch a coin", "show my groups" → "YES:bot_command"
-- Bot name + action: "flaunchy add javery", "flaunchy create group", "flaunchy help" → "YES:bot_command"
+- Bot commands: "launch a coin", "show my coins" → "YES:bot_command"
+- Bot name + action: "flaunchy add javery", "flaunchy help" → "YES:bot_command"
 - Help requests: "help", "what can you do", "how does this work" → "YES:help_request"
 - Bot actions: "start", "begin", "initialize" → "YES:action_request"
 - Addressing flaunchy: "ok flaunchy let's...", "sure flaunchy...", "alright flaunchy..." → "YES:addressing_bot"
 - Creative mentions: "flaunchy?", "yo flaunchy!" → "YES:creative_mention"
+
+CRITICAL: COIN LAUNCH PATTERNS (respond "YES:coin_launch"):
+- Token/coin specifications: "Launch Test (TEST)", "MyCoin (MCN)", "DOGE token" → "YES:coin_launch"
+- Coin launch requests: "launch a coin", "create a token", "flaunch DOGE" → "YES:coin_launch"
+- Coin parameters: "Banana (BNAA) with $100 market cap", "Token ABC with 30 minute fair launch" → "YES:coin_launch"
+- Ticker patterns: "TEST", "DOGE", "MCN", "BTC" (when clearly meant as coin tickers) → "YES:coin_launch"
+- Launch commands: "launch [anything]", "create [token/coin]", "flaunch [anything]" → "YES:coin_launch"
 
 DO NOT ENGAGE (respond "NO:reason"):
 - General greetings: "hi", "hello", "hey" (without bot name) → "NO:general_greeting"
@@ -2020,7 +2136,9 @@ DO NOT ENGAGE (respond "NO:reason"):
 - Pure social talk: "hey alice", "bob how are you" (not involving bot) → "NO:talking_to_others"
 - Unrelated topics: "what's for lunch", "did you see the game" → "NO:off_topic"
 
-IMPORTANT: If someone says "flaunchy [action]" like "flaunchy add javery please" they are clearly addressing the bot.
+IMPORTANT: 
+- If someone says "flaunchy [action]" like "flaunchy add javery please" they are clearly addressing the bot.
+- Coin launch patterns like "Launch Test (TEST)" are core bot functionality and should ALWAYS trigger engagement.
 
 Respond: "YES:reason" or "NO:reason"`;
   }
