@@ -89,7 +89,7 @@ export async function createFlaunchTransaction(
     senderInboxId,
     chain,
     treasuryManagerAddress,
-    treasuryInitializeData = "0x",
+    treasuryInitializeData,
     fairLaunchPercent = 10,
     fairLaunchDuration = 30 * 60, // 30 minutes
     startingMarketCapUSD = 1000,
@@ -99,6 +99,9 @@ export async function createFlaunchTransaction(
     hasAttachment,
     attachment,
   } = params;
+
+  // Apply default value after destructuring to preserve passed values
+  const actualTreasuryInitializeData = treasuryInitializeData || "0x";
 
   // Constants
   const TOTAL_SUPPLY = 100n * 10n ** 27n;
@@ -171,13 +174,10 @@ export async function createFlaunchTransaction(
   const premineAmount = calculatePremineAmount(preminePercentage);
 
   const initialTokenFairLaunch = (TOTAL_SUPPLY * fairLaunchInBps) / 10000n;
-  const ethAmount = parseUnits(startingMarketCapUSD.toString(), 6);
+  const initialMCapInUSDCWei = parseUnits(startingMarketCapUSD.toString(), 6);
   const initialPriceParams = encodeAbiParameters(
-    [
-      { type: "uint256", name: "ethAmount" },
-      { type: "uint256", name: "tokenAmount" },
-    ],
-    [ethAmount, initialTokenFairLaunch]
+    [{ type: "uint256" }],
+    [initialMCapInUSDCWei]
   );
 
   // Calculate ETH value to send with transaction
@@ -249,9 +249,11 @@ export async function createFlaunchTransaction(
 
   const treasuryManagerParams = {
     manager: treasuryManagerAddress as `0x${string}`,
-    initializeData: treasuryInitializeData as `0x${string}`,
+    initializeData: actualTreasuryInitializeData as `0x${string}`,
     depositData: "0x" as `0x${string}`,
   };
+
+  console.log("🚀 Flaunch transaction manager data:", treasuryManagerParams);
 
   const whitelistParams = {
     merkleRoot: zeroHash,
@@ -266,8 +268,6 @@ export async function createFlaunchTransaction(
     merkleRoot: zeroHash,
     merkleIPFSHash: "",
   };
-
-  console.log("🚀 Flaunch transaction manager data:", treasuryManagerParams);
 
   // Encode function call
   const functionData = encodeFunctionData({

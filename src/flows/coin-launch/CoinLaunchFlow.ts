@@ -509,9 +509,10 @@ export class CoinLaunchFlow extends BaseFlow {
         console.log(`Processing member: ${member.inboxId}`);
 
         // Skip the sender (coin creator) and the bot
-        if (member.inboxId !== context.client.inboxId) {
-          console.log(`  → Including member ${member.inboxId} as fee receiver`);
-
+        if (
+          member.inboxId !== context.client.inboxId &&
+          member.inboxId !== context.senderInboxId
+        ) {
           // Get the address for this member
           const memberInboxState =
             await context.client.preferences.inboxStateFromInboxIds([
@@ -531,7 +532,9 @@ export class CoinLaunchFlow extends BaseFlow {
             );
           }
         } else {
-          console.log(`  → Skipping member ${member.inboxId} (bot)`);
+          const reason =
+            member.inboxId === context.client.inboxId ? "bot" : "creator";
+          console.log(`  → Skipping member ${member.inboxId} (${reason})`);
         }
       }
 
@@ -540,49 +543,87 @@ export class CoinLaunchFlow extends BaseFlow {
       );
       console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
 
-      // Deduplicate fee receivers - combine shares for duplicate addresses (case-insensitive)
-      const addressShareMap = new Map<Address, bigint>();
-      const VALID_SHARE_TOTAL = 100_00000n; // 100.00000% in contract format (5 decimals)
-
-      // First pass: calculate equal share per unique address (case-insensitive)
+      // Deduplicate fee receivers - get unique addresses (case-insensitive)
       const uniqueFeeReceivers = [
         ...new Set(feeReceivers.map((addr) => addr.toLowerCase() as Address)),
       ];
-      const totalParticipants = BigInt(uniqueFeeReceivers.length + 1); // +1 for the creator
-      const sharePerAddress = VALID_SHARE_TOTAL / totalParticipants;
-      const remainder = VALID_SHARE_TOTAL % totalParticipants;
 
-      // Build the address share map by counting duplicates (case-insensitive)
-      for (const receiver of feeReceivers) {
-        const normalizedAddress = receiver.toLowerCase() as Address;
-        const currentShare = addressShareMap.get(normalizedAddress) || 0n;
-        addressShareMap.set(normalizedAddress, currentShare + sharePerAddress);
-      }
+      const VALID_SHARE_TOTAL = 100_00000n; // 100.00000% in contract format (5 decimals)
+
+      // Calculate equal shares for all participants (creator + receivers)
+      const totalRecipients = BigInt(uniqueFeeReceivers.length);
+      const totalParticipants = totalRecipients + 1n; // +1 for creator
+
+      // Creator gets 1/(n+1) of total fees
+      const creatorShare = VALID_SHARE_TOTAL / totalParticipants;
+      const creatorRemainder = VALID_SHARE_TOTAL % totalParticipants;
+      const adjustedCreatorShare = creatorShare + creatorRemainder; // Add remainder to creator
+
+      // Recipients array must sum to 100% - each recipient gets equal share of this
+      const sharePerRecipient = VALID_SHARE_TOTAL / totalRecipients;
+      const remainder = VALID_SHARE_TOTAL % totalRecipients;
 
       console.log(
         `Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`
       );
       console.log(
+        `Equal distribution: each participant gets ${(
+          (Number(VALID_SHARE_TOTAL / totalParticipants) /
+            Number(VALID_SHARE_TOTAL)) *
+          100
+        ).toFixed(5)}%`
+      );
+
+      // Generate initialize data for the fee split manager using deduplicated addresses
+      const recipientShares = uniqueFeeReceivers.map((receiver, index) => ({
+        recipient: receiver,
+        share: sharePerRecipient + (index === 0 ? remainder : 0n), // Add remainder to first recipient
+      }));
+
+      // Verify total recipient shares equal 100%
+      const totalRecipientShares = recipientShares.reduce(
+        (sum, rs) => sum + rs.share,
+        0n
+      );
+      if (totalRecipientShares !== VALID_SHARE_TOTAL) {
+        throw new Error(
+          `Recipient shares total ${totalRecipientShares} but should be ${VALID_SHARE_TOTAL}`
+        );
+      }
+
+      console.log(
+        `Creator share: ${adjustedCreatorShare.toString()} (${(
+          (Number(adjustedCreatorShare) / Number(VALID_SHARE_TOTAL)) *
+          100
+        ).toFixed(5)}%)`
+      );
+      console.log(
         `Deduplicated fee receiver shares:`,
-        Array.from(addressShareMap.entries()).map(([addr, share]) => ({
-          address: addr,
-          share: share.toString(),
+        recipientShares.map((rs) => ({
+          address: rs.recipient,
+          share: rs.share.toString(),
           percentage:
-            ((Number(share) / Number(VALID_SHARE_TOTAL)) * 100).toFixed(2) +
+            ((Number(rs.share) / Number(VALID_SHARE_TOTAL)) * 100).toFixed(5) +
             "%",
         }))
       );
 
-      // Generate initialize data for the fee split manager using deduplicated addresses
-      const recipientShares = Array.from(addressShareMap.entries()).map(
-        ([receiver, share]) => ({
-          recipient: receiver,
-          share: share,
-        })
-      );
-
-      // Creator gets the base share plus any rounding remainder to ensure a valid share total
-      const creatorShare = sharePerAddress + remainder;
+      // Verify equal distribution math
+      const creatorEffective = adjustedCreatorShare;
+      const receiverEffective =
+        (VALID_SHARE_TOTAL - adjustedCreatorShare) / totalRecipients;
+      console.log(`Effective distribution verification:`, {
+        creator:
+          (
+            (Number(creatorEffective) / Number(VALID_SHARE_TOTAL)) *
+            100
+          ).toFixed(5) + "%",
+        eachReceiver:
+          (
+            (Number(receiverEffective) / Number(VALID_SHARE_TOTAL)) *
+            100
+          ).toFixed(5) + "%",
+      });
 
       const initializeData = encodeAbiParameters(
         [
@@ -604,14 +645,14 @@ export class CoinLaunchFlow extends BaseFlow {
         ],
         [
           {
-            creatorShare,
+            creatorShare: adjustedCreatorShare,
             recipientShares,
           },
         ]
       );
 
       console.log("Prepared chat room initializeData:", {
-        creatorShare: creatorShare.toString(),
+        creatorShare: adjustedCreatorShare.toString(),
         recipientShares: recipientShares.map((rs) => ({
           recipient: rs.recipient,
           share: rs.share.toString(),
