@@ -2,13 +2,11 @@ import OpenAI from "openai";
 import { UserState } from "../types/UserState";
 import { safeParseJSON } from "../utils/jsonUtils";
 
-export type MessageIntent = 
-  | 'onboarding'      // First group creation, new user setup
-  | 'coin_launch'     // Launch coin into existing group
-  | 'group_launch'    // Create additional groups (for existing users)
-  | 'management'      // Query/manage existing groups/coins
-  | 'qa'              // General questions, help, conversation
-  | 'confirmation';   // Confirming previous agent request
+export type MessageIntent =
+  | "coin_launch" // Launch coin (automatically creates group if needed)
+  | "management" // Query/manage existing groups/coins
+  | "qa" // General questions, help, conversation
+  | "confirmation"; // Confirming previous agent request
 
 export interface IntentResult {
   intent: MessageIntent;
@@ -19,35 +17,47 @@ export interface IntentResult {
 export class IntentClassifier {
   constructor(private openai: OpenAI) {}
 
-  async classifyIntent(message: string, userState: UserState, hasAttachment: boolean = false): Promise<IntentResult> {
-    // Early detection for image-only coin launches (but not during onboarding)
-    if (hasAttachment && userState.groups.length > 0 && (!message || message.trim().length < 20) && 
-        userState.status !== 'onboarding' && !userState.onboardingProgress) {
-      // User has groups and uploaded an image with minimal text - likely coin launch
+  async classifyIntent(
+    message: string,
+    userState: UserState,
+    hasAttachment: boolean = false
+  ): Promise<IntentResult> {
+    // Early detection for image-only coin launches
+    if (hasAttachment && (!message || message.trim().length < 20)) {
+      // User uploaded an image with minimal text - likely coin launch
       return {
-        intent: 'coin_launch',
+        intent: "coin_launch",
         confidence: 0.9,
-        reasoning: 'Image attachment with minimal text detected - likely coin launch information'
+        reasoning:
+          "Image attachment with minimal text detected - likely coin launch information",
       };
     }
 
     // First check if user has ongoing management progress
-    if (userState.managementProgress && userState.managementProgress.action === 'creating_group') {
+    if (
+      userState.managementProgress &&
+      userState.managementProgress.action === "creating_group"
+    ) {
       return {
-        intent: 'management',
+        intent: "management",
         confidence: 0.95,
-        reasoning: 'User has ongoing group creation progress - continuing with management flow'
+        reasoning:
+          "User has ongoing group creation progress - continuing with management flow",
       };
     }
 
     // Note: Removed explicit group creation pre-check to let LLM handle question vs action distinction
 
-    const prompt = this.buildClassificationPrompt(message, userState, hasAttachment);
-    
+    const prompt = this.buildClassificationPrompt(
+      message,
+      userState,
+      hasAttachment
+    );
+
     try {
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo', // Lightweight model for speed
-        messages: [{ role: 'user', content: prompt }],
+        model: "gpt-3.5-turbo", // Lightweight model for speed
+        messages: [{ role: "user", content: prompt }],
         temperature: 0.1, // Low temperature for consistent classification
         max_tokens: 150,
       });
@@ -59,160 +69,65 @@ export class IntentClassifier {
 
       return this.parseIntentResponse(content, userState);
     } catch (error) {
-      console.error('Intent classification failed:', error);
+      console.error("Intent classification failed:", error);
       return this.getFallbackIntent(userState);
     }
   }
 
-  private buildClassificationPrompt(message: string, userState: UserState, hasAttachment: boolean = false): string {
+  private buildClassificationPrompt(
+    message: string,
+    userState: UserState,
+    hasAttachment: boolean = false
+  ): string {
     const userContext = this.buildUserContext(userState);
-    
+
     return `
-You are classifying user messages in an ongoing conversation with a crypto token launch bot.
+You are classifying user messages for a simplified crypto token launch bot.
 
 USER CONTEXT:
 ${userContext}
 
-USER MESSAGE: "${message}"${hasAttachment ? '\nHAS IMAGE ATTACHMENT: true' : ''}
+USER MESSAGE: "${message}"${hasAttachment ? "\nHAS IMAGE ATTACHMENT: true" : ""}
 
-CRITICAL CONTEXT RULES (READ CAREFULLY):
-
-IMPORTANT: GREETINGS ARE HANDLED SEPARATELY
-- Simple greetings like "hi", "hello", "hey", "what's up" are now handled by FlowRouter before intent classification
-- Do NOT classify greetings as qa intent anymore
-- The router will detect greetings and route appropriately based on user state
-
-CONVERSATIONAL FLOW CONTINUATION (SECOND PRIORITY):
-- If user is actively in a flow (onboarding/management progress exists), assume they are responding to the bot's request
-- If bot just asked for fee receivers and user provides usernames/addresses → CONTINUE CURRENT FLOW
-- If bot just asked for coin details and user provides name/ticker → CONTINUE CURRENT FLOW  
-- If bot just asked for confirmation and user confirms → CONTINUE CURRENT FLOW
-
-ONBOARDING CONTINUATION SIGNALS:
-- User has onboardingProgress AND provides: usernames, addresses, ENS names, "me and X", fee split info → onboarding
-- User has onboardingProgress AND provides coin details: coin names, tickers, images → onboarding (NOT coin_launch!)
-- User has onboardingProgress AND says "everyone" for group creation → onboarding (NOT qa!)
-- Examples: "split between me and alice", "me and @bob 50/50", "alice.eth and charlie.eth", "0x123... and 0x456..."
-- Group creation examples: "everyone", "add everyone", "all members", "include everyone"
-- Coin details examples: "Token TOKIE", "launch MyCoin (MCN)", "create DOGE with image.jpg" → onboarding if user is in onboarding
-
-INFORMATIONAL QUERIES (HIGHEST PRIORITY):
-- Questions about existing groups/coins: "who are fee receivers?", "show my groups", "what's my group?", "show fee receivers"
-- These are ALWAYS management, even if user is in active onboarding/management flows
-- Override any active flow when user asks for information about existing data
-
-GROUP CREATION SIGNALS (HIGH PRIORITY):
-- Explicit group creation requests: "launch a group", "create a group", "group for everyone", "add everyone"
-- These should route to appropriate flow (onboarding for first group, management for additional groups)
-- "Add everyone" requests should be detected regardless of current flow state
-
-MANAGEMENT CONTINUATION SIGNALS:
-- User has managementProgress AND continues that task → management
+SIMPLIFIED BOT ARCHITECTURE:
+The bot is now a dedicated coin launcher that automatically splits fees between chat group members.
+Users no longer create groups explicitly - they just launch coins and the bot handles group creation automatically.
 
 INTENT OPTIONS:
-1. onboarding - User wants to create their FIRST group (when they have 0 groups) OR continue their current onboarding process
-   Examples: "create a group", "launch a group", "set up a group", "launch a group for me and @alice", "launch a group for everyone here", "help me get started"
-   CONTINUATION: If user is in onboarding and provides fee receivers, coin details, or continues the process → onboarding
-   GROUP CREATION: If user mentions "group" + "everyone", this is group creation with "add everyone" functionality
-   CRITICAL: If user has existing groups (Groups > 0), group creation is MANAGEMENT, not onboarding
+1. coin_launch - User wants to launch a TOKEN/COIN (chat group group must be created first)
+   Examples: 
+   - Token specifications: "MyCoin (MCN)", "DOGE token", "Token ABC with $1000 market cap"
+   - Basic coin requests: "launch a coin", "create a token", "flaunch DOGE"
+   - Coin parameters: "Banana (BNAA) with $100 market cap and 0.77% premine"
+   - Image uploads: User uploads image with minimal text (likely coin image)
+   INDICATORS: "token", "coin", ticker symbols in parentheses like "(MCN)", specific coin names
    
-2. coin_launch - User wants to launch a TOKEN/COIN into an existing group  
-   Examples: "launch MyCoin (MCN)", "create new coin", "add coin to group", "launch DOGE into my group", "flaunch a token", "launch a token into group", "I want to launch a token into [group name]"
-   CRITICAL TOKEN INDICATORS: "token", "coin", ticker symbols in parentheses like "(MCN)", "(DOGE)", specific coin names
-   COIN SPECIFICATIONS: Token specifications with parameters: "Banana (BNAA) with $100 market cap and 0.77% premine", "MyCoin (MCN) $5000 market cap", "DOGE token with 10% prebuy", "create Token (TOK) with $1000 starting cap"
-   IMAGE ONLY: If user uploads an image attachment with minimal/no text, this is coin launch information
-   LAUNCH PARAMETERS: Messages containing market cap, premine/prebuy percentages, launch parameters
-   CRITICAL: "launch a token" = coin_launch, "launch a group" = group creation
+2. management - User wants to view/manage existing coins or check chat group group
+   Examples: "show my coins", "do I have coins?", "my portfolio", "what's our group?", "who gets fees?"
    
-3. group_launch - User wants to create ADDITIONAL groups (when they already have groups)
-   Examples: "start a new group", "create a group for everyone", "let's create another group", "launch a group", "launch a group and add everyone"
-   CRITICAL: If user has Groups > 0, ALL group creation requests are group_launch, not onboarding
+3. qa - General questions, help, or capability questions
+   Examples: "how does this work?", "what are fees?", "explain how it works", "tell me about flaunchy"
+   CAPABILITY QUESTIONS: "can I...", "do you support...", "is it possible...", "what about..."
+   PERSONAL INFO: "what's my address?", "who am I?", "what address am I?"
    
-4. management - User wants to view/manage existing groups/coins (but NOT create new groups)
-   Examples: "show my groups", "do I have coins?", "my portfolio", "group stats", "who are the fee receivers?", "what's my group?", "show fee receivers"
-   
-5. qa - General questions, help, capability questions, or hypothetical scenarios (NOTE: greetings are handled separately)
-   Examples: "how does this work?", "what are fees?", "explain groups", "tell me about flaunchy"
-   CAPABILITY/HYPOTHETICAL QUESTIONS: "can I create a group with different fee splits?", "do you support custom splits?", "is it possible to have unequal splits?", "can I make a group where one person gets more?", "what about groups with custom percentages?", "do you allow different fee structures?"
-   CHAIN QUESTIONS: "can I switch chains?", "do you support other networks?", "can I launch on sepolia?", "what about ethereum mainnet?" → These are capability questions about unsupported features
-   IMPORTANT: Any question seeking information about capabilities or asking "what if" scenarios should be qa, NOT action flows
-   
-6. confirmation - Confirming a previous request
+4. confirmation - Confirming a previous request
    Examples: "yes", "ok", "do it", "yep", "sure", "go ahead", "let's do it"
 
-CLASSIFICATION PRIORITY ORDER:
-1. GREETINGS AND CASUAL CONVERSATION - Simple greetings, bot mentions, casual conversation → qa
-2. CAPABILITY/HYPOTHETICAL QUESTIONS - Questions about what's possible, supported features, or hypothetical scenarios → qa
-3. INFORMATIONAL QUERIES - Questions about existing groups/coins override active flows (e.g., "who are fee receivers?", "show my groups")
-4. GROUP CREATION SIGNALS - Explicit group creation or "add everyone" requests override current step
-5. ACTIVE FLOW CONTINUATION - Is user continuing an active onboarding/management process?
-6. NEW INTENT DETECTION - If no active flow, what is the user trying to do?
+CRITICAL CONTEXT:
+- Each chat group has exactly ONE group that all users share
+- First coin launch in a chat group creates the group for everyone
+- All subsequent coins in that chat group use the same group
+- If user has ongoing coin launch progress and provides coin details → coin_launch
+- If user has management progress and continues that task → management
+- Questions about existing data always override active flows → management
+- General questions or capability inquiries → qa
 
-CRITICAL: DISTINGUISH QUESTIONS FROM ACTIONS
-- QUESTIONS seek information/understanding: "can I...", "do you support...", "is it possible...", "what about...", "how about..."
-- ACTIONS request execution: "create...", "make...", "start...", "launch...", "i want to..."
-- Questions with group-related words are STILL QUESTIONS → qa
-- Only clear action statements should trigger group creation flows
-
-
-
-CRITICAL EXAMPLES - QUESTIONS VS ACTIONS:
-NOTE: Greetings are handled separately by FlowRouter and should not be classified as qa
-
-QUESTIONS (seeking information) → qa:
-- "What's my address Flaunchy?" = qa (asking for personal info)
-- "what's my wallet address?" = qa (asking for personal info)
-- "what address am I?" = qa (asking for personal info)
-- "who am I?" = qa (asking for identity info)
-- "can I create a group with different fee splits for each receiver?" = qa (asking about capability)
-- "do you support custom fee splits?" = qa (asking about features)
-- "is it possible to have unequal splits?" = qa (asking about possibility)
-- "can I make a group where one person gets more?" = qa (asking what's allowed)
-- "what about groups with custom percentages?" = qa (asking about options)
-- "do you allow different fee structures?" = qa (asking about support)
-- "can I switch chains?" = qa (asking about unsupported feature)
-- "do you support sepolia?" = qa (asking about unsupported network)
-- "what about ethereum mainnet?" = qa (asking about unsupported network)
-
-ACTIONS (requesting execution) → onboarding/group_launch/management/coin_launch:
-- "create a group with different fee splits" = onboarding (if 0 groups) OR group_launch (if has groups)
-- "make a group" = onboarding (if 0 groups) OR group_launch (if has groups)
-- "start a group" = onboarding (if 0 groups) OR group_launch (if has groups)
-- "i want to create a group" = onboarding (if 0 groups) OR group_launch (if has groups)
-- User in onboarding + "split between me and alice" = onboarding (continuing fee receiver setup)
-- User in onboarding + "MyCoin (MCN)" = onboarding (providing coin details)  
-- User in onboarding + "launch Token TOKIE into that group" = onboarding (providing coin details during onboarding!)
-- User with 0 groups + "create group" = onboarding (first group)
-- User with groups + "create group" = group_launch (additional group)
-- User with groups + "start a new group for everyone" = group_launch (additional group creation)
-- User with groups + "launch a group and add everyone" = group_launch (additional group creation)
-- User with groups + "show my groups" = management (viewing existing)
-- User in onboarding + "who are the fee receivers?" = management (asking about existing group info, NOT continuing onboarding)
-- User in onboarding + "what's my group?" = management (asking about existing group info)
-- User in onboarding + "show fee receivers" = management (asking about existing group info)
-- User in onboarding + "everyone" = onboarding (continuing group creation, NOT qa!)
-- User in onboarding + "add everyone" = onboarding (continuing group creation)
-- User in onboarding + "all members" = onboarding (continuing group creation)
-- User in onboarding + "include everyone" = onboarding (continuing group creation)
-- User in onboarding + "launch a group for everyone here" = onboarding (group creation with add everyone, NOT coin launch!)
-- User in onboarding + "create a group for everyone" = onboarding (group creation with add everyone)
-- User with groups + uploads image with no/minimal text = coin_launch (image-only coin launch information)
-- User with groups + "" (empty message) with image attachment = coin_launch (providing coin image)
-- User with groups + "Banana (BNAA) with $100 market cap and 0.77% premine" = coin_launch (coin specification with parameters)
-- User with groups + "MyCoin (MCN) $5000 market cap" = coin_launch (coin specification with market cap)
-- User with groups + "DOGE token with 10% prebuy" = coin_launch (coin specification with prebuy)
-- User with groups + "I would like to flaunch a token into [group name]" = coin_launch (explicit token launch request)
-- User with groups + "launch a token into my group" = coin_launch (token launch, NOT group creation)
-- User with groups + "create a token" = coin_launch (token creation)
-- User with groups + "launch a coin" = coin_launch (coin launch)
-- User with groups + "flaunch a token" = coin_launch (token launch with "flaunch" terminology)
-
-CRITICAL DISTINCTION - TOKEN vs GROUP:
-- "launch a TOKEN" = coin_launch (creating/launching a cryptocurrency token)
-- "launch a GROUP" = group_launch (creating a new fee-splitting group)
-- "flaunch a token" = coin_launch (platform-specific term for token launch)
-- "create a coin" = coin_launch (cryptocurrency creation)
-- "create a group" = group_launch (fee group creation)
+CLASSIFICATION RULES:
+1. INFORMATIONAL QUERIES (HIGHEST PRIORITY) - Questions about existing coins or chat group group → management
+2. ACTIVE FLOW CONTINUATION - User continuing an active coin launch or management process
+3. NEW COIN LAUNCH - User wants to launch a new token/coin → coin_launch
+4. QUESTIONS - General questions, help, capabilities → qa
+5. CONFIRMATIONS - "yes", "ok", etc. → confirmation
 
 CRITICAL: Return your response in this exact format:
 
@@ -222,9 +137,9 @@ CRITICAL: Return your response in this exact format:
 
 Respond ONLY with this JSON format:
 {
-  "intent": "onboarding|coin_launch|group_launch|management|qa|confirmation",
+  "intent": "coin_launch|management|qa|confirmation",
   "confidence": 0.1-1.0,
-  "reasoning": "brief explanation focusing on flow continuation vs new intent"
+  "reasoning": "brief explanation focusing on simplified coin launcher workflow"
 }`;
   }
 
@@ -232,98 +147,86 @@ Respond ONLY with this JSON format:
     const status = userState.status;
     const groupCount = userState.groups.length;
     const coinCount = userState.coins.length;
-    
+
     let context = `Status: ${status}\n`;
-    context += `Groups: ${groupCount} ${groupCount === 0 ? '← ZERO GROUPS (first group = onboarding)' : '← HAS GROUPS (additional groups = management)'}\n`;
+    context += `Groups: ${groupCount}\n`;
     context += `Coins: ${coinCount}\n`;
-    
-    // Add onboarding progress context
-    if (userState.onboardingProgress) {
-      context += `ONBOARDING IN PROGRESS: Step ${userState.onboardingProgress.step}\n`;
-      if (userState.onboardingProgress.splitData?.receivers) {
-        context += `- Already has fee receivers configured\n`;
-      }
-      
-      // CRITICAL: Only include coin data context when user is actively in coin creation steps
-      // Don't include it during group creation to avoid misleading the intent classifier
-      if (userState.onboardingProgress.coinData && 
-          (userState.onboardingProgress.step === 'coin_creation' || 
-           userState.onboardingProgress.step === 'username_collection')) {
-        const coinData = userState.onboardingProgress.coinData;
-        context += `- Coin data: name=${coinData.name || 'missing'}, ticker=${coinData.ticker || 'missing'}, image=${coinData.image ? 'provided' : 'missing'}\n`;
-      }
-    }
-    
-    // Add pending transaction context  
+
+    // Add pending transaction context
     if (userState.pendingTransaction) {
       context += `PENDING TRANSACTION: ${userState.pendingTransaction.type} on ${userState.pendingTransaction.network}\n`;
     }
-    
+
     // Add management progress context
     if (userState.managementProgress) {
       context += `MANAGEMENT IN PROGRESS: ${userState.managementProgress.action} (${userState.managementProgress.step})\n`;
     }
-    
+
     // Add coin launch progress context (this is when user is actively launching coins)
     if (userState.coinLaunchProgress) {
       context += `COIN LAUNCH IN PROGRESS: Step ${userState.coinLaunchProgress.step}\n`;
       if (userState.coinLaunchProgress.coinData) {
         const coinData = userState.coinLaunchProgress.coinData;
-        context += `- Active coin launch: name=${coinData.name || 'missing'}, ticker=${coinData.ticker || 'missing'}, image=${coinData.image ? 'provided' : 'missing'}\n`;
+        context += `- Active coin launch: name=${
+          coinData.name || "missing"
+        }, ticker=${coinData.ticker || "missing"}, image=${
+          coinData.image ? "provided" : "missing"
+        }\n`;
       }
     }
-    
+
     if (groupCount > 0) {
-      const groupInfo = userState.groups.map(g => 
-        `${g.id.slice(0, 6)}...${g.id.slice(-4)} (${g.coins.length} coins)`
-      ).join(', ');
+      const groupInfo = userState.groups
+        .map(
+          (g) =>
+            `${g.id.slice(0, 6)}...${g.id.slice(-4)} (${g.coins.length} coins)`
+        )
+        .join(", ");
       context += `Group details: ${groupInfo}`;
     }
-    
+
     return context;
   }
 
-  private parseIntentResponse(content: string, userState: UserState): IntentResult {
+  private parseIntentResponse(
+    content: string,
+    userState: UserState
+  ): IntentResult {
     try {
       const parsed = safeParseJSON(content);
-      
+
       // Validate the response
-      const validIntents: MessageIntent[] = ['onboarding', 'coin_launch', 'group_launch', 'management', 'qa', 'confirmation'];
+      const validIntents: MessageIntent[] = [
+        "coin_launch",
+        "management",
+        "qa",
+        "confirmation",
+      ];
       if (!validIntents.includes(parsed.intent)) {
-        console.warn('Invalid intent returned:', parsed.intent);
+        console.warn("Invalid intent returned:", parsed.intent);
         return this.getFallbackIntent(userState);
       }
-      
+
       // Ensure confidence is within bounds
       const confidence = Math.max(0.1, Math.min(1.0, parsed.confidence || 0.5));
-      
+
       return {
         intent: parsed.intent,
         confidence,
-        reasoning: parsed.reasoning || 'No reasoning provided'
+        reasoning: parsed.reasoning || "No reasoning provided",
       };
     } catch (error) {
-      console.error('Failed to parse intent response:', content, error);
+      console.error("Failed to parse intent response:", content, error);
       return this.getFallbackIntent(userState);
     }
   }
 
   private getFallbackIntent(userState: UserState): IntentResult {
-    // Fallback logic based on user state
-    if (userState.status === 'new' || userState.status === 'onboarding') {
-      return {
-        intent: 'onboarding',
-        confidence: 0.7,
-        reasoning: 'Fallback: User is new or in onboarding'
-      };
-    }
-    
+    // Simplified fallback: default to Q&A since the agent now explains how it works
     return {
-      intent: 'qa',
+      intent: "qa",
       confidence: 0.5,
-      reasoning: 'Fallback: Default to Q&A for active users'
+      reasoning: "Fallback: Default to Q&A for explanation and help",
     };
   }
-
-
-} 
+}

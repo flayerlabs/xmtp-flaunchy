@@ -157,26 +157,29 @@ export function createCoinLaunchExtractionPrompt(context: {
   imageUrl?: string;
 }): string {
   let prompt = coinLaunchExtractionTemplate;
-  
+
   // Replace template variables
-  prompt = prompt.replace('{{message}}', context.message);
-  
+  prompt = prompt.replace("{{message}}", context.message);
+
   if (context.hasAttachment) {
-    prompt = prompt.replace('{{#if hasAttachment}}', '').replace('{{/if}}', '');
-    prompt = prompt.replace('{{attachmentType}}', context.attachmentType || 'unknown');
+    prompt = prompt.replace("{{#if hasAttachment}}", "").replace("{{/if}}", "");
+    prompt = prompt.replace(
+      "{{attachmentType}}",
+      context.attachmentType || "unknown"
+    );
   } else {
     // Remove the attachment section
-    prompt = prompt.replace(/{{#if hasAttachment}}[\s\S]*?{{\/if}}/g, '');
+    prompt = prompt.replace(/{{#if hasAttachment}}[\s\S]*?{{\/if}}/g, "");
   }
-  
+
   if (context.imageUrl) {
-    prompt = prompt.replace('{{#if imageUrl}}', '').replace('{{/if}}', '');
-    prompt = prompt.replace('{{imageUrl}}', context.imageUrl);
+    prompt = prompt.replace("{{#if imageUrl}}", "").replace("{{/if}}", "");
+    prompt = prompt.replace("{{imageUrl}}", context.imageUrl);
   } else {
     // Remove the image URL section
-    prompt = prompt.replace(/{{#if imageUrl}}[\s\S]*?{{\/if}}/g, '');
+    prompt = prompt.replace(/{{#if imageUrl}}[\s\S]*?{{\/if}}/g, "");
   }
-  
+
   return prompt;
 }
 
@@ -194,4 +197,4 @@ export interface CoinLaunchExtractionResult {
     premineAmount: number | null;
     buybackPercentage: number | null;
   };
-} 
+}

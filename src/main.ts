@@ -6,21 +6,16 @@ import { WalletSendCallsCodec } from "@xmtp/content-type-wallet-send-calls";
 import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
 import { flaunchy } from "../characters/flaunchy";
-import {
-  RemoteAttachmentCodec,
-  AttachmentCodec,
-} from "@xmtp/content-type-remote-attachment";
-import { TransactionReferenceCodec } from "@xmtp/content-type-transaction-reference";
 
 // New architecture imports
 import { FileStateStorage } from "./core/storage/StateStorage";
 import { SessionManager } from "./core/session/SessionManager";
 import { FlowRouter, FlowRegistry } from "./core/flows/FlowRouter";
-import { OnboardingFlow } from "./flows/onboarding/OnboardingFlow";
+
 import { QAFlow } from "./flows/qa/QAFlow";
 import { ManagementFlow } from "./flows/management/ManagementFlow";
 import { CoinLaunchFlow } from "./flows/coin-launch/CoinLaunchFlow";
-import { GroupLaunchFlow } from "./flows/group-launch/GroupLaunchFlow";
+
 import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoordinator";
 import { InstallationManager } from "./core/installation/InstallationManager";
 import { XMTPStatusMonitor } from "./services/XMTPStatusMonitor";
@@ -114,11 +109,9 @@ async function createApplication() {
 
   // 2. Initialize flows
   const flows: FlowRegistry = {
-    onboarding: new OnboardingFlow(),
     qa: new QAFlow(),
     management: new ManagementFlow(),
     coin_launch: new CoinLaunchFlow(),
-    group_launch: new GroupLaunchFlow(),
   };
 
   // 3. Create flow router
@@ -226,8 +219,6 @@ async function createApplication() {
  * Main function that starts the application with monitoring
  */
 async function main() {
-  console.log("🚀 Starting Flaunchy with XMTP status monitoring...");
-
   try {
     // Create status monitor
     const statusMonitor = new XMTPStatusMonitor(volumePath);

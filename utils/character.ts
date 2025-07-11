@@ -15,7 +15,9 @@ export function generateCharacterContext(character: Character): string {
     character.adjectives[
       Math.floor(Math.random() * character.adjectives.length)
     ];
-  const topicsString = `${character.name} is interested in ${character.topics.slice(0, 5).join(", ")}`;
+  const topicsString = `${character.name} is interested in ${character.topics
+    .slice(0, 5)
+    .join(", ")}`;
   const styleDirections = [
     ...character.style.all,
     ...character.style.chat,
@@ -25,9 +27,9 @@ export function generateCharacterContext(character: Character): string {
     .slice(0, 5)
     .map((ex) => `Agent: ${ex}`)
     .join("\n");
-  
+
   // Include ALL knowledge - this is critical for accurate responses
-  const knowledgeString = character.knowledge 
+  const knowledgeString = character.knowledge
     ? character.knowledge.join("\n- ")
     : "";
 
@@ -66,9 +68,11 @@ export async function getCharacterResponse({
   const response = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
-      { 
-        role: "system", 
-        content: `${character.system}\n\n${generateCharacterContext(character)}` 
+      {
+        role: "system",
+        content: `${character.system}\n\n${generateCharacterContext(
+          character
+        )}`,
       },
       { role: "user", content: prompt },
     ],

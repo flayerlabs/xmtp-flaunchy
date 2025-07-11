@@ -25,17 +25,13 @@ export const flaunchSchema = z.object({
     .min(1)
     .max(60)
     .optional()
-    .describe(
-      "Fair launch duration in minutes. Between 1 and 60 minutes"
-    ),
+    .describe("Fair launch duration in minutes. Between 1 and 60 minutes"),
   preminePercentage: z
     .number()
     .min(0)
     .max(100)
     .optional()
-    .describe(
-      "Percentage of tokens to premine (prebuy). Between 0 and 100%"
-    ),
+    .describe("Percentage of tokens to premine (prebuy). Between 0 and 100%"),
   buybackPercentage: z
     .number()
     .min(0)
@@ -107,7 +103,7 @@ const createFlaunchCalls = async ({
       fairLaunchDuration: (args.fairLaunchDuration || 0) * 60, // Convert to seconds
       startingMarketCapUSD: args.startingMarketCap ?? 1000,
       creatorFeeAllocationPercent,
-      preminePercentage: args.preminePercentage || 0
+      preminePercentage: args.preminePercentage || 0,
     });
   } catch (error) {
     console.error("Error in createFlaunchCalls:", error);

@@ -17,7 +17,7 @@ export class MemoryStateStorage implements StateStorage {
   async set(userId: string, state: UserState): Promise<void> {
     this.storage.set(userId, {
       ...state,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
   }
 
@@ -31,14 +31,14 @@ export class MemoryStateStorage implements StateStorage {
 }
 
 export class FileStateStorage implements StateStorage {
-  constructor(private filePath: string = '.data/user-states.json') {}
+  constructor(private filePath: string = ".data/user-states.json") {}
 
   private async loadData(): Promise<Map<string, UserState>> {
     try {
-      const fs = await import('fs/promises');
-      const data = await fs.readFile(this.filePath, 'utf-8');
+      const fs = await import("fs/promises");
+      const data = await fs.readFile(this.filePath, "utf-8");
       const parsed = JSON.parse(data);
-      
+
       // Convert date strings back to Date objects
       const states = new Map<string, UserState>();
       for (const [userId, state] of Object.entries(parsed)) {
@@ -47,33 +47,39 @@ export class FileStateStorage implements StateStorage {
           ...userState,
           createdAt: new Date(userState.createdAt),
           updatedAt: new Date(userState.updatedAt),
-          onboardingProgress: userState.onboardingProgress ? {
-            ...userState.onboardingProgress,
-            startedAt: new Date(userState.onboardingProgress.startedAt),
-            completedAt: userState.onboardingProgress.completedAt 
-              ? new Date(userState.onboardingProgress.completedAt) 
-              : undefined
-          } : undefined,
-          managementProgress: userState.managementProgress ? {
-            ...userState.managementProgress,
-            startedAt: new Date(userState.managementProgress.startedAt)
-          } : undefined,
-          coinLaunchProgress: userState.coinLaunchProgress ? {
-            ...userState.coinLaunchProgress,
-            startedAt: new Date(userState.coinLaunchProgress.startedAt)
-          } : undefined,
+          onboardingProgress: userState.onboardingProgress
+            ? {
+                ...userState.onboardingProgress,
+                startedAt: new Date(userState.onboardingProgress.startedAt),
+                completedAt: userState.onboardingProgress.completedAt
+                  ? new Date(userState.onboardingProgress.completedAt)
+                  : undefined,
+              }
+            : undefined,
+          managementProgress: userState.managementProgress
+            ? {
+                ...userState.managementProgress,
+                startedAt: new Date(userState.managementProgress.startedAt),
+              }
+            : undefined,
+          coinLaunchProgress: userState.coinLaunchProgress
+            ? {
+                ...userState.coinLaunchProgress,
+                startedAt: new Date(userState.coinLaunchProgress.startedAt),
+              }
+            : undefined,
           coins: userState.coins.map((coin: any) => ({
             ...coin,
-            createdAt: new Date(coin.createdAt)
+            createdAt: new Date(coin.createdAt),
           })),
           groups: userState.groups.map((group: any) => ({
             ...group,
             createdAt: new Date(group.createdAt),
-            updatedAt: new Date(group.updatedAt)
-          }))
+            updatedAt: new Date(group.updatedAt),
+          })),
         });
       }
-      
+
       return states;
     } catch (error) {
       // File doesn't exist or is invalid, return empty map
@@ -83,17 +89,17 @@ export class FileStateStorage implements StateStorage {
 
   private async saveData(states: Map<string, UserState>): Promise<void> {
     try {
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
       // Ensure directory exists
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      
+
       // Convert Map to object for JSON serialization
       const data = Object.fromEntries(states.entries());
       await fs.writeFile(this.filePath, JSON.stringify(data, null, 2));
     } catch (error) {
-      console.error('Failed to save state data:', error);
+      console.error("Failed to save state data:", error);
       throw error;
     }
   }
@@ -107,7 +113,7 @@ export class FileStateStorage implements StateStorage {
     const states = await this.loadData();
     states.set(userId, {
       ...state,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
     await this.saveData(states);
   }
@@ -122,4 +128,4 @@ export class FileStateStorage implements StateStorage {
     const states = await this.loadData();
     return states.has(userId);
   }
-} 
+}

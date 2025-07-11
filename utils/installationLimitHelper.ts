@@ -10,23 +10,25 @@ export interface InstallationLimitInfo {
 }
 
 export class InstallationLimitHelper {
-  
   /**
    * Detect if an error or user interaction suggests installation limit issues
    */
-  static analyzeInstallationLimit(error: any, senderInboxId?: string): InstallationLimitInfo {
-    const errorMessage = error?.message?.toLowerCase() || '';
-    
+  static analyzeInstallationLimit(
+    error: any,
+    senderInboxId?: string
+  ): InstallationLimitInfo {
+    const errorMessage = error?.message?.toLowerCase() || "";
+
     const limitPatterns = [
-      'installation limit',
-      'max installations',
-      'maximum installations', 
-      'exceeded installation limit',
-      '/5 installations',
-      'cannot register a new installation'
+      "installation limit",
+      "max installations",
+      "maximum installations",
+      "exceeded installation limit",
+      "/5 installations",
+      "cannot register a new installation",
     ];
 
-    const isInstallationLimitError = limitPatterns.some(pattern => 
+    const isInstallationLimitError = limitPatterns.some((pattern) =>
       errorMessage.includes(pattern)
     );
 
@@ -35,12 +37,12 @@ export class InstallationLimitHelper {
         isInstallationLimitError: true,
         senderInboxId,
         helpMessage: this.generateHelpMessage(senderInboxId),
-        technicalDetails: error?.message || 'Installation limit exceeded'
+        technicalDetails: error?.message || "Installation limit exceeded",
       };
     }
 
     return {
-      isInstallationLimitError: false
+      isInstallationLimitError: false,
     };
   }
 
@@ -66,7 +68,13 @@ Hi! It looks like you've hit XMTP's new 5-installation limit. This is a security
    • XMTP Discord: https://discord.gg/xmtp
    • GitHub Issues: https://github.com/xmtp/xmtp-node-js-sdk
 
-${senderInboxId ? `📋 Your Inbox ID: ${senderInboxId.slice(0, 8)}...${senderInboxId.slice(-8)}` : ''}
+${
+  senderInboxId
+    ? `📋 Your Inbox ID: ${senderInboxId.slice(0, 8)}...${senderInboxId.slice(
+        -8
+      )}`
+    : ""
+}
 
 Once you've cleaned up your installations, you should be able to message again!
 
@@ -109,13 +117,17 @@ Once you've cleaned up your installations, you should be able to message again!
         </ol>
     </div>
 
-    ${senderInboxId ? `
+    ${
+      senderInboxId
+        ? `
     <div class="steps">
         <h3>📋 Your Inbox ID:</h3>
         <div class="inbox-id">${senderInboxId}</div>
         <p><small>Share this with XMTP support if you need help</small></p>
     </div>
-    ` : ''}
+    `
+        : ""
+    }
 
     <div class="steps">
         <h3>🆘 Need help?</h3>
@@ -135,15 +147,18 @@ Once you've cleaned up your installations, you should be able to message again!
   static logInstallationLimitEvent(senderInboxId: string, error: any): void {
     const logData = {
       timestamp: new Date().toISOString(),
-      event: 'installation_limit_exceeded',
+      event: "installation_limit_exceeded",
       senderInboxId,
-      error: error?.message || 'Unknown error',
-      source: 'user_message_attempt'
+      error: error?.message || "Unknown error",
+      source: "user_message_attempt",
     };
 
-    console.log('📊 Installation Limit Event:', JSON.stringify(logData, null, 2));
-    
+    console.log(
+      "📊 Installation Limit Event:",
+      JSON.stringify(logData, null, 2)
+    );
+
     // You could send this to analytics/monitoring service
     // analytics.track('installation_limit_exceeded', logData);
   }
-} 
+}
