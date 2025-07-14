@@ -65,10 +65,10 @@ graph TD
     Y --> Z[messageCoordinator.processMessage]
     Z --> X
 
-    style A fill:#e1f5fe
-    style L fill:#f3e5f5
-    style S fill:#e8f5e8
-    style W fill:#fff3e0
+    style A fill:#1565C0,color:#ffffff
+    style L fill:#7B1FA2,color:#ffffff
+    style S fill:#2E7D32,color:#ffffff
+    style W fill:#F57C00,color:#ffffff
 ```
 
 ---
@@ -121,17 +121,17 @@ graph TD
 
     CC --> H
 
-    style A fill:#e1f5fe
-    style P fill:#ffebee
-    style U fill:#fff3e0
-    style J fill:#f3e5f5
+    style A fill:#1565C0,color:#ffffff
+    style P fill:#D32F2F,color:#ffffff
+    style U fill:#F57C00,color:#ffffff
+    style J fill:#7B1FA2,color:#ffffff
 ```
 
 ---
 
 ## 3. Enhanced Message Coordinator - Message Processing
 
-This diagram illustrates how messages are received, coordinated (text + attachments), and queued for processing with proper timing, including direct message handling.
+This diagram illustrates how messages are received, coordinated (text + attachments), and queued for processing with proper timing, including direct message handling and improved transaction reference processing.
 
 ```mermaid
 graph TD
@@ -143,10 +143,24 @@ graph TD
     E -->|No| F{Skip Wallet Send Calls?}
     F -->|Yes| D
     F -->|No| G{Transaction Reference?}
-    G -->|Yes| H[handleTransactionReference]
+    G -->|Yes| H[handleTransactionReference with Null Checks]
     G -->|No| I{Skip Transaction Receipts '...'?}
     I -->|Yes| D
     I -->|No| J[Determine Message Type]
+
+    H --> H1[Check Message Content]
+    H1 --> H2{Content Exists?}
+    H2 -->|No| H3[Log Error & Return false]
+    H2 -->|Yes| H4[Check Transaction Reference]
+    H4 --> H5{Transaction Ref Exists?}
+    H5 -->|No| H3
+    H5 -->|Yes| H6[Check TX Hash]
+    H6 --> H7{TX Hash Exists?}
+    H7 -->|No| H3
+    H7 -->|Yes| H8[Process Transaction]
+    H8 --> H9[Update User Status to Active]
+    H9 --> H10[Ensure Group Exists for Chat Room]
+    H10 --> H11[Store Coin for All Members]
 
     J --> K{Is Attachment?}
     K -->|Yes| L[Add to Attachment Queue]
@@ -195,11 +209,16 @@ graph TD
     MM --> NN[Create Helper Functions]
     NN --> OO[flowRouter.routeMessage]
 
-    style A fill:#e1f5fe
-    style V fill:#f3e5f5
-    style AA fill:#fff3e0
-    style EE fill:#ffebee
-    style OO fill:#e8f5e8
+    style A fill:#1565C0,color:#ffffff
+    style V fill:#7B1FA2,color:#ffffff
+    style AA fill:#F57C00,color:#ffffff
+    style EE fill:#D32F2F,color:#ffffff
+    style H fill:#8E24AA,color:#ffffff
+    style H8 fill:#2E7D32,color:#ffffff
+    style H9 fill:#388E3C,color:#ffffff
+    style H10 fill:#388E3C,color:#ffffff
+    style H11 fill:#388E3C,color:#ffffff
+    style OO fill:#2E7D32,color:#ffffff
 ```
 
 ---
@@ -242,10 +261,19 @@ graph TD
 
     W -->|No| Z[Return false - Ignore]
 
-    style A fill:#e1f5fe
-    style F fill:#f3e5f5
-    style S fill:#fff3e0
-    style V fill:#e8f5e8
+    style A fill:#1565C0,color:#ffffff
+    style F fill:#D32F2F,color:#ffffff
+    style G fill:#D32F2F,color:#ffffff
+    style K fill:#F57C00,color:#ffffff
+    style P fill:#2E7D32,color:#ffffff
+    style R fill:#388E3C,color:#ffffff
+    style S fill:#388E3C,color:#ffffff
+    style T fill:#388E3C,color:#ffffff
+    style U fill:#4CAF50,color:#ffffff
+    style V fill:#4CAF50,color:#ffffff
+    style W fill:#4CAF50,color:#ffffff
+    style X fill:#4CAF50,color:#ffffff
+    style Z fill:#2E7D32,color:#ffffff
 ```
 
 ---
@@ -297,17 +325,17 @@ graph TD
 
     Y --> Z[Execute Flow.processMessage]
 
-    style A fill:#e1f5fe
-    style D fill:#f3e5f5
-    style L fill:#fff3e0
-    style Z fill:#e8f5e8
+    style A fill:#1565C0,color:#ffffff
+    style D fill:#7B1FA2,color:#ffffff
+    style L fill:#F57C00,color:#ffffff
+    style Z fill:#2E7D32,color:#ffffff
 ```
 
 ---
 
 ## 6. User State Management & Storage
 
-This diagram explains how user data is stored in `user-states.json`, including state creation, updates, and multi-user group management.
+This diagram explains how user data is stored in `user-states.json`, including state creation, updates, multi-user group management, and improved live data injection.
 
 ```mermaid
 graph TD
@@ -346,16 +374,39 @@ graph TD
     Z --> AA[Add Group to Each User]
     AA --> BB[Update Status to 'invited']
 
-    CC[UserDataService] --> DD[Inject Live API Data]
+    CC[UserDataService] --> DD[Inject Live Data]
     DD --> EE[Fetch from GraphQL API]
     EE --> FF[Update Groups with Live Data]
     FF --> GG[Update Coins with Live Data]
     GG --> HH[Return Enriched State]
 
-    style A fill:#e1f5fe
-    style F fill:#f3e5f5
-    style T fill:#fff3e0
-    style CC fill:#e8f5e8
+    II[SessionManager.getUserStateWithLiveData] --> JJ{User has Groups or Coins?}
+    JJ -->|Yes| KK[Inject Live Data Regardless of Status]
+    JJ -->|No| LL[Return State Without Live Data]
+
+    KK --> MM[Log: Injecting Live Data]
+    MM --> NN[Call UserDataService.injectGroupData]
+    NN --> OO[Save Enriched State to Storage]
+    OO --> PP[Return Enriched State]
+
+    QQ[Coin Launch Success] --> RR[Update User Status]
+    RR --> SS{User Status 'new' or 'onboarding'?}
+    SS -->|Yes| TT[Update to 'active']
+    SS -->|No| UU[Keep Current Status]
+
+    TT --> VV[Send Completion Message]
+    VV --> WW[User Now Active]
+
+    style A fill:#1565C0,color:#ffffff
+    style F fill:#7B1FA2,color:#ffffff
+    style T fill:#F57C00,color:#ffffff
+    style CC fill:#2E7D32,color:#ffffff
+    style II fill:#388E3C,color:#ffffff
+    style JJ fill:#388E3C,color:#ffffff
+    style KK fill:#4CAF50,color:#ffffff
+    style QQ fill:#8E24AA,color:#ffffff
+    style RR fill:#AD1457,color:#ffffff
+    style TT fill:#388E3C,color:#ffffff
 ```
 
 ---
@@ -423,18 +474,18 @@ graph TD
     QQ -->|Yes| RR[Launch Coin]
     QQ -->|No| SS[Request Missing Data]
 
-    style A fill:#e1f5fe
-    style C fill:#f3e5f5
-    style D fill:#fff3e0
-    style E fill:#e8f5e8
-    style G fill:#ffebee
+    style A fill:#1565C0,color:#ffffff
+    style C fill:#7B1FA2,color:#ffffff
+    style D fill:#F57C00,color:#ffffff
+    style E fill:#2E7D32,color:#ffffff
+    style G fill:#D32F2F,color:#ffffff
 ```
 
 ---
 
 ## 8. Direct Message Handling System
 
-This diagram shows how the system handles direct messages (1-on-1 conversations) differently from group chats, with smart routing for status inquiries and structured guidance for blocked functionality.
+This diagram shows how the system handles direct messages (1-on-1 conversations) differently from group chats, with smart routing for status inquiries, live data fetching for groups/coins queries, and structured guidance for blocked functionality.
 
 ```mermaid
 graph TD
@@ -454,33 +505,45 @@ graph TD
     I --> K[Structured Response:<br/>1. Create group chat<br/>2. Add bot to group<br/>3. Launch coins together]
 
     J --> L{Question Type?}
-    L -->|Capability| M[Send Structured Message]
-    L -->|Status| N{Groups/Coins Query?}
-    L -->|General| M
+    L -->|Status| M[Detect Status Inquiry Type]
+    L -->|Capability| N[Send Structured Message]
+    L -->|General| N
 
-    N -->|Yes| O[Fetch Live Data from API]
-    N -->|No| M
+    M --> O{Groups/Coins Query?}
+    O -->|Yes| P[Fetch Live Data from Blockchain]
+    O -->|No| Q[Send Structured Message]
 
-    O --> P[SessionManager.getUserStateWithLiveData]
-    P --> Q[UserDataService.injectGroupData]
-    Q --> R[GraphQLService.fetchGroupData]
-    R --> S[Display Actual Groups/Coins Data]
+    P --> R[SessionManager.getUserStateWithLiveData]
+    R --> S[UserDataService.injectGroupData]
+    S --> T[GraphQLService.fetchGroupData]
+    T --> U[Display Actual Groups/Coins Data]
 
-    M --> T[Same Structured Response:<br/>Bot works in groups only]
+    U --> V[Format Groups with Live Data]
+    V --> W[Show Holders, Market Cap, Fees]
+    W --> X[Display Contract Addresses]
 
-    U[Group Chat] --> V[Normal Flow Processing]
-    V --> W[Full Functionality Available]
-    W --> X[User State Updates]
-    W --> Y[Coin Launch Capability]
-    W --> Z[Management Features]
+    N --> Y[Same Structured Response:<br/>Bot works in groups only]
+    Q --> Y
 
-    style A fill:#e1f5fe
-    style F fill:#ffebee
-    style G fill:#ffebee
-    style K fill:#fff3e0
-    style O fill:#e8f5e8
-    style S fill:#c8e6c9
-    style U fill:#e8f5e8
+    Z[Group Chat] --> AA[Normal Flow Processing]
+    AA --> BB[Full Functionality Available]
+    BB --> CC[User State Updates]
+    BB --> DD[Coin Launch Capability]
+    BB --> EE[Management Features]
+
+    style A fill:#1565C0,color:#ffffff
+    style F fill:#D32F2F,color:#ffffff
+    style G fill:#D32F2F,color:#ffffff
+    style K fill:#F57C00,color:#ffffff
+    style P fill:#2E7D32,color:#ffffff
+    style R fill:#388E3C,color:#ffffff
+    style S fill:#388E3C,color:#ffffff
+    style T fill:#388E3C,color:#ffffff
+    style U fill:#4CAF50,color:#ffffff
+    style V fill:#4CAF50,color:#ffffff
+    style W fill:#4CAF50,color:#ffffff
+    style X fill:#4CAF50,color:#ffffff
+    style Z fill:#2E7D32,color:#ffffff
 ```
 
 ---
@@ -534,13 +597,13 @@ graph TD
     HH --> D
     HH --> E
 
-    style A fill:#e1f5fe
-    style HH fill:#f3e5f5
-    style B fill:#fff3e0
-    style C fill:#e8f5e8
-    style D fill:#f1f8e9
-    style E fill:#fce4ec
-    style F fill:#fff8e1
+    style A fill:#1565C0,color:#ffffff
+    style HH fill:#7B1FA2,color:#ffffff
+    style B fill:#F57C00,color:#ffffff
+    style C fill:#2E7D32,color:#ffffff
+    style D fill:#4CAF50,color:#ffffff
+    style E fill:#8E24AA,color:#ffffff
+    style F fill:#FFA726,color:#ffffff
 ```
 
 ---
@@ -590,18 +653,18 @@ graph TD
     Z --> AA[Notify Administrators]
     AA --> BB[Try Fallback Strategy]
 
-    style A fill:#e1f5fe
-    style C fill:#f3e5f5
-    style K fill:#fff3e0
-    style V fill:#ffebee
-    style O fill:#e8f5e8
+    style A fill:#1565C0,color:#ffffff
+    style C fill:#7B1FA2,color:#ffffff
+    style K fill:#F57C00,color:#ffffff
+    style V fill:#D32F2F,color:#ffffff
+    style O fill:#2E7D32,color:#ffffff
 ```
 
 ---
 
 ## 11. Coin Launch Flow - Detailed Process
 
-This diagram provides a detailed breakdown of the coin launch process, from message extraction to transaction creation.
+This diagram provides a detailed breakdown of the coin launch process, from message extraction to transaction creation, with automatic group creation and proper coin storage for all members.
 
 ```mermaid
 graph TD
@@ -653,21 +716,29 @@ graph TD
 
     JJ --> KK[User Signs Transaction]
     KK --> LL[Transaction Success]
-    LL --> MM[Store Coin in All Group Members]
-    MM --> NN[Update User States]
-    NN --> OO[Clear Progress & Pending TX]
+    LL --> MM[Extract Manager Address if First Launch]
+    MM --> NN[Update User Status to Active]
+    NN --> OO[Ensure Group Exists for Chat Room]
+    OO --> PP[Store Coin in All Group Members]
+    PP --> QQ[Update User States]
+    QQ --> RR[Clear Progress & Pending TX]
 
-    M --> PP[Check Progress Step]
-    PP --> QQ{Step Type?}
-    QQ -->|collecting_coin_data| RR[Request Missing Info]
-    QQ -->|selecting_group| SS[Show Group Options]
-    QQ -->|creating_transaction| TT[Build Transaction]
+    M --> SS[Check Progress Step]
+    SS --> TT{Step Type?}
+    TT -->|collecting_coin_data| UU[Request Missing Info]
+    TT -->|selecting_group| VV[Show Group Options]
+    TT -->|creating_transaction| WW[Build Transaction]
 
-    style A fill:#e1f5fe
-    style N fill:#f3e5f5
-    style U fill:#fff3e0
-    style CC fill:#e8f5e8
-    style JJ fill:#f1f8e9
+    style A fill:#1565C0,color:#ffffff
+    style N fill:#7B1FA2,color:#ffffff
+    style U fill:#F57C00,color:#ffffff
+    style CC fill:#2E7D32,color:#ffffff
+    style JJ fill:#4CAF50,color:#ffffff
+    style MM fill:#388E3C,color:#ffffff
+    style NN fill:#388E3C,color:#ffffff
+    style OO fill:#4CAF50,color:#ffffff
+    style PP fill:#4CAF50,color:#ffffff
+    style QQ fill:#4CAF50,color:#ffffff
 ```
 
 ---
@@ -736,14 +807,14 @@ graph TD
     MM --> PP[IPFS Storage]
     MM --> QQ[XMTP Network]
 
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style D fill:#fff3e0
-    style M fill:#e8f5e8
-    style P fill:#f1f8e9
-    style Y fill:#fce4ec
-    style DD fill:#fff8e1
-    style MM fill:#f5f5f5
+    style A fill:#1565C0,color:#ffffff
+    style B fill:#7B1FA2,color:#ffffff
+    style D fill:#F57C00,color:#ffffff
+    style M fill:#2E7D32,color:#ffffff
+    style P fill:#4CAF50,color:#ffffff
+    style Y fill:#8E24AA,color:#ffffff
+    style DD fill:#FFA726,color:#ffffff
+    style MM fill:#607D8B,color:#ffffff
 ```
 
 ---
@@ -766,7 +837,7 @@ graph TD
 
 - **Smart flow-based routing** for 1-on-1 conversations
 - **QA Flow messages** (greetings, questions, help) are allowed but provide structured guidance
-- **Groups/Coins status queries** in DMs now fetch and display real data from GraphQL API
+- **Groups/Coins status queries** in DMs now fetch and display real live data from GraphQL API with holders, market cap, fees, and contract addresses
 - **Management and Coin Launch flows** are blocked with group requirement message
 - **No user state updates** for blocked direct message interactions
 - **Consistent structured responses** with clear step-by-step instructions
@@ -775,8 +846,17 @@ graph TD
 ### State Management
 
 - **Persistent user states** stored in `user-states.json`
-- **Live data injection** from external APIs
+- **Improved live data injection** from external APIs that works for all users with coins/groups regardless of status
+- **Automatic user status updates** from "new" to "active" after successful coin launch
 - **Multi-user group management** with automatic state sharing
+- **Automatic group creation** for all chat room members during coin launch
+
+### Transaction Processing
+
+- **Enhanced transaction reference handling** with proper null checks and error validation
+- **Robust error handling** with detailed logging for debugging
+- **Automatic manager address extraction** for first launches
+- **Proper coin storage** for all group members after successful launch
 
 ### Automatic Restart
 
@@ -788,7 +868,7 @@ graph TD
 
 - **QA Flow**: Handles questions, explanations, and help requests (with DM awareness and live data for groups/coins queries)
 - **Management Flow**: Manages existing groups, coins, and transactions (group chats only)
-- **Coin Launch Flow**: Handles new coin creation with automatic group setup (group chats only)
+- **Coin Launch Flow**: Handles new coin creation with automatic group setup and member management (group chats only)
 
 ### Installation Limit Handling
 
@@ -798,7 +878,7 @@ graph TD
 
 ### Service Integration
 
-- **External API calls** for live data
+- **External API calls** for live data with proper type handling (string to number conversions)
 - **ENS resolution** for user-friendly addresses
 - **Multi-user management** for group operations
 - **IPFS integration** for image storage
@@ -811,7 +891,7 @@ When debugging issues, refer to these diagrams to understand:
 2. **Flow routing issues**: Check diagram #5 (Flow Router & Intent Classification)
 3. **State persistence problems**: Check diagram #6 (User State Management)
 4. **Restart/connection issues**: Check diagram #2 (Status Monitor)
-5. **Transaction handling**: Check diagram #11 (Coin Launch Flow)
+5. **Transaction handling**: Check diagram #11 (Coin Launch Flow) and #3 (Transaction Reference Processing)
 6. **Direct message handling**: Check diagram #8 (Direct Message Handling System)
 7. **QA Flow responses in DMs**: Check diagram #7 (Flow Processing System) and #8 (Direct Message Handling)
 
@@ -822,6 +902,29 @@ When debugging issues, refer to these diagrams to understand:
 - **Wrong DM response**: Check if structured response is being used instead of LLM-generated content
 - **User state updated in DM**: Ensure blocked flows return early without state updates
 - **Groups/Coins queries not showing data**: Check if `detectGroupsOrCoinsQuery` is working and API calls are succeeding
+- **Live data not displaying**: Verify `getUserStateWithLiveData` is being called and GraphQL responses are properly formatted
 - **LLM detection failing**: Ensure LLM responses are parsed correctly (handle "yes." vs "yes")
+
+### Transaction Processing Debugging
+
+- **Transaction reference errors**: Check if null checks are working in `handleTransactionReference`
+- **Missing contract addresses**: Verify contract address extraction from transaction receipts
+- **User status not updating**: Check if status update to "active" is triggered after coin launch
+- **Group creation failures**: Verify `ensureGroupExistsForChatRoom` is creating groups for all members
+- **Coin storage issues**: Check if coins are being stored for all group members after launch
+
+### Live Data Debugging
+
+- **Live data not injecting**: Check if users have groups/coins and `getUserStateWithLiveData` condition
+- **Type conversion errors**: Verify string to number conversions for API responses (e.g., `priceChangePercentage`)
+- **GraphQL failures**: Check API responses and error handling in `UserDataService`
+- **Data formatting issues**: Verify display formatting in QA Flow for coins and groups
+
+### User State Management Debugging
+
+- **Status stuck at "new"**: Check if coin launch success triggers status update to "active"
+- **Groups not appearing**: Verify automatic group creation during coin launch
+- **Coins missing after launch**: Check if `addCoinToAllGroupMembers` is being called
+- **Live data not persisting**: Verify enriched state is being saved back to storage
 
 Each diagram provides the logical flow to trace through when investigating specific types of issues.
