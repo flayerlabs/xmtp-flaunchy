@@ -286,6 +286,7 @@ export class QAFlow extends BaseFlow {
         "1. create a group chat with your friends\n" +
         "2. add me to the group\n" +
         "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
         "the magic happens when everyone's together in a group. stay based!";
 
       await this.sendResponse(context, directMessageResponse);
@@ -302,7 +303,7 @@ export class QAFlow extends BaseFlow {
         This is a GROUP CHAT (not a direct message).
         
         SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
         
         Key points about the new system:
         - You automatically create groups for everyone in the chat when they launch coins
@@ -321,6 +322,13 @@ export class QAFlow extends BaseFlow {
         - Be clear you're an AI assistant that launches coins and automatically creates groups
         - Emphasize the simplicity - no complex setup needed
         - Keep it concise but informative
+        
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different concepts and create line breaks
+        - Break up long explanations into multiple paragraphs
+        - Use bullet points or numbered lists when appropriate
+        - Make the response easy to read and scan, but keep it short and concise
+        - DON'T use markdown (like **bold** or *italic*)
         
         Use your character's voice but focus on explaining your role and the simplified workflow.
       `,
@@ -345,6 +353,7 @@ export class QAFlow extends BaseFlow {
         "1. create a group chat with your friends\n" +
         "2. add me to the group\n" +
         "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
         "the magic happens when everyone's together in a group. stay based!";
 
       await this.sendResponse(context, directMessageResponse);
@@ -367,7 +376,7 @@ export class QAFlow extends BaseFlow {
         This is a GENERAL question about using the system (not about your capabilities).
         
         SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
         
         Provide helpful guidance about:
         - Coin launching with automatic group creation
@@ -376,6 +385,13 @@ export class QAFlow extends BaseFlow {
         - No complex setup needed - just launch coins
         
         IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.
+        
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different concepts and create line breaks
+        - Break up long explanations into multiple paragraphs
+        - Use bullet points or numbered lists when appropriate
+        - Make the response easy to read and scan, but keep it short and concise
+        - DON'T use markdown (like **bold** or *italic*)
         
         Use your character's voice but prioritize brevity and helpfulness.
       `,
@@ -484,6 +500,7 @@ export class QAFlow extends BaseFlow {
         "1. create a group chat with your friends\n" +
         "2. add me to the group\n" +
         "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
         "the magic happens when everyone's together in a group. stay based!";
 
       await this.sendResponse(context, directMessageResponse);
@@ -549,6 +566,12 @@ export class QAFlow extends BaseFlow {
         Answer their question about their current status/progress using this information.
         Be direct and informative. If they have a pending transaction, mention they need to sign it.
         If they're in onboarding, briefly explain what step they're on.
+        
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different status items and create line breaks
+        - Make the response easy to read and scan, but keep it short and concise
+        - Use bullet points or numbered lists when appropriate
+        - DON'T use markdown (like **bold** or *italic*)
         
         Use your character's voice but prioritize clarity and helpfulness.
       `,
