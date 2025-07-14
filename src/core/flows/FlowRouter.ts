@@ -141,7 +141,7 @@ export class FlowRouter {
   /**
    * Detect all intents in a message using a single API call
    */
-  private async detectMultipleIntents(
+  async detectMultipleIntents(
     context: FlowContext
   ): Promise<MultiIntentResult> {
     const { messageText, userState } = context;
@@ -305,7 +305,7 @@ Return JSON:
   /**
    * Validate and sanitize multi-intent result
    */
-  private validateMultiIntentResult(result: any): MultiIntentResult {
+  validateMultiIntentResult(result: any): MultiIntentResult {
     const validTypes = ["action", "question", "management", "social", "other"];
     const validActions = [
       "coin_launch",
@@ -354,7 +354,7 @@ Return JSON:
    * Determine primary flow based on primary intent and user state
    * SIMPLIFIED: Agent is now just a coin launcher with automatic group creation
    */
-  private getPrimaryFlow(
+  getPrimaryFlow(
     multiIntentResult: MultiIntentResult,
     userState: UserState
   ): FlowType {

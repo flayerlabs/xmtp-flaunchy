@@ -11,10 +11,11 @@ This document provides comprehensive diagrams for all components of the XMTP Fla
 5. [Flow Router & Intent Classification](#5-flow-router--intent-classification)
 6. [User State Management & Storage](#6-user-state-management--storage)
 7. [Flow Processing System](#7-flow-processing-system)
-8. [Services Architecture & Integration](#8-services-architecture--integration)
-9. [Installation Manager & XMTP Client](#9-installation-manager--xmtp-client)
-10. [Coin Launch Flow - Detailed Process](#10-coin-launch-flow---detailed-process)
-11. [Complete System Architecture Overview](#11-complete-system-architecture-overview)
+8. [Direct Message Handling System](#8-direct-message-handling-system)
+9. [Services Architecture & Integration](#9-services-architecture--integration)
+10. [Installation Manager & XMTP Client](#10-installation-manager--xmtp-client)
+11. [Coin Launch Flow - Detailed Process](#11-coin-launch-flow---detailed-process)
+12. [Complete System Architecture Overview](#12-complete-system-architecture-overview)
 
 ---
 
@@ -130,7 +131,7 @@ graph TD
 
 ## 3. Enhanced Message Coordinator - Message Processing
 
-This diagram illustrates how messages are received, coordinated (text + attachments), and queued for processing with proper timing.
+This diagram illustrates how messages are received, coordinated (text + attachments), and queued for processing with proper timing, including direct message handling.
 
 ```mermaid
 graph TD
@@ -171,22 +172,34 @@ graph TD
     V --> W[Get Primary Message]
     W --> X[Get Related Messages]
     X --> Y[Get Conversation & Sender Info]
-    Y --> Z[Get User State by Address]
+    Y --> Z[Check Member Count]
 
-    Z --> AA[shouldProcessMessage]
-    AA --> BB{Should Process?}
-    BB -->|No| CC[Return false]
-    BB -->|Yes| DD[Send Paw Reaction 🐾]
+    Z --> AA{Is Direct Message?}
+    AA -->|Yes| BB[Detect Intent with FlowRouter]
+    AA -->|No| CC[Get User State by Address]
 
-    DD --> EE[createFlowContext]
-    EE --> FF[Extract Message Text & Attachments]
-    FF --> GG[Create Helper Functions]
-    GG --> HH[flowRouter.routeMessage]
+    BB --> DD{Management/Coin Launch?}
+    DD -->|Yes| EE[Send Group Requirement Message]
+    DD -->|No| FF[Continue to QA Flow]
+
+    EE --> GG[Return true - DM Handled]
+    FF --> CC
+
+    CC --> HH[shouldProcessMessage]
+    HH --> II{Should Process?}
+    II -->|No| JJ[Return false]
+    II -->|Yes| KK[Send Paw Reaction 🐾]
+
+    KK --> LL[createFlowContext with isDirectMessage]
+    LL --> MM[Extract Message Text & Attachments]
+    MM --> NN[Create Helper Functions]
+    NN --> OO[flowRouter.routeMessage]
 
     style A fill:#e1f5fe
     style V fill:#f3e5f5
     style AA fill:#fff3e0
-    style HH fill:#e8f5e8
+    style EE fill:#ffebee
+    style OO fill:#e8f5e8
 ```
 
 ---
@@ -359,63 +372,120 @@ graph TD
     B -->|Management Flow| D[ManagementFlow.processMessage]
     B -->|Coin Launch Flow| E[CoinLaunchFlow.processMessage]
 
-    C --> F[Check Multiple Coin Request]
-    F --> G{Multiple Coins?}
-    G -->|Yes| H[Handle Multiple Coin Request]
-    G -->|No| I[Check Existing Groups]
+    C --> F{Is Direct Message?}
+    F -->|Yes| G[Send Structured Group Requirement Message]
+    F -->|No| H[Check Multiple Coin Request]
 
-    I --> J{User Has Groups?}
-    J -->|Yes| K[Extract Coin Launch Details]
-    K --> L{Coin Launch Detected?}
-    L -->|Yes| M[Initialize Coin Launch Progress]
-    L -->|No| N[Classify Question Type]
+    H --> I{Multiple Coins?}
+    I -->|Yes| J[Handle Multiple Coin Request]
+    I -->|No| K[Check Existing Groups]
 
-    N --> O{Question Type?}
-    O -->|Capability| P[Handle Capability Question]
-    O -->|Status| Q[Handle Status Inquiry]
-    O -->|General| R[Handle General Question]
+    K --> L{User Has Groups?}
+    L -->|Yes| M[Extract Coin Launch Details]
+    M --> N{Coin Launch Detected?}
+    N -->|Yes| O[Initialize Coin Launch Progress]
+    N -->|No| P[Classify Question Type]
 
-    D --> S{User Status?}
-    S -->|invited| T[Handle Invited User Welcome]
-    S -->|other| U[Clear Cross-Flow Transactions]
+    P --> Q{Question Type?}
+    Q -->|Capability| R[Handle Capability Question]
+    Q -->|Status| S[Handle Status Inquiry]
+    Q -->|General| T[Handle General Question]
 
-    U --> V{Pending Transaction?}
-    V -->|Yes| W[Handle Pending Transaction]
-    V -->|No| X{Management Progress?}
+    D --> U{User Status?}
+    U -->|invited| V[Handle Invited User Welcome]
+    U -->|other| W[Clear Cross-Flow Transactions]
 
-    X -->|Yes| Y[Handle Ongoing Process]
-    X -->|No| Z[Classify Management Action]
+    W --> X{Pending Transaction?}
+    X -->|Yes| Y[Handle Pending Transaction]
+    X -->|No| Z{Management Progress?}
 
-    Z --> AA{Action Type?}
-    AA -->|list_groups| BB[List Groups]
-    AA -->|list_coins| CC[List Coins]
-    AA -->|claim_fees| DD[Claim Fees]
-    AA -->|check_fees| EE[Check Fees]
-    AA -->|cancel_transaction| FF[Cancel Transaction]
-    AA -->|general_help| GG[General Help]
+    Z -->|Yes| AA[Handle Ongoing Process]
+    Z -->|No| BB[Classify Management Action]
 
-    E --> HH[Clear Cross-Flow Transactions]
-    HH --> II{Pending Transaction?}
-    II -->|Yes| JJ[Handle Pending Transaction Update]
-    II -->|No| KK{Coin Launch Progress?}
+    BB --> CC{Action Type?}
+    CC -->|list_groups| DD[List Groups]
+    CC -->|list_coins| EE[List Coins]
+    CC -->|claim_fees| FF[Claim Fees]
+    CC -->|check_fees| GG[Check Fees]
+    CC -->|cancel_transaction| HH[Cancel Transaction]
+    CC -->|general_help| II[General Help]
 
-    KK -->|Yes| LL[Continue From Progress]
-    KK -->|No| MM[Start New Coin Launch]
+    E --> JJ[Clear Cross-Flow Transactions]
+    JJ --> KK{Pending Transaction?}
+    KK -->|Yes| LL[Handle Pending Transaction Update]
+    KK -->|No| MM{Coin Launch Progress?}
 
-    MM --> NN[Extract Coin Data]
-    NN --> OO{Has All Data?}
-    OO -->|Yes| PP[Launch Coin]
-    OO -->|No| QQ[Request Missing Data]
+    MM -->|Yes| NN[Continue From Progress]
+    MM -->|No| OO[Start New Coin Launch]
+
+    OO --> PP[Extract Coin Data]
+    PP --> QQ{Has All Data?}
+    QQ -->|Yes| RR[Launch Coin]
+    QQ -->|No| SS[Request Missing Data]
 
     style A fill:#e1f5fe
     style C fill:#f3e5f5
     style D fill:#fff3e0
     style E fill:#e8f5e8
+    style G fill:#ffebee
 ```
 
 ---
 
-## 8. Services Architecture & Integration
+## 8. Direct Message Handling System
+
+This diagram shows how the system handles direct messages (1-on-1 conversations) differently from group chats, with smart routing for status inquiries and structured guidance for blocked functionality.
+
+```mermaid
+graph TD
+    A[Direct Message Received] --> B[EnhancedMessageCoordinator]
+    B --> C[Detect Intent with FlowRouter]
+    C --> D[Classify Message Intent]
+
+    D --> E{Intent Type?}
+    E -->|Management| F[Block with Group Requirement]
+    E -->|Coin Launch| G[Block with Group Requirement]
+    E -->|QA/General| H[Allow QA Flow Processing]
+
+    F --> I[Send Structured Message]
+    G --> I
+    H --> J[QAFlow.processMessage]
+
+    I --> K[Structured Response:<br/>1. Create group chat<br/>2. Add bot to group<br/>3. Launch coins together]
+
+    J --> L{Question Type?}
+    L -->|Capability| M[Send Structured Message]
+    L -->|Status| N{Groups/Coins Query?}
+    L -->|General| M
+
+    N -->|Yes| O[Fetch Live Data from API]
+    N -->|No| M
+
+    O --> P[SessionManager.getUserStateWithLiveData]
+    P --> Q[UserDataService.injectGroupData]
+    Q --> R[GraphQLService.fetchGroupData]
+    R --> S[Display Actual Groups/Coins Data]
+
+    M --> T[Same Structured Response:<br/>Bot works in groups only]
+
+    U[Group Chat] --> V[Normal Flow Processing]
+    V --> W[Full Functionality Available]
+    W --> X[User State Updates]
+    W --> Y[Coin Launch Capability]
+    W --> Z[Management Features]
+
+    style A fill:#e1f5fe
+    style F fill:#ffebee
+    style G fill:#ffebee
+    style K fill:#fff3e0
+    style O fill:#e8f5e8
+    style S fill:#c8e6c9
+    style U fill:#e8f5e8
+```
+
+---
+
+## 9. Services Architecture & Integration
 
 This diagram illustrates how all the services (GraphQL, UserData, ENS, GroupStorage, StatusMonitor) work together to provide functionality.
 
@@ -475,7 +545,7 @@ graph TD
 
 ---
 
-## 9. Installation Manager & XMTP Client
+## 10. Installation Manager & XMTP Client
 
 This diagram documents the XMTP client creation process, including installation limit handling and retry logic.
 
@@ -529,7 +599,7 @@ graph TD
 
 ---
 
-## 10. Coin Launch Flow - Detailed Process
+## 11. Coin Launch Flow - Detailed Process
 
 This diagram provides a detailed breakdown of the coin launch process, from message extraction to transaction creation.
 
@@ -602,7 +672,7 @@ graph TD
 
 ---
 
-## 11. Complete System Architecture Overview
+## 12. Complete System Architecture Overview
 
 This diagram shows the overall system architecture and how all components interact with each other.
 
@@ -692,6 +762,16 @@ graph TD
 - **LLM-powered engagement detection** for edge cases
 - **Thread timeout management** (5 minutes of inactivity)
 
+### Direct Message Handling
+
+- **Smart flow-based routing** for 1-on-1 conversations
+- **QA Flow messages** (greetings, questions, help) are allowed but provide structured guidance
+- **Groups/Coins status queries** in DMs now fetch and display real data from GraphQL API
+- **Management and Coin Launch flows** are blocked with group requirement message
+- **No user state updates** for blocked direct message interactions
+- **Consistent structured responses** with clear step-by-step instructions
+- **Live data integration** for status inquiries about user's groups and coins
+
 ### State Management
 
 - **Persistent user states** stored in `user-states.json`
@@ -706,9 +786,9 @@ graph TD
 
 ### Multi-Flow Architecture
 
-- **QA Flow**: Handles questions, explanations, and help requests
-- **Management Flow**: Manages existing groups, coins, and transactions
-- **Coin Launch Flow**: Handles new coin creation with automatic group setup
+- **QA Flow**: Handles questions, explanations, and help requests (with DM awareness and live data for groups/coins queries)
+- **Management Flow**: Manages existing groups, coins, and transactions (group chats only)
+- **Coin Launch Flow**: Handles new coin creation with automatic group setup (group chats only)
 
 ### Installation Limit Handling
 
@@ -731,6 +811,17 @@ When debugging issues, refer to these diagrams to understand:
 2. **Flow routing issues**: Check diagram #5 (Flow Router & Intent Classification)
 3. **State persistence problems**: Check diagram #6 (User State Management)
 4. **Restart/connection issues**: Check diagram #2 (Status Monitor)
-5. **Transaction handling**: Check diagram #10 (Coin Launch Flow)
+5. **Transaction handling**: Check diagram #11 (Coin Launch Flow)
+6. **Direct message handling**: Check diagram #8 (Direct Message Handling System)
+7. **QA Flow responses in DMs**: Check diagram #7 (Flow Processing System) and #8 (Direct Message Handling)
+
+### Direct Message Debugging
+
+- **DM blocked incorrectly**: Check if intent detection is working properly in MessageCoordinator
+- **DM allowed incorrectly**: Verify QA Flow is detecting `context.isDirectMessage` properly
+- **Wrong DM response**: Check if structured response is being used instead of LLM-generated content
+- **User state updated in DM**: Ensure blocked flows return early without state updates
+- **Groups/Coins queries not showing data**: Check if `detectGroupsOrCoinsQuery` is working and API calls are succeeding
+- **LLM detection failing**: Ensure LLM responses are parsed correctly (handle "yes." vs "yes")
 
 Each diagram provides the logical flow to trace through when investigating specific types of issues.

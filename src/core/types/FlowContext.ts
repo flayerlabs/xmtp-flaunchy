@@ -42,6 +42,7 @@ export interface FlowContext {
   attachment?: any;
   relatedMessages?: DecodedMessage[];
   conversationHistory: DecodedMessage[];
+  isDirectMessage: boolean;
 
   // Detection results from FlowRouter (avoids redundant LLM calls)
   detectionResult?: UnifiedRoutingResult;

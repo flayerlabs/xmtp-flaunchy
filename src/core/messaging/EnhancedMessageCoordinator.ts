@@ -395,6 +395,75 @@ export class EnhancedMessageCoordinator {
         return false;
       }
 
+      // Check if this is a direct message (1-on-1 conversation)
+      const members = await conversation.members();
+      const isGroupChat = members.length > 2;
+
+      if (!isGroupChat) {
+        console.log(
+          "[MessageCoordinator] 📱 Direct message detected - checking intent before processing"
+        );
+
+        // Get sender info for intent detection
+        const senderInboxId = primaryMessage.senderInboxId;
+        const inboxState = await this.client.preferences.inboxStateFromInboxIds(
+          [senderInboxId]
+        );
+        const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
+
+        // Get user state for intent detection (but don't update it)
+        let userState = await this.sessionManager.getUserState(creatorAddress);
+
+        // Create a minimal context for intent detection
+        const messageText = this.extractCombinedMessageText(
+          primaryMessage,
+          relatedMessages
+        );
+        const tempContext = {
+          messageText,
+          userState,
+          openai: this.openai,
+        } as FlowContext;
+
+        // Detect the intent to determine which flow this would go to
+        const multiIntentResult = await this.flowRouter.detectMultipleIntents(
+          tempContext
+        );
+        const wouldGoToFlow = this.flowRouter.getPrimaryFlow(
+          multiIntentResult,
+          userState
+        );
+
+        // Only block management and coin_launch flows in direct messages
+        if (wouldGoToFlow === "management" || wouldGoToFlow === "coin_launch") {
+          console.log(
+            `[MessageCoordinator] 🚫 Direct message blocked - ${wouldGoToFlow} flow requires group chat`
+          );
+
+          // Send group requirement message for flows that need groups
+          const directMessageResponse =
+            "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
+            "to get started:\n" +
+            "1. create a group chat with your friends\n" +
+            "2. add me to the group\n" +
+            "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+            "the magic happens when everyone's together in a group. stay based!";
+
+          await conversation.send(directMessageResponse);
+
+          console.log(
+            "[MessageCoordinator] ✅ Sent group requirement message - not processing through flows"
+          );
+          return true;
+        }
+
+        // Allow QA flow (greetings, questions, help) to continue in direct messages
+        console.log(
+          `[MessageCoordinator] ✅ Direct message allowed - ${wouldGoToFlow} flow can work in DMs`
+        );
+        // Continue with normal processing for QA flow, but mark as direct message
+      }
+
       // Get sender info
       const senderInboxId = primaryMessage.senderInboxId;
       const inboxState = await this.client.preferences.inboxStateFromInboxIds([
@@ -439,6 +508,7 @@ export class EnhancedMessageCoordinator {
         senderInboxId,
         creatorAddress,
         conversationHistory: relatedMessages,
+        isDirectMessage: !isGroupChat,
       });
 
       // Route to appropriate flow
@@ -459,6 +529,7 @@ export class EnhancedMessageCoordinator {
     senderInboxId,
     creatorAddress,
     conversationHistory,
+    isDirectMessage,
   }: {
     primaryMessage: DecodedMessage;
     relatedMessages: DecodedMessage[];
@@ -467,6 +538,7 @@ export class EnhancedMessageCoordinator {
     senderInboxId: string;
     creatorAddress: string;
     conversationHistory: DecodedMessage[];
+    isDirectMessage: boolean;
   }): Promise<FlowContext> {
     // Determine message text and attachment info
     const isAttachment = primaryMessage.contentType?.sameAs(
@@ -529,6 +601,7 @@ export class EnhancedMessageCoordinator {
       attachment,
       relatedMessages,
       conversationHistory,
+      isDirectMessage,
 
       // Helper functions
       sendResponse: async (message: string) => {
