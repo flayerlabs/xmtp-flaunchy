@@ -123,13 +123,13 @@ export abstract class BaseFlow {
   // Centralized transaction cancellation
   protected async cancelTransaction(context: FlowContext): Promise<void> {
     // Clear all transaction-related state comprehensively
-    await context.updateState({
+    await context.updateGroupState({
       pendingTransaction: undefined,
       managementProgress: undefined,
       // Clear onboarding group data if it exists
-      onboardingProgress: context.userState.onboardingProgress
+      onboardingProgress: context.groupState.onboardingProgress
         ? {
-            ...context.userState.onboardingProgress,
+            ...context.groupState.onboardingProgress,
             splitData: undefined,
           }
         : undefined,

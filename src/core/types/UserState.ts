@@ -1,16 +1,22 @@
 export interface UserState {
   userId: string;
   status: "new" | "onboarding" | "active" | "invited";
-  onboardingProgress?: OnboardingProgress;
-  managementProgress?: ManagementProgress;
-  coinLaunchProgress?: CoinLaunchProgress;
   coins: UserCoin[];
   groups: UserGroup[];
   preferences: UserPreferences;
-  pendingTransaction?: PendingTransaction;
   chatRoomManagers?: Record<string, string>; // Map of chat group ID to manager address
   createdAt: Date;
   updatedAt: Date;
+
+  // Group-specific states - each group can have its own progress/transaction state
+  groupStates?: Record<string, GroupState>;
+}
+
+export interface GroupState {
+  onboardingProgress?: OnboardingProgress;
+  managementProgress?: ManagementProgress;
+  coinLaunchProgress?: CoinLaunchProgress;
+  pendingTransaction?: PendingTransaction;
 }
 
 export interface OnboardingProgress {
@@ -60,7 +66,7 @@ export interface UserCoin {
   liveData?: {
     totalHolders: number;
     marketCapUSDC: string;
-    priceChangePercentage: number;
+    priceChangePercentage: string;
     totalFeesUSDC: string;
     lastUpdated: Date;
   };

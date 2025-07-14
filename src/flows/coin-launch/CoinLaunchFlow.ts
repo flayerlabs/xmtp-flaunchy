@@ -40,13 +40,13 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   async processMessage(context: FlowContext): Promise<void> {
-    const { userState } = context;
+    const { groupState } = context;
 
     // Clear any cross-flow transactions first
     await this.clearCrossFlowTransactions(context);
 
     // Check if user has a pending transaction first
-    if (userState.pendingTransaction) {
+    if (groupState.pendingTransaction) {
       const handled = await this.handlePendingTransactionUpdate(context);
       if (handled) return;
     }
@@ -78,7 +78,7 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     // Process coin launch request
-    if (userState.coinLaunchProgress) {
+    if (groupState.coinLaunchProgress) {
       await this.continueFromProgress(context);
     } else {
       await this.startNewCoinLaunch(context);
@@ -88,12 +88,12 @@ export class CoinLaunchFlow extends BaseFlow {
   private async handlePendingTransactionUpdate(
     context: FlowContext
   ): Promise<boolean> {
-    const { userState } = context;
+    const { groupState } = context;
     const messageText = this.extractMessageText(context);
 
     if (
-      !userState.pendingTransaction ||
-      userState.pendingTransaction.type !== "coin_creation"
+      !groupState.pendingTransaction ||
+      groupState.pendingTransaction.type !== "coin_creation"
     ) {
       return false;
     }
@@ -105,8 +105,8 @@ export class CoinLaunchFlow extends BaseFlow {
       );
 
     if (isTransactionUpdate) {
-      const coinData = userState.pendingTransaction.coinData;
-      const launchParams = userState.pendingTransaction.launchParameters;
+      const coinData = groupState.pendingTransaction.coinData;
+      const launchParams = groupState.pendingTransaction.launchParameters;
 
       // Check if this is success or failure
       const isSuccess =
@@ -121,7 +121,7 @@ export class CoinLaunchFlow extends BaseFlow {
         // Store the manager address for this chat group if it was a first launch
         if (launchParams?.targetGroupId) {
           const existingManager =
-            userState.chatRoomManagers?.[context.senderInboxId];
+            context.userState.chatRoomManagers?.[context.senderInboxId];
           if (!existingManager) {
             // This was the first coin launch for this chat group - store the manager address
             await this.storeChatRoomManagerAddress(
@@ -132,7 +132,7 @@ export class CoinLaunchFlow extends BaseFlow {
         }
 
         // Clear pending transaction and coin launch progress
-        await context.updateState({
+        await context.updateGroupState({
           pendingTransaction: undefined,
           coinLaunchProgress: undefined,
         });
@@ -166,15 +166,15 @@ export class CoinLaunchFlow extends BaseFlow {
       messageText
     );
     if (wantsRetry) {
-      const coinData = userState.pendingTransaction.coinData;
-      const launchParams = userState.pendingTransaction.launchParameters;
+      const coinData = groupState.pendingTransaction.coinData;
+      const launchParams = groupState.pendingTransaction.launchParameters;
 
       if (!coinData || !launchParams) {
         await this.sendResponse(
           context,
           "couldn't retrieve transaction data. let me restart the coin launch process."
         );
-        await context.updateState({
+        await context.updateGroupState({
           pendingTransaction: undefined,
           coinLaunchProgress: undefined,
         });
@@ -258,9 +258,9 @@ export class CoinLaunchFlow extends BaseFlow {
       );
 
       // Update pending transaction timestamp
-      await context.updateState({
+      await context.updateGroupState({
         pendingTransaction: {
-          ...context.userState.pendingTransaction!,
+          ...context.groupState.pendingTransaction!,
           timestamp: new Date(),
         },
       });
@@ -276,22 +276,22 @@ export class CoinLaunchFlow extends BaseFlow {
   private async clearCrossFlowTransactions(
     context: FlowContext
   ): Promise<void> {
-    const { userState } = context;
+    const { groupState } = context;
 
     // Clear any pending transactions that aren't coin_creation
     if (
-      userState.pendingTransaction &&
-      userState.pendingTransaction.type !== "coin_creation"
+      groupState.pendingTransaction &&
+      groupState.pendingTransaction.type !== "coin_creation"
     ) {
-      await context.updateState({
+      await context.updateGroupState({
         pendingTransaction: undefined,
       });
     }
   }
 
   private async continueFromProgress(context: FlowContext): Promise<void> {
-    const { userState } = context;
-    const progress = userState.coinLaunchProgress!;
+    const { groupState } = context;
+    const progress = groupState.coinLaunchProgress!;
 
     // Extract additional data from the current message
     const currentData = await this.extractCoinData(context);
@@ -360,7 +360,7 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     if (updated) {
-      await context.updateState({ coinLaunchProgress: progress });
+      await context.updateGroupState({ coinLaunchProgress: progress });
     }
 
     // If parameter updates were made, acknowledge them naturally
@@ -427,7 +427,7 @@ export class CoinLaunchFlow extends BaseFlow {
     };
 
     // Save progress
-    await context.updateState({ coinLaunchProgress: progress });
+    await context.updateGroupState({ coinLaunchProgress: progress });
 
     // Check if we have everything
     if (coinData.name && coinData.ticker && coinData.image) {
@@ -795,11 +795,11 @@ export class CoinLaunchFlow extends BaseFlow {
    * Get existing coin data from various sources in the context
    */
   private getExistingCoinData(context: FlowContext): CoinLaunchData | null {
-    const { userState } = context;
+    const { groupState } = context;
 
     // Check coin launch progress first
-    if (userState.coinLaunchProgress?.coinData) {
-      const progress = userState.coinLaunchProgress;
+    if (groupState.coinLaunchProgress?.coinData) {
+      const progress = groupState.coinLaunchProgress;
       const coinData = progress.coinData;
       return {
         name: coinData?.name,
@@ -814,9 +814,9 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     // Check pending transaction
-    if (userState.pendingTransaction?.type === "coin_creation") {
-      const coinData = userState.pendingTransaction.coinData;
-      const launchParams = userState.pendingTransaction.launchParameters;
+    if (groupState.pendingTransaction?.type === "coin_creation") {
+      const coinData = groupState.pendingTransaction.coinData;
+      const launchParams = groupState.pendingTransaction.launchParameters;
       if (coinData && launchParams) {
         return {
           name: coinData.name,
@@ -938,7 +938,7 @@ export class CoinLaunchFlow extends BaseFlow {
       });
 
       // Set pending transaction
-      await context.updateState({
+      await context.updateGroupState({
         pendingTransaction: {
           type: "coin_creation",
           coinData: {
@@ -976,7 +976,7 @@ export class CoinLaunchFlow extends BaseFlow {
       await this.sendResponse(context, confirmationMessage);
 
       // Clear progress since we've sent the transaction
-      await context.updateState({
+      await context.updateGroupState({
         coinLaunchProgress: undefined,
       });
     } catch (error) {
@@ -1159,10 +1159,10 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async handleStatusInquiry(context: FlowContext): Promise<void> {
-    const { userState } = context;
+    const { groupState } = context;
 
-    if (userState.pendingTransaction?.type === "coin_creation") {
-      const coinData = userState.pendingTransaction.coinData;
+    if (groupState.pendingTransaction?.type === "coin_creation") {
+      const coinData = groupState.pendingTransaction.coinData;
       if (coinData) {
         await this.sendResponse(
           context,
@@ -1177,8 +1177,8 @@ export class CoinLaunchFlow extends BaseFlow {
       return;
     }
 
-    if (userState.coinLaunchProgress) {
-      const progress = userState.coinLaunchProgress;
+    if (groupState.coinLaunchProgress) {
+      const progress = groupState.coinLaunchProgress;
       const coinData = progress.coinData || {};
 
       const missing = [];
@@ -1235,11 +1235,11 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async handleLaunchCommand(context: FlowContext): Promise<void> {
-    const { userState } = context;
+    const { userState, groupState } = context;
 
     // Check if they have coin launch progress
-    if (userState.coinLaunchProgress) {
-      const progress = userState.coinLaunchProgress;
+    if (groupState.coinLaunchProgress) {
+      const progress = groupState.coinLaunchProgress;
       const coinData = progress.coinData || {};
 
       const missing = [];

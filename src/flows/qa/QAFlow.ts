@@ -9,6 +9,7 @@ import {
 } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { safeParseJSON } from "../../core/utils/jsonUtils";
+import { getDefaultChain } from "../utils/ChainSelection";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -72,7 +73,7 @@ export class QAFlow extends BaseFlow {
             extraction.launchParameters.buybackPercentage || undefined,
         };
 
-        await context.updateState({
+        await context.updateGroupState({
           coinLaunchProgress: {
             step: "collecting_coin_data",
             coinData,
@@ -414,20 +415,36 @@ export class QAFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<void> {
+    console.log(`[QAFlow] 📊 Handling status inquiry: "${messageText}"`);
+    console.log(`[QAFlow] Is direct message: ${context.isDirectMessage}`);
+    console.log(
+      `[QAFlow] User ${context.userState.userId} - Groups: ${context.userState.groups.length}, Coins: ${context.userState.coins.length}`
+    );
+
     // Check if this is a direct message
     if (context.isDirectMessage) {
       // For DMs, check if user is specifically asking about groups or coins
+      console.log(`[QAFlow] 🔍 Detecting groups/coins query for DM...`);
       const isGroupsOrCoinsQuery = await this.detectGroupsOrCoinsQuery(
         messageText,
         context
       );
 
+      console.log(
+        `[QAFlow] Groups/coins query detected: ${isGroupsOrCoinsQuery}`
+      );
+
       if (isGroupsOrCoinsQuery) {
         // Fetch actual groups/coins data from API
+        console.log(`[QAFlow] 📡 Fetching live data from blockchain...`);
         const userStateWithLiveData =
           await context.sessionManager.getUserStateWithLiveData(
             context.userState.userId
           );
+
+        console.log(
+          `[QAFlow] ✅ Got live data - Groups: ${userStateWithLiveData.groups.length}, Coins: ${userStateWithLiveData.coins.length}`
+        );
 
         await this.handleGroupsOrCoinsQuery(
           context,
@@ -438,6 +455,7 @@ export class QAFlow extends BaseFlow {
       }
 
       // For other status inquiries in DMs, provide structured guidance to group chats
+      console.log(`[QAFlow] 💬 Sending DM guidance message`);
       const directMessageResponse =
         "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
         "to get started:\n" +
@@ -472,9 +490,12 @@ export class QAFlow extends BaseFlow {
       statusInfo.push(`Coins: none launched yet`);
     }
 
-    // Pending transaction
-    if (userState.pendingTransaction) {
-      const txType = userState.pendingTransaction.type.replace("_", " ");
+    // Pending transaction (group-specific)
+    if (context.groupState.pendingTransaction) {
+      const txType = context.groupState.pendingTransaction.type.replace(
+        "_",
+        " "
+      );
       statusInfo.push(`Pending: ${txType} transaction ready to sign`);
     } else {
       statusInfo.push(`Pending: no transactions`);
@@ -482,15 +503,15 @@ export class QAFlow extends BaseFlow {
 
     // Note: Onboarding progress removed - onboarding flow has been removed
 
-    // Coin launch progress
-    if (userState.coinLaunchProgress) {
-      const step = userState.coinLaunchProgress.step || "unknown";
+    // Coin launch progress (group-specific)
+    if (context.groupState.coinLaunchProgress) {
+      const step = context.groupState.coinLaunchProgress.step || "unknown";
       statusInfo.push(`Coin launch: ${step} step`);
     }
 
-    // Management progress
-    if (userState.managementProgress) {
-      const action = userState.managementProgress.action || "unknown";
+    // Management progress (group-specific)
+    if (context.groupState.managementProgress) {
+      const action = context.groupState.managementProgress.action || "unknown";
       statusInfo.push(`Management: ${action} in progress`);
     }
 
@@ -570,11 +591,20 @@ export class QAFlow extends BaseFlow {
     messageText: string,
     userState: UserState
   ): Promise<void> {
+    console.log(`[QAFlow] 🔍 Handling groups/coins query: "${messageText}"`);
+    console.log(
+      `[QAFlow] UserState - Groups: ${userState.groups.length}, Coins: ${userState.coins.length}`
+    );
+
     // Check if asking about groups specifically
     const isGroupsQuery = messageText.toLowerCase().includes("group");
     const isCoinsQuery =
       messageText.toLowerCase().includes("coin") ||
       messageText.toLowerCase().includes("token");
+
+    console.log(
+      `[QAFlow] Query type - Groups: ${isGroupsQuery}, Coins: ${isCoinsQuery}`
+    );
 
     let response = "";
 
@@ -595,15 +625,44 @@ export class QAFlow extends BaseFlow {
       }
     } else if (isCoinsQuery || (!isGroupsQuery && userState.coins.length > 0)) {
       // Handle coins query
-      if (userState.coins.length === 0) {
-        response =
-          "you haven't launched any coins yet! launch your first coin and i'll handle the fee splitting automatically.";
-      } else {
-        response = `you have ${userState.coins.length} coin${
-          userState.coins.length > 1 ? "s" : ""
-        }:\n\n`;
+      console.log(
+        `[QAFlow] 🪙 Processing coins query - found ${userState.coins.length} total coins`
+      );
 
-        for (const coin of userState.coins) {
+      const currentChain = getDefaultChain();
+
+      // Filter coins for current chain only
+      const currentNetworkCoins = userState.coins.filter(
+        (coin) => coin.launched && coin.chainName === currentChain.name
+      );
+
+      console.log(`[QAFlow] 🌐 Current chain: ${currentChain.displayName}`);
+      console.log(
+        `[QAFlow] 📊 Coins filtered for current chain: ${currentNetworkCoins.length}`
+      );
+
+      if (currentNetworkCoins.length === 0) {
+        console.log(
+          `[QAFlow] ⚠️  No coins found on current chain ${currentChain.displayName}`
+        );
+        response = `you haven't launched any coins on ${currentChain.displayName} yet! launch your first coin and i'll handle the fee splitting automatically.`;
+      } else {
+        console.log(
+          `[QAFlow] 📊 Coins found on ${currentChain.displayName}:`,
+          currentNetworkCoins.map((coin) => ({
+            name: coin.name,
+            ticker: coin.ticker,
+            contractAddress: coin.contractAddress,
+            hasLiveData: !!coin.liveData,
+            chainName: coin.chainName,
+          }))
+        );
+
+        response = `you have ${currentNetworkCoins.length} coin${
+          currentNetworkCoins.length > 1 ? "s" : ""
+        } on ${currentChain.displayName}:\n\n`;
+
+        for (const coin of currentNetworkCoins) {
           const coinDisplay = await this.formatCoinDisplay(coin);
           response += `${coinDisplay}\n`;
         }
@@ -620,6 +679,7 @@ export class QAFlow extends BaseFlow {
       }
     }
 
+    console.log(`[QAFlow] 📤 Sending response: ${response.length} chars`);
     await this.sendResponse(context, response);
   }
 
@@ -648,16 +708,53 @@ export class QAFlow extends BaseFlow {
    * Format coin display with live data
    */
   private async formatCoinDisplay(coin: any): Promise<string> {
-    let display = `• ${coin.name} (${coin.ticker})`;
+    console.log(
+      `[QAFlow] 🎨 Formatting coin display for ${coin.name} (${coin.ticker})`
+    );
+    console.log(`[QAFlow] Coin has live data: ${!!coin.liveData}`);
+
+    let display = `🪙 ${coin.name} (${coin.ticker})\n`;
 
     if (coin.liveData) {
-      display += ` - $${coin.liveData.marketCapUSDC} market cap`;
-      if (coin.liveData.priceChangePercentage) {
-        const change = parseFloat(coin.liveData.priceChangePercentage);
-        const changeStr =
-          change > 0 ? `+${change.toFixed(2)}%` : `${change.toFixed(2)}%`;
-        display += ` (${changeStr})`;
+      console.log(`[QAFlow] 📊 Live data:`, {
+        holders: coin.liveData.totalHolders,
+        marketCap: coin.liveData.marketCapUSDC,
+        priceChange: coin.liveData.priceChangePercentage,
+        fees: coin.liveData.totalFeesUSDC,
+      });
+
+      display += `  • holders: ${coin.liveData.totalHolders}\n`;
+      display += `  • market cap: $${parseFloat(
+        coin.liveData.marketCapUSDC
+      ).toLocaleString()}\n`;
+
+      if (
+        coin.liveData.priceChangePercentage &&
+        parseFloat(coin.liveData.priceChangePercentage) !== 0
+      ) {
+        const priceChangeNum = parseFloat(coin.liveData.priceChangePercentage);
+        const change = priceChangeNum > 0 ? "+" : "";
+        display += `  • 24h change: ${change}${priceChangeNum.toFixed(2)}%\n`;
       }
+
+      if (
+        coin.liveData.totalFeesUSDC &&
+        parseFloat(coin.liveData.totalFeesUSDC) > 0
+      ) {
+        display += `  • fees: $${parseFloat(
+          coin.liveData.totalFeesUSDC
+        ).toLocaleString()}\n`;
+      }
+    } else {
+      console.log(`[QAFlow] ⚠️  No live data available for ${coin.name}`);
+      display += `  • no live data available\n`;
+    }
+
+    if (coin.contractAddress) {
+      display += `  • contract: ${coin.contractAddress.slice(
+        0,
+        8
+      )}...${coin.contractAddress.slice(-6)}\n`;
     }
 
     return display;

@@ -1,7 +1,7 @@
-import { UserState } from "../types/UserState";
+import { UserState, GroupState } from "../types/UserState";
 import { FlowContext } from "../types/FlowContext";
 import { BaseFlow } from "./BaseFlow";
-import { IntentClassifier, MessageIntent } from "./IntentClassifier";
+
 import { safeParseJSON } from "../utils/jsonUtils";
 import OpenAI from "openai";
 
@@ -79,11 +79,9 @@ export interface MultiIntentResult {
 
 export class FlowRouter {
   private flows: FlowRegistry;
-  private intentClassifier: IntentClassifier;
 
   constructor(flows: FlowRegistry, openai: OpenAI) {
     this.flows = flows;
-    this.intentClassifier = new IntentClassifier(openai);
   }
 
   async routeMessage(context: FlowContext): Promise<void> {
@@ -102,7 +100,7 @@ export class FlowRouter {
       // 2. Determine primary flow based on primary intent
       const primaryFlow = this.getPrimaryFlow(
         multiIntentResult,
-        context.userState
+        context.groupState
       );
 
       // 3. Add multi-intent result to context so flows can handle secondary intents
@@ -169,7 +167,7 @@ export class FlowRouter {
         userState.status
       } | Groups: ${userState.groups.length} | Coins: ${
         userState.coins.length
-      } | PendingTx: ${userState.pendingTransaction?.type || "none"}`
+      } | PendingTx: ${context.groupState.pendingTransaction?.type || "none"}`
     );
 
     try {
@@ -186,7 +184,7 @@ USER CONTEXT:
 - Status: ${userState.status}
 - Groups: ${userState.groups.length}
 - Coins: ${userState.coins.length}  
-- Pending Transaction: ${userState.pendingTransaction?.type || "none"}
+- Pending Transaction: ${context.groupState.pendingTransaction?.type || "none"}
 
 DETECT ALL INTENTS in order of importance:
 
@@ -351,12 +349,12 @@ Return JSON:
   }
 
   /**
-   * Determine primary flow based on primary intent and user state
+   * Determine primary flow based on primary intent and group state
    * SIMPLIFIED: Agent is now just a coin launcher with automatic group creation
    */
   getPrimaryFlow(
     multiIntentResult: MultiIntentResult,
-    userState: UserState
+    groupState: GroupState
   ): FlowType {
     const { primaryIntent, flags } = multiIntentResult;
 
@@ -384,11 +382,11 @@ Return JSON:
 
         case "modify_existing":
           // Handle modifications in the appropriate context
-          if (userState.pendingTransaction) {
-            if (userState.pendingTransaction.type === "group_creation") {
+          if (groupState.pendingTransaction) {
+            if (groupState.pendingTransaction.type === "group_creation") {
               console.log(`[FlowRouter] ✅ Modify pending group → management`);
               return "management";
-            } else if (userState.pendingTransaction.type === "coin_creation") {
+            } else if (groupState.pendingTransaction.type === "coin_creation") {
               console.log(`[FlowRouter] ✅ Modify pending coin → coin_launch`);
               return "coin_launch";
             }
@@ -442,24 +440,5 @@ Return JSON:
    */
   updateFlow(flowType: FlowType, flow: BaseFlow): void {
     this.flows[flowType] = flow;
-  }
-
-  /**
-   * Get current flow type for a user (for compatibility)
-   */
-  async getCurrentFlowType(
-    userState: UserState,
-    message: string,
-    hasAttachment: boolean = false
-  ): Promise<FlowType> {
-    // Create a minimal context for detection
-    const context = {
-      userState,
-      messageText: message,
-      hasAttachment,
-    } as FlowContext;
-
-    const multiIntentResult = await this.detectMultipleIntents(context);
-    return this.getPrimaryFlow(multiIntentResult, userState);
   }
 }

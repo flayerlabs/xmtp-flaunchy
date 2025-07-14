@@ -3,7 +3,7 @@ import type OpenAI from "openai";
 import { FlowRouter } from "../flows/FlowRouter";
 import { SessionManager } from "../session/SessionManager";
 import { FlowContext } from "../types/FlowContext";
-import { UserState, UserGroup } from "../types/UserState";
+import { UserState, UserGroup, GroupState } from "../types/UserState";
 import { Character, TransactionReferenceMessage } from "../../../types";
 import {
   ContentTypeRemoteAttachment,
@@ -338,6 +338,45 @@ export class EnhancedMessageCoordinator {
       // Set timer to process attachment alone if no text arrives
       entry.timer = setTimeout(async () => {
         if (entry?.attachmentMessage) {
+          // Check if attachment alone would be filtered out
+          const attachmentMessage = entry.attachmentMessage;
+          const conversation =
+            await this.client.conversations.getConversationById(
+              attachmentMessage.conversationId
+            );
+
+          if (conversation) {
+            const members = await conversation.members();
+            const isGroupChat = members.length > 2;
+
+            // For group chats, check if attachment alone would be processed
+            if (isGroupChat) {
+              const messageText = this.extractCombinedMessageText(
+                attachmentMessage,
+                []
+              );
+
+              // If no text and it's a group chat, don't process alone - wait longer
+              if (!messageText || messageText.trim().length === 0) {
+                console.log(
+                  "🔄 Attachment without text in group chat - extending wait time"
+                );
+
+                // Extend the timer for another 1 seconds to allow text to arrive
+                const extendedTimer = setTimeout(async () => {
+                  if (entry?.attachmentMessage) {
+                    await this.processCoordinatedMessages([
+                      entry.attachmentMessage,
+                    ]);
+                    this.messageQueue.delete(conversationId);
+                  }
+                }, 1000);
+                entry.timer = extendedTimer;
+                return;
+              }
+            }
+          }
+
           await this.processCoordinatedMessages([entry.attachmentMessage]);
           this.messageQueue.delete(conversationId);
         }
@@ -423,6 +462,7 @@ export class EnhancedMessageCoordinator {
           messageText,
           userState,
           openai: this.openai,
+          groupState: {}, // Empty group state for intent detection
         } as FlowContext;
 
         // Detect the intent to determine which flow this would go to
@@ -431,7 +471,7 @@ export class EnhancedMessageCoordinator {
         );
         const wouldGoToFlow = this.flowRouter.getPrimaryFlow(
           multiIntentResult,
-          userState
+          tempContext.groupState
         );
 
         // Only block management and coin_launch flows in direct messages
@@ -573,6 +613,15 @@ export class EnhancedMessageCoordinator {
       }
     }
 
+    // Get group ID from conversation
+    const groupId = conversation.id;
+
+    // Get group-specific state
+    const groupState = await this.sessionManager.getGroupState(
+      creatorAddress,
+      groupId
+    );
+
     return {
       // Core XMTP objects
       client: this.client,
@@ -588,6 +637,10 @@ export class EnhancedMessageCoordinator {
       userState,
       senderInboxId,
       creatorAddress,
+
+      // Group context
+      groupId,
+      groupState,
 
       // Session management
       sessionManager: this.sessionManager,
@@ -637,6 +690,19 @@ export class EnhancedMessageCoordinator {
 
       updateState: async (updates: Partial<UserState>) => {
         await this.sessionManager.updateUserState(creatorAddress, updates);
+      },
+
+      // Group-specific state management
+      updateGroupState: async (updates: Partial<GroupState>) => {
+        await this.sessionManager.updateGroupState(
+          creatorAddress,
+          groupId,
+          updates
+        );
+      },
+
+      clearGroupState: async () => {
+        await this.sessionManager.clearGroupState(creatorAddress, groupId);
       },
 
       // Utility functions
@@ -931,14 +997,18 @@ export class EnhancedMessageCoordinator {
       const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
 
       const userState = await this.sessionManager.getUserState(creatorAddress);
+      const groupState = await this.sessionManager.getGroupState(
+        creatorAddress,
+        message.conversationId
+      );
 
       // Check if user has a pending transaction
-      if (!userState.pendingTransaction) {
+      if (!groupState.pendingTransaction) {
         console.log("No pending transaction found for transaction reference");
         return false;
       }
 
-      const pendingTx = userState.pendingTransaction;
+      const pendingTx = groupState.pendingTransaction;
       const conversation = await this.client.conversations.getConversationById(
         message.conversationId
       );
@@ -949,9 +1019,33 @@ export class EnhancedMessageCoordinator {
       }
 
       // Parse the transaction reference content
-      const transactionRef = (message as TransactionReferenceMessage).content
-        .transactionReference;
+      const messageContent = (message as TransactionReferenceMessage).content;
+
+      // Debug logging to understand the structure
+      console.log(
+        `[MessageCoordinator] 🔍 Debug - message content:`,
+        messageContent
+      );
+
+      if (!messageContent) {
+        console.error("❌ Message content is undefined");
+        return false;
+      }
+
+      const transactionRef = messageContent.transactionReference;
+
+      if (!transactionRef) {
+        console.error("❌ Transaction reference is undefined");
+        return false;
+      }
+
       const txHash = transactionRef.reference;
+
+      if (!txHash) {
+        console.error("❌ Transaction hash is undefined");
+        return false;
+      }
+
       console.log(
         `[MessageCoordinator] 🔍 Processing ${pendingTx.type} transaction: ${txHash}`
       );
@@ -993,10 +1087,14 @@ export class EnhancedMessageCoordinator {
           await conversation.send(errorMessage);
 
           // Clear the pending transaction since we can't process it
-          await this.sessionManager.updateUserState(creatorAddress, {
-            pendingTransaction: undefined,
-            managementProgress: undefined, // Clear management progress on system error
-          });
+          await this.sessionManager.updateGroupState(
+            creatorAddress,
+            message.conversationId,
+            {
+              pendingTransaction: undefined,
+              managementProgress: undefined, // Clear management progress on system error
+            }
+          );
 
           return false;
         }
@@ -1017,10 +1115,14 @@ export class EnhancedMessageCoordinator {
           await conversation.send(errorMessage);
 
           // Clear the pending transaction since we can't process it
-          await this.sessionManager.updateUserState(creatorAddress, {
-            pendingTransaction: undefined,
-            managementProgress: undefined, // Clear management progress on system error
-          });
+          await this.sessionManager.updateGroupState(
+            creatorAddress,
+            message.conversationId,
+            {
+              pendingTransaction: undefined,
+              managementProgress: undefined, // Clear management progress on system error
+            }
+          );
 
           return false;
         }
@@ -1031,7 +1133,7 @@ export class EnhancedMessageCoordinator {
         // Update user state based on transaction type
         if (pendingTx.type === "group_creation") {
           // For group creation, extract receiver data FIRST
-          const currentProgress = userState.onboardingProgress;
+          const currentProgress = groupState.onboardingProgress;
 
           // Use default chain from environment
           const defaultChain = getDefaultChain();
@@ -1048,18 +1150,19 @@ export class EnhancedMessageCoordinator {
           // Try stored data first (for legacy onboarding/management flows)
           const storedReceivers =
             currentProgress?.splitData?.receivers ||
-            userState.managementProgress?.groupCreationData?.receivers ||
+            groupState.managementProgress?.groupCreationData?.receivers ||
             [];
 
           if (storedReceivers.length > 0) {
             receivers = storedReceivers
-              .map((r) => ({
+              .map((r: any) => ({
                 username: r.username,
                 resolvedAddress: r.resolvedAddress || "", // Don't fallback to inbox ID
                 percentage: r.percentage || 100 / storedReceivers.length,
               }))
               .filter(
-                (r) => r.resolvedAddress && r.resolvedAddress.startsWith("0x")
+                (r: any) =>
+                  r.resolvedAddress && r.resolvedAddress.startsWith("0x")
               ); // Only include valid Ethereum addresses
 
             console.log(
@@ -1102,10 +1205,14 @@ export class EnhancedMessageCoordinator {
             );
 
             // Clear the pending transaction since we can't process it
-            await this.sessionManager.updateUserState(creatorAddress, {
-              pendingTransaction: undefined,
-              managementProgress: undefined,
-            });
+            await this.sessionManager.updateGroupState(
+              creatorAddress,
+              message.conversationId,
+              {
+                pendingTransaction: undefined,
+                managementProgress: undefined,
+              }
+            );
 
             return false;
           }
@@ -1173,32 +1280,36 @@ export class EnhancedMessageCoordinator {
           // No need for separate messages
 
           // Update the creator's state (group was already added by GroupStorageService)
-          await this.sessionManager.updateUserState(creatorAddress, {
-            pendingTransaction: undefined,
-            managementProgress: undefined, // Clear management progress when group creation completes
-            onboardingProgress: currentProgress
-              ? {
-                  ...currentProgress,
-                  step: "coin_creation",
-                  splitData: currentProgress.splitData
-                    ? {
-                        ...currentProgress.splitData,
-                        managerAddress: contractAddress,
-                      }
-                    : undefined,
-                  groupData: {
-                    managerAddress: contractAddress,
-                    txHash: txHash,
-                  },
-                  // Preserve existing coin data if any, otherwise initialize empty
-                  coinData: currentProgress.coinData || {
-                    name: undefined,
-                    ticker: undefined,
-                    image: undefined,
-                  },
-                }
-              : undefined,
-          });
+          await this.sessionManager.updateGroupState(
+            creatorAddress,
+            message.conversationId,
+            {
+              pendingTransaction: undefined,
+              managementProgress: undefined, // Clear management progress when group creation completes
+              onboardingProgress: currentProgress
+                ? {
+                    ...currentProgress,
+                    step: "coin_creation",
+                    splitData: currentProgress.splitData
+                      ? {
+                          ...currentProgress.splitData,
+                          managerAddress: contractAddress,
+                        }
+                      : undefined,
+                    groupData: {
+                      managerAddress: contractAddress,
+                      txHash: txHash,
+                    },
+                    // Preserve existing coin data if any, otherwise initialize empty
+                    coinData: currentProgress.coinData || {
+                      name: undefined,
+                      ticker: undefined,
+                      image: undefined,
+                    },
+                  }
+                : undefined,
+            }
+          );
         } else {
           // Coin creation success
           const networkPath =
@@ -1281,14 +1392,30 @@ export class EnhancedMessageCoordinator {
             }
           }
 
-          // For coin creation, add the coin to user's collection
-          // Use the group address from the user's onboarding progress (the group they just created)
-          const groupAddress =
-            userState.onboardingProgress?.groupData?.managerAddress ||
-            userState.onboardingProgress?.splitData?.managerAddress ||
-            (userState.groups.length > 0
-              ? userState.groups[userState.groups.length - 1].id
-              : "unknown-group");
+          // For coin creation in chat room model, use the manager address from chatRoomManagers
+          // or extract from the transaction if it's a first launch
+          let groupAddress = "unknown-group";
+          const chatRoomId = conversation.id;
+
+          // First try to get from chatRoomManagers
+          if (userState.chatRoomManagers?.[chatRoomId]) {
+            groupAddress = userState.chatRoomManagers[chatRoomId];
+          } else if (pendingTx.launchParameters?.isFirstLaunch) {
+            // For first launch, extract manager address from transaction
+            const extractedManagerAddress =
+              await this.extractManagerAddressFromReceipt(receipt);
+            if (extractedManagerAddress) {
+              groupAddress = extractedManagerAddress;
+            }
+          } else {
+            // Fallback to existing group logic for legacy flows
+            groupAddress =
+              groupState.onboardingProgress?.groupData?.managerAddress ||
+              groupState.onboardingProgress?.splitData?.managerAddress ||
+              (userState.groups.length > 0
+                ? userState.groups[userState.groups.length - 1].id
+                : "unknown-group");
+          }
 
           // Use default chain from environment
           const defaultChain = getDefaultChain();
@@ -1296,7 +1423,7 @@ export class EnhancedMessageCoordinator {
           const chainName = defaultChain.name;
 
           // Create the coin object (only if coinData exists)
-          if (pendingTx.coinData) {
+          if (pendingTx.coinData && groupAddress !== "unknown-group") {
             const newCoin = {
               ticker: pendingTx.coinData.ticker,
               name: pendingTx.coinData.name,
@@ -1312,27 +1439,51 @@ export class EnhancedMessageCoordinator {
               createdAt: new Date(),
             };
 
+            // Ensure the group exists in user state before adding the coin
+            await this.ensureGroupExistsForChatRoom(
+              conversation,
+              groupAddress,
+              chainId,
+              chainName
+            );
+
             // Add coin to ALL group members (not just creator)
             await this.groupStorageService.addCoinToAllGroupMembers(
               groupAddress,
               newCoin,
               creatorAddress
             );
+          } else if (groupAddress === "unknown-group") {
+            console.error(
+              "❌ Group unknown-group not found in creator's state"
+            );
           }
 
           // Clear the creator's pending transaction and management progress
-          await this.sessionManager.updateUserState(creatorAddress, {
-            pendingTransaction: undefined,
-            managementProgress: undefined, // Clear management progress when coin creation completes
-          });
+          await this.sessionManager.updateGroupState(
+            creatorAddress,
+            message.conversationId,
+            {
+              pendingTransaction: undefined,
+              managementProgress: undefined, // Clear management progress when coin creation completes
+            }
+          );
 
-          // If user was onboarding, complete onboarding
-          if (userState.status === "onboarding") {
-            await this.sessionManager.completeOnboarding(creatorAddress);
+          // Update user status to active after successful coin launch
+          if (userState.status === "new" || userState.status === "onboarding") {
+            await this.sessionManager.updateUserState(creatorAddress, {
+              status: "active",
+            });
 
-            // Send onboarding completion message immediately when first coin is launched
-            const completionMessage = `🎉 onboarding complete! you've got groups and coins set up.`;
-            await conversation.send(completionMessage);
+            // Send completion message for new users
+            if (userState.status === "new") {
+              const completionMessage = `🎉 coin launched! you're now active and earning fees from trading.`;
+              await conversation.send(completionMessage);
+            } else {
+              // Send onboarding completion message for onboarding users
+              const completionMessage = `🎉 onboarding complete! you've got groups and coins set up.`;
+              await conversation.send(completionMessage);
+            }
           }
         }
 
@@ -1394,10 +1545,14 @@ export class EnhancedMessageCoordinator {
         );
         const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
 
-        await this.sessionManager.updateUserState(creatorAddress, {
-          pendingTransaction: undefined,
-          managementProgress: undefined, // Clear management progress on system error
-        });
+        await this.sessionManager.updateGroupState(
+          creatorAddress,
+          message.conversationId,
+          {
+            pendingTransaction: undefined,
+            managementProgress: undefined, // Clear management progress on system error
+          }
+        );
       } catch (notificationError) {
         console.error(
           "Failed to send error notification to user:",
@@ -1923,6 +2078,36 @@ export class EnhancedMessageCoordinator {
       return true;
     }
 
+    // Special case: Check if user has ongoing coin launch process and this is an attachment
+    // Coin launches often involve images, so we should process attachment-only messages
+    if (primaryMessage.contentType?.sameAs(ContentTypeRemoteAttachment)) {
+      const creatorAddress = await this.getCreatorAddressFromInboxId(
+        senderInboxId
+      );
+      if (creatorAddress) {
+        const groupState = await this.sessionManager.getGroupState(
+          creatorAddress,
+          conversationId
+        );
+
+        if (groupState.coinLaunchProgress) {
+          console.log("🪙 COIN LAUNCH IN PROGRESS - processing attachment", {
+            senderInboxId: senderInboxId.slice(0, 8) + "...",
+            conversationId: conversationId.slice(0, 8) + "...",
+            step: groupState.coinLaunchProgress.step,
+          });
+
+          // Start/update active thread since they're providing content for their coin launch
+          await this.updateActiveThread(
+            conversationId,
+            senderInboxId,
+            primaryMessage
+          );
+          return true;
+        }
+      }
+    }
+
     // REMOVED: Critical process logic was too broad and caused bot to respond to all messages
     // The bot should ONLY respond when explicitly mentioned or in active conversation thread
     // Having ongoing processes doesn't mean every message should be processed
@@ -2076,21 +2261,24 @@ export class EnhancedMessageCoordinator {
       senderInboxId
     );
     if (creatorAddress) {
-      const userState = await this.sessionManager.getUserState(creatorAddress);
+      const groupState = await this.sessionManager.getGroupState(
+        creatorAddress,
+        conversationId
+      );
       const hasActiveFlow =
-        userState.pendingTransaction ||
-        userState.onboardingProgress ||
-        userState.managementProgress ||
-        userState.coinLaunchProgress;
+        groupState.pendingTransaction ||
+        groupState.onboardingProgress ||
+        groupState.managementProgress ||
+        groupState.coinLaunchProgress;
 
       if (hasActiveFlow) {
         console.log("⚡ ACTIVE FLOW DETECTED - skipping engagement check", {
           conversationId: conversationId.slice(0, 8) + "...",
           userId: senderInboxId.slice(0, 8) + "...",
-          pendingTx: userState.pendingTransaction?.type,
-          onboarding: !!userState.onboardingProgress,
-          management: !!userState.managementProgress,
-          coinLaunch: !!userState.coinLaunchProgress,
+          pendingTx: groupState.pendingTransaction?.type,
+          onboarding: !!groupState.onboardingProgress,
+          management: !!groupState.managementProgress,
+          coinLaunch: !!groupState.coinLaunchProgress,
         });
 
         // Update thread activity and return true
@@ -2538,6 +2726,93 @@ Respond: "YES:reason" or "NO:reason"`;
     } catch (error) {
       console.error("Error getting creator address from inbox ID:", error);
       return undefined;
+    }
+  }
+
+  /**
+   * Ensure that a group exists in the user state for all chat room members
+   * This creates the group if it doesn't exist
+   */
+  private async ensureGroupExistsForChatRoom(
+    conversation: any,
+    groupAddress: string,
+    chainId: number,
+    chainName: "base" | "baseSepolia"
+  ): Promise<void> {
+    try {
+      // Get all chat room members
+      const members = await conversation.members();
+
+      // Generate a fun group name
+      const groupName = `Chat Room ${groupAddress.slice(
+        0,
+        6
+      )}...${groupAddress.slice(-4)}`;
+
+      // Get all member addresses and create receivers array
+      const receivers = [];
+      for (const member of members) {
+        if (member.inboxId !== this.client.inboxId) {
+          const memberInboxState =
+            await this.client.preferences.inboxStateFromInboxIds([
+              member.inboxId,
+            ]);
+          if (
+            memberInboxState.length > 0 &&
+            memberInboxState[0].identifiers.length > 0
+          ) {
+            const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            receivers.push({
+              username: `${memberAddress.slice(0, 6)}...${memberAddress.slice(
+                -4
+              )}`,
+              resolvedAddress: memberAddress,
+              percentage: 100 / (members.length - 1), // Equal split excluding bot
+            });
+          }
+        }
+      }
+
+      // Create the group object
+      const newGroup = {
+        id: groupAddress,
+        name: groupName,
+        createdBy: conversation.creatorInboxId || "unknown",
+        type: "username_split" as const,
+        receivers,
+        coins: [],
+        chainId,
+        chainName,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      // Add the group to all members who don't have it
+      const promises = receivers.map(async (receiver) => {
+        const userState = await this.sessionManager.getUserState(
+          receiver.resolvedAddress
+        );
+
+        // Check if they already have this group
+        const existingGroup = userState.groups.find(
+          (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+        );
+
+        if (!existingGroup) {
+          await this.sessionManager.addGroup(
+            receiver.resolvedAddress,
+            newGroup
+          );
+        }
+      });
+
+      await Promise.all(promises);
+
+      console.log(
+        `[GroupCreation] Created group ${groupAddress} for ${receivers.length} members`
+      );
+    } catch (error) {
+      console.error(`Failed to ensure group exists for chat room:`, error);
     }
   }
 }

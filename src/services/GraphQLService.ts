@@ -14,7 +14,7 @@ export interface GroupData {
       imageId: string;
       totalHolders: number;
       marketCapUSDC: string;
-      priceChangePercentage: number;
+      priceChangePercentage: string;
       pool: {
         totalFeesUSDC: string;
       };
@@ -48,6 +48,9 @@ export class GraphQLService {
     chainConfig?: ChainConfig
   ): Promise<GroupData[]> {
     if (groupAddresses.length === 0) {
+      console.log(
+        `[GraphQL] ⚠️  No group addresses provided, returning empty array`
+      );
       return [];
     }
 
@@ -95,6 +98,9 @@ export class GraphQLService {
           chainConfig ? chainConfig.displayName : "Base Mainnet"
         }`
       );
+      console.log(`[GraphQL] Group addresses:`, groupAddresses);
+      console.log(`[GraphQL] API URL: ${this.apiUrl}/graphql`);
+      console.log(`[GraphQL] Headers:`, headers);
 
       const response = await fetch(`${this.apiUrl}/graphql`, {
         method: "POST",
@@ -102,7 +108,13 @@ export class GraphQLService {
         body: JSON.stringify({ query }),
       });
 
+      console.log(
+        `[GraphQL] Response status: ${response.status} ${response.statusText}`
+      );
+
       if (!response.ok) {
+        const responseText = await response.text();
+        console.error(`[GraphQL] Error response body:`, responseText);
         throw new Error(
           `GraphQL request failed: ${response.status} ${response.statusText}`
         );
@@ -111,7 +123,7 @@ export class GraphQLService {
       const result: GraphQLResponse = await response.json();
 
       if (result.errors) {
-        console.error("GraphQL errors:", result.errors);
+        console.error("[GraphQL] GraphQL errors:", result.errors);
         throw new Error(
           `GraphQL errors: ${result.errors.map((e) => e.message).join(", ")}`
         );
@@ -121,9 +133,37 @@ export class GraphQLService {
         `[GraphQL] ✅ Fetched ${result.data.addressFeeSplitManagers.length} groups`
       );
 
+      // Log detailed group information
+      result.data.addressFeeSplitManagers.forEach((group, index) => {
+        console.log(`[GraphQL] Group ${index + 1}:`);
+        console.log(`  • ID: ${group.id}`);
+        console.log(`  • Recipients: ${group.recipients.length}`);
+        console.log(`  • Holdings (coins): ${group.holdings.length}`);
+
+        if (group.holdings.length > 0) {
+          group.holdings.forEach((holding, holdingIndex) => {
+            console.log(
+              `    Coin ${holdingIndex + 1}: ${holding.collectionToken.name} (${
+                holding.collectionToken.symbol
+              })`
+            );
+            console.log(`      • Contract: ${holding.collectionToken.id}`);
+            console.log(
+              `      • Holders: ${holding.collectionToken.totalHolders}`
+            );
+            console.log(
+              `      • Market Cap: $${holding.collectionToken.marketCapUSDC}`
+            );
+            console.log(
+              `      • Fees: $${holding.collectionToken.pool.totalFeesUSDC}`
+            );
+          });
+        }
+      });
+
       return result.data.addressFeeSplitManagers;
     } catch (error) {
-      console.error("Failed to fetch group data:", error);
+      console.error("[GraphQL] ❌ Failed to fetch group data:", error);
       throw error;
     }
   }
