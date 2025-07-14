@@ -360,6 +360,15 @@ Return JSON:
 
     // SIMPLIFIED PRIORITY LOGIC
 
+    // Priority 0: HIGHEST PRIORITY - Continue existing coin launch progress
+    // This ensures attachment-only messages during coin launch go to the right flow
+    if (groupState.coinLaunchProgress) {
+      console.log(
+        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
+      );
+      return "coin_launch";
+    }
+
     // Priority 1: High-confidence status inquiries always go to QA
     if (
       primaryIntent.action === "inquiry" &&

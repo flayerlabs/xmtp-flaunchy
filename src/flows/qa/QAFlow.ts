@@ -44,6 +44,28 @@ export class QAFlow extends BaseFlow {
           extraction.tokenDetails.ticker ||
           context.hasAttachment)
       ) {
+        // GUARD: Don't override existing coin launch progress
+        if (context.groupState.coinLaunchProgress) {
+          console.log(
+            "🚨 QAFlow detected coin launch but existing progress exists - not overriding"
+          );
+          this.log(
+            "Existing coin launch progress detected, not overriding in QA flow",
+            {
+              userId: context.userState.userId,
+              existingStep: context.groupState.coinLaunchProgress.step,
+              existingCoinData: context.groupState.coinLaunchProgress.coinData,
+            }
+          );
+
+          // Send a message acknowledging the existing progress
+          await this.sendResponse(
+            context,
+            "you already have a coin launch in progress! continue with the current launch or type 'cancel' to start over."
+          );
+          return;
+        }
+
         this.log(
           "Coin launch detected in QA flow, redirecting to coin launch",
           {

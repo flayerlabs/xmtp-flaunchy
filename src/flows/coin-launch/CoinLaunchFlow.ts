@@ -293,6 +293,54 @@ export class CoinLaunchFlow extends BaseFlow {
     const { groupState } = context;
     const progress = groupState.coinLaunchProgress!;
 
+    // SPECIAL CASE: If we're in collecting_coin_data step and user sends only attachment
+    // (no meaningful text), handle it as providing the missing image
+    if (
+      progress.step === "collecting_coin_data" &&
+      context.hasAttachment &&
+      (!context.messageText ||
+        context.messageText.trim().length === 0 ||
+        context.messageText.trim() === "...")
+    ) {
+      console.log(
+        "🖼️ Handling attachment-only message during collecting_coin_data step"
+      );
+
+      // Update the image data directly since we know they're providing the missing image
+      progress.coinData = progress.coinData || {};
+      progress.coinData.image = "attachment_provided";
+
+      // Update the progress
+      await context.updateGroupState({ coinLaunchProgress: progress });
+
+      // Send acknowledgment
+      await this.sendResponse(context, "got the image! 📸");
+
+      // Check if we now have all required data
+      const coinData = progress.coinData;
+      const hasAll = coinData.name && coinData.ticker && coinData.image;
+
+      if (hasAll) {
+        // Get manager info and launch
+        const managerInfo = await this.getChatRoomManagerAddress(context);
+        const fullCoinData = {
+          ...coinData,
+          startingMarketCap: progress.launchParameters?.startingMarketCap,
+          fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
+          premineAmount: progress.launchParameters?.premineAmount,
+          buybackPercentage: progress.launchParameters?.buybackPercentage,
+          targetGroup: managerInfo.address,
+        } as Required<CoinLaunchData>;
+
+        await this.launchCoin(context, fullCoinData);
+        return;
+      } else {
+        // Still missing other data
+        await this.requestMissingData(context, coinData);
+        return;
+      }
+    }
+
     // Extract additional data from the current message
     const currentData = await this.extractCoinData(context);
     let updated = false;
