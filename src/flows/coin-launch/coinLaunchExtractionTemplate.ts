@@ -20,6 +20,8 @@ Pattern 1: Key-Value format (HIGHEST PRIORITY)
 - "Ticker: YTBE" → name: null, ticker: "YTBE"
 - "Name: Test Token" → name: "Test Token", ticker: null
 - "Ticker: TEST" → name: null, ticker: "TEST"
+- "Ticker and Name Test" → name: "Test", ticker: "TEST"
+- "Name and Ticker Test" → name: "Test", ticker: "TEST"
 
 Pattern 2: "Name (TICKER)" format
 - "Timer (TIME)" → name: "Timer", ticker: "TIME"
