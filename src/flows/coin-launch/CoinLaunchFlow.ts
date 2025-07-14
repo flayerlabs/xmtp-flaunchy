@@ -349,15 +349,15 @@ export class CoinLaunchFlow extends BaseFlow {
     progress.coinData = progress.coinData || {};
 
     // Update with any new data found
-    if (currentData.name && !progress.coinData.name) {
+    if (currentData.name && currentData.name !== progress.coinData.name) {
       progress.coinData.name = currentData.name;
       updated = true;
     }
-    if (currentData.ticker && !progress.coinData.ticker) {
+    if (currentData.ticker && currentData.ticker !== progress.coinData.ticker) {
       progress.coinData.ticker = currentData.ticker;
       updated = true;
     }
-    if (currentData.image && !progress.coinData.image) {
+    if (currentData.image && currentData.image !== progress.coinData.image) {
       progress.coinData.image = currentData.image;
       updated = true;
     }
@@ -891,6 +891,16 @@ export class CoinLaunchFlow extends BaseFlow {
     if (!coinData.ticker) missing.push("ticker");
     if (!coinData.image) missing.push("image");
 
+    // Build coin identifier string for existing data
+    let coinIdentifier = "";
+    if (coinData.ticker && coinData.name) {
+      coinIdentifier = `for coin name "${coinData.name}" ($${coinData.ticker}) `;
+    } else if (coinData.name) {
+      coinIdentifier = `for coin name "${coinData.name}" `;
+    } else if (coinData.ticker) {
+      coinIdentifier = `for $${coinData.ticker} `;
+    }
+
     // Check if user is in onboarding (first coin) vs existing user
     const isFirstCoin =
       context.userState.status === "onboarding" ||
@@ -905,7 +915,7 @@ export class CoinLaunchFlow extends BaseFlow {
           'let\'s launch your first coin!\n\ni need three things to get started:\n• coin name (e.g., "Flaunchy")\n• ticker (e.g., "FLNCHY")\n• image (upload or link an image)\n\njust send them all in one message and let\'s make this happen!';
       } else {
         // They've provided some info
-        message = `awesome progress on your first coin! just need: ${missing.join(
+        message = `awesome progress on your first coin! ${coinIdentifier}just need: ${missing.join(
           ", "
         )}\n\nsend the missing info and we'll get this live!`;
       }
@@ -916,7 +926,7 @@ export class CoinLaunchFlow extends BaseFlow {
           ", "
         )}\n\nsend the details and let's get this one live!`;
       } else {
-        message = `almost there! still need: ${missing.join(
+        message = `almost there! ${coinIdentifier}still need: ${missing.join(
           ", "
         )}\n\nprovide the missing info to launch!`;
       }

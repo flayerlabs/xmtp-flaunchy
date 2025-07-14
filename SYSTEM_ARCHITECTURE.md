@@ -22,54 +22,67 @@ This document provides comprehensive diagrams for all components of the XMTP Fla
 
 ## 1. Application Initialization & Main Flow
 
-This diagram shows the complete startup process from environment loading to the message processing loop, including XMTP client creation and component initialization.
+This diagram shows the complete startup process from environment loading to the message processing loop, including XMTP client creation and component initialization with monitoring.
 
 ```mermaid
 graph TD
-    A[Start Application] --> B[Load Environment Variables]
-    B --> C[Create OpenAI Client]
-    C --> D[Create Signer & Encryption Key]
-    D --> E[Try Reuse Existing XMTP Installation]
+    A[Start Application] --> B[main Function]
+    B --> C[Create XMTPStatusMonitor]
+    C --> D[startWithMonitoring with createApplication factory]
+    D --> E[Execute createApplication Function]
 
-    E --> F{Installation Exists?}
-    F -->|Yes| G[InstallationManager.buildExistingClient]
-    F -->|No| H[InstallationManager.createClient]
+    E --> F[Validate Environment Variables]
+    F --> G[Create OpenAI Client]
+    G --> H[Create Signer & Encryption Key]
+    H --> I[Ensure Storage Directory Exists]
+    I --> J[Try Reuse Existing XMTP Installation]
 
-    G --> I{Client Creation Success?}
-    H --> J{Hit Installation Limit?}
-    J -->|Yes| K[onInstallationLimitExceeded Callback]
-    J -->|No| I
-    I -->|No| H
+    J --> K{buildExistingClient Success?}
+    K -->|Yes| L[Use Existing Client]
+    K -->|No| M[InstallationManager.createClient]
 
-    I -->|Yes| L[Initialize Core Components]
-    L --> M[FileStateStorage - user-states.json]
-    L --> N[SessionManager]
-    L --> O[Flow Registry - QA, Management, CoinLaunch]
-    L --> P[FlowRouter]
-    L --> Q[EnhancedMessageCoordinator]
-    L --> R[XMTPStatusMonitor]
+    M --> N{Hit Installation Limit?}
+    N -->|Yes| O[onInstallationLimitExceeded Callback]
+    N -->|No| P[Client Created Successfully]
+    O --> Q{Retry Allowed?}
+    Q -->|Yes| M
+    Q -->|No| R[Exit with Error]
 
-    M --> S[Sync Conversations]
-    N --> S
-    O --> S
+    L --> S[Initialize Core Components]
     P --> S
-    Q --> S
-    R --> S
 
-    S --> T[Start Message Stream]
-    T --> U[Create Status Monitor]
-    U --> V[Start With Monitoring]
-    V --> W[Begin Message Processing Loop]
+    S --> T[FileStateStorage - user-states.json]
+    S --> U[SessionManager with StateStorage]
+    S --> V[Flow Registry - QA, Management, CoinLaunch]
+    S --> W[FlowRouter with OpenAI]
+    S --> X[EnhancedMessageCoordinator with 1s coordination]
+    S --> Y[XMTPStatusMonitor for volume path]
 
-    W --> X[Listen for Messages]
-    X --> Y[Process Each Message]
-    Y --> Z[messageCoordinator.processMessage]
-    Z --> X
+    T --> Z[Sync Conversations]
+    U --> Z
+    V --> Z
+    W --> Z
+    X --> Z
+
+    Z --> AA[Start Message Stream]
+    AA --> BB[Create Background Message Processing Promise]
+    BB --> CC[For Each Message in Stream]
+    CC --> DD[Process via messageCoordinator.processMessage]
+    DD --> EE[Handle Errors with Fallback Response]
+    EE --> CC
+
+    FF[Return Application Resources] --> GG[client, statusMonitor, messageStream, cleanup]
+    GG --> HH[Status Monitor Starts Monitoring]
+    HH --> II[Application Running with Auto-Restart]
+
+    Y --> FF
+    AA --> FF
 
     style A fill:#1565C0,color:#ffffff
-    style L fill:#7B1FA2,color:#ffffff
-    style S fill:#2E7D32,color:#ffffff
-    style W fill:#F57C00,color:#ffffff
+    style S fill:#7B1FA2,color:#ffffff
+    style Z fill:#2E7D32,color:#ffffff
+    style BB fill:#F57C00,color:#ffffff
+    style II fill:#4CAF50,color:#ffffff
 ```
 
 ---
@@ -147,21 +160,20 @@ graph TD
     G -->|Yes| H[handleTransactionReference with Null Checks]
     G -->|No| I{Skip Transaction Receipts '...'?}
     I -->|Yes| D
-    I -->|No| J[Determine Message Type]
+    I -->|No| J[Determine Message Type & Queue]
 
-    H --> H1[Check Message Content]
-    H1 --> H2{Content Exists?}
+    H --> H1[Validate Message Content & Reference]
+    H1 --> H2{Valid TX Hash?}
     H2 -->|No| H3[Log Error & Return false]
-    H2 -->|Yes| H4[Check Transaction Reference]
-    H4 --> H5{Transaction Ref Exists?}
+    H2 -->|Yes| H4[Get User & Group State]
+    H4 --> H5{Pending Transaction?}
     H5 -->|No| H3
-    H5 -->|Yes| H6[Check TX Hash]
-    H6 --> H7{TX Hash Exists?}
-    H7 -->|No| H3
-    H7 -->|Yes| H8[Process Transaction]
-    H8 --> H9[Update User Status to Active]
-    H9 --> H10[Ensure Group Exists for Chat Room]
-    H10 --> H11[Store Coin for All Members]
+    H5 -->|Yes| H6[Process Transaction Receipt]
+    H6 --> H7[Extract Contract Address from Receipt]
+    H7 --> H8[Update User Status to Active]
+    H8 --> H9[Ensure Group Exists for Chat Room]
+    H9 --> H10[Store Coin for All Members]
+    H10 --> H11[Clear Progress & Pending TX]
 
     J --> K{Is Attachment?}
     K -->|Yes| L[Add to Attachment Queue]
@@ -184,173 +196,188 @@ graph TD
     T --> V
     U --> V
 
-    V --> W[Get Primary Message]
-    W --> X[Get Related Messages]
-    X --> Y[Get Conversation & Sender Info]
-    Y --> Z[Check Member Count]
+    V --> W[Get Primary Message & Related Messages]
+    W --> X[Get Conversation & Check Member Count]
+    X --> Y{Is Direct Message?}
+    Y -->|Yes| Z[Detect Intent with FlowRouter]
+    Y -->|No| AA[Get User State by Address]
 
-    Z --> AA{Is Direct Message?}
-    AA -->|Yes| BB[Detect Intent with FlowRouter]
-    AA -->|No| CC[Get User State by Address]
+    Z --> BB{Management/Coin Launch Intent?}
+    BB -->|Yes| CC[Send Group Requirement Message]
+    BB -->|No| DD[Continue to QA Flow Processing]
 
-    BB --> DD{Management/Coin Launch?}
-    DD -->|Yes| EE[Send Group Requirement Message]
-    DD -->|No| FF[Continue to QA Flow]
+    CC --> EE[Return true - DM Handled]
+    DD --> AA
 
-    EE --> GG[Return true - DM Handled]
-    FF --> CC
+    AA --> FF[Get Group State & Check Reply Context]
+    FF --> GG[shouldProcessMessage with Advanced Filtering]
+    GG --> HH{Should Process?}
+    HH -->|No| II[Return false]
+    HH -->|Yes| JJ[Send Paw Reaction 🐾]
 
-    CC --> HH[shouldProcessMessage]
-    HH --> II{Should Process?}
-    II -->|No| JJ[Return false]
-    II -->|Yes| KK[Send Paw Reaction 🐾]
-
-    KK --> LL[createFlowContext with isDirectMessage]
-    LL --> MM[Extract Message Text & Attachments]
-    MM --> NN[Create Helper Functions]
-    NN --> OO[flowRouter.routeMessage]
+    JJ --> KK[createFlowContext with All Context]
+    KK --> LL[Extract Combined Message Text & Attachments]
+    LL --> MM[Create Helper Functions & Services]
+    MM --> NN[flowRouter.routeMessage with Multi-Intent]
 
     style A fill:#1565C0,color:#ffffff
     style V fill:#7B1FA2,color:#ffffff
-    style AA fill:#F57C00,color:#ffffff
-    style EE fill:#D32F2F,color:#ffffff
+    style Y fill:#F57C00,color:#ffffff
+    style CC fill:#D32F2F,color:#ffffff
     style H fill:#8E24AA,color:#ffffff
-    style H8 fill:#2E7D32,color:#ffffff
+    style H6 fill:#2E7D32,color:#ffffff
+    style H8 fill:#388E3C,color:#ffffff
     style H9 fill:#388E3C,color:#ffffff
     style H10 fill:#388E3C,color:#ffffff
-    style H11 fill:#388E3C,color:#ffffff
-    style OO fill:#2E7D32,color:#ffffff
+    style GG fill:#4CAF50,color:#ffffff
+    style NN fill:#2E7D32,color:#ffffff
 ```
 
 ---
 
 ## 4. Enhanced Message Coordinator - Message Filtering
 
-This diagram shows the sophisticated filtering system that determines whether to process messages in group chats based on mentions, replies, and active threads.
+This diagram shows the sophisticated filtering system that determines whether to process messages in group chats based on mentions, replies, active threads, and special coin launch contexts.
 
 ```mermaid
 graph TD
     A[shouldProcessMessage] --> B{Is Group Chat?}
     B -->|No| C[Always Process - 1:1 Chat]
-    B -->|Yes| D[Extract Combined Message Text]
+    B -->|Yes| D[Extract Combined Message Text from Primary + Related]
 
-    D --> E[isReplyToAgentMessage]
-    E --> F{Reply to Agent?}
-    F -->|Yes| G[Update Active Thread]
-    G --> H[Return true - High Confidence]
+    D --> E{Coin Launch Progress + Image Only?}
+    E -->|Yes| F[Update Active Thread - Processing]
+    F --> G[Return true - Coin Data Collection]
 
-    F -->|No| I{Is Reply to Other User?}
-    I -->|Yes| J[detectExplicitAgentMention]
-    J --> K{Has @mention?}
-    K -->|No| L[Return false - Ignore]
-    K -->|Yes| M[Process with Mention]
+    E -->|No| H{Reply to Image During Coin Launch?}
+    H -->|Yes| I[Update Active Thread - Processing]
+    I --> J[Return true - Coin Launch Context]
 
-    I -->|No| N[detectObviousAgentMention]
-    N --> O{Obvious Mention?}
-    O -->|Yes| P[Update Active Thread]
-    P --> Q[Return true - Obvious]
+    H -->|No| K[isReplyToAgentMessage]
+    K --> L{Reply to Agent?}
+    L -->|Yes| M{Non-Text Reply?}
+    M -->|Yes| N[Update Active Thread - Don't Process]
+    M -->|No| O[Update Active Thread - Process]
 
-    O -->|No| R[checkConversationEngagement - LLM]
-    R --> S{LLM Detects Engagement?}
-    S -->|Yes| T[Update Active Thread]
-    T --> U[Return true - LLM Detected]
+    N --> P[Return false - Non-Text Reply]
+    O --> Q[Return true - High Confidence]
 
-    S -->|No| V[isInActiveThread]
-    V --> W{In Active Thread?}
-    W -->|Yes| X[Update Thread Activity]
-    X --> Y[Return true - Continue Thread]
+    L -->|No| R{Is Reply to Other User?}
+    R -->|Yes| S[detectExplicitAgentMention]
+    S --> T{Has @mention?}
+    T -->|No| U[Return false - Ignore Reply]
+    T -->|Yes| V[Process with Explicit Mention]
 
-    W -->|No| Z[Return false - Ignore]
+    R -->|No| W[detectObviousAgentMention]
+    W --> X{Obvious Mention?}
+    X -->|Yes| Y[Update Active Thread]
+    Y --> Z[Return true - Obvious Mention]
+
+    X -->|No| AA[Return false - No Engagement]
 
     style A fill:#1565C0,color:#ffffff
-    style F fill:#D32F2F,color:#ffffff
-    style G fill:#D32F2F,color:#ffffff
-    style K fill:#F57C00,color:#ffffff
-    style P fill:#2E7D32,color:#ffffff
-    style R fill:#388E3C,color:#ffffff
-    style S fill:#388E3C,color:#ffffff
-    style T fill:#388E3C,color:#ffffff
-    style U fill:#4CAF50,color:#ffffff
-    style V fill:#4CAF50,color:#ffffff
-    style W fill:#4CAF50,color:#ffffff
-    style X fill:#4CAF50,color:#ffffff
-    style Z fill:#2E7D32,color:#ffffff
+    style E fill:#8E24AA,color:#ffffff
+    style F fill:#4CAF50,color:#ffffff
+    style G fill:#4CAF50,color:#ffffff
+    style L fill:#D32F2F,color:#ffffff
+    style O fill:#D32F2F,color:#ffffff
+    style Q fill:#4CAF50,color:#ffffff
+    style T fill:#F57C00,color:#ffffff
+    style V fill:#2E7D32,color:#ffffff
+    style Y fill:#2E7D32,color:#ffffff
+    style Z fill:#4CAF50,color:#ffffff
+    style AA fill:#607D8B,color:#ffffff
+
+    classDef removed fill:#ffcccc,stroke:#ff6666,stroke-width:2px,color:#000000
+
+    BB[REMOVED: LLM Engagement Check]:::removed
+    CC[REMOVED: Active Thread Continuation]:::removed
+    DD[REMOVED: Complex Thread Management]:::removed
+    EE["Note: LLM engagement detection and active thread<br/>continuation logic has been simplified to reduce<br/>costs and improve reliability"]:::removed
 ```
 
 ---
 
 ## 5. Flow Router & Intent Classification
 
-This diagram documents the updated LLM-based intent classification system that routes messages to appropriate flows based on user intent and context, with priority handling for existing coin launch progress.
+This diagram documents the updated LLM-based intent classification system that routes messages to appropriate flows based on user intent and context, with sophisticated multi-intent detection and priority-based routing.
 
 ```mermaid
 graph TD
     A[FlowRouter.routeMessage] --> B{Skip '...' Messages?}
     B -->|Yes| C[Return - Transaction Receipt]
-    B -->|No| D[detectMultipleIntents]
+    B -->|No| D[detectMultipleIntents with GPT-4o-mini]
 
-    D --> E[Build Context Prompt]
-    E --> F[User Status, Groups, Coins, Pending TX]
-    F --> G[GPT-4o-mini Classification]
+    D --> E[Build Comprehensive Context Prompt]
+    E --> F[User Status, Groups, Coins, Pending TX, Message Analysis]
+    F --> G[Critical Coin Launch Pattern Detection]
+    G --> H[Context-Aware Intent Classification]
 
-    G --> H[Parse Primary Intent]
-    H --> I[Parse Secondary Intents]
-    I --> J[Parse Flags]
+    H --> I[Parse Primary Intent with Confidence]
+    I --> J[Parse Secondary Intents Array]
+    J --> K[Parse Flags - Greeting, Transaction, Status, Cancellation]
 
-    J --> K[Validate & Sanitize Results]
-    K --> L[getPrimaryFlow]
+    K --> L[Validate & Sanitize Multi-Intent Result]
+    L --> M[getPrimaryFlow with Priority System]
 
-    L --> M{PRIORITY 0: Existing Coin Launch?}
-    M -->|Yes| N[coin_launch - Continue Progress]
-    M -->|No| O{PRIORITY 1: High Confidence Status?}
+    M --> N{PRIORITY 0: Existing Coin Launch Progress?}
+    N -->|Yes| O[coin_launch - Continue Progress]
+    N -->|No| P{PRIORITY 1: High Confidence Status Inquiry?}
 
-    O -->|Yes| P[QA Flow - Status Inquiry]
-    O -->|No| Q{PRIORITY 2: Action Type?}
+    P -->|Yes| Q[qa - Status Inquiry with Live Data]
+    P -->|No| R{PRIORITY 2: Action Type Classification?}
 
-    Q -->|coin_launch| R[coin_launch - New Launch]
-    Q -->|modify_existing| S{Modify What?}
-    Q -->|other| T[Continue to Lower Priority]
+    R -->|coin_launch| S[coin_launch - New Launch with Auto Group]
+    R -->|modify_existing| T{Modify Existing What?}
+    R -->|other| U[Continue to Lower Priority]
 
-    S -->|coin_creation| U[coin_launch - Modify Coin]
-    S -->|group_creation| V[management - Modify Group]
-    S -->|none| W[management - General]
+    T -->|coin_creation| V[coin_launch - Modify Coin Parameters]
+    T -->|group_creation| W[management - Modify Group]
+    T -->|none| X[management - General Management]
 
-    T --> X{PRIORITY 3: Question Type?}
-    X -->|inquiry| Y[QA Flow - General Questions]
-    X -->|other| Z{PRIORITY 4: Management?}
+    U --> Y{PRIORITY 3: Question Type?}
+    Y -->|inquiry| Z[qa - General Questions & Help]
+    Y -->|other| AA{PRIORITY 4: Management Tasks?}
 
-    Z -->|management/cancel| AA[management - Tasks]
-    Z -->|other| BB{PRIORITY 5: Social?}
+    AA -->|management/cancel| BB[management - Task Management]
+    AA -->|other| CC{PRIORITY 5: Social Interaction?}
 
-    BB -->|social/greeting| CC[QA Flow - Explain Agent]
-    BB -->|other| DD[QA Flow - Help & Fallback]
+    CC -->|social/greeting| DD[qa - Explain Agent Capabilities]
+    CC -->|other| EE[qa - Help & Fallback]
 
-    N --> EE[Add Multi-Intent to Context]
-    P --> EE
-    R --> EE
-    U --> EE
-    V --> EE
-    W --> EE
-    Y --> EE
-    AA --> EE
-    CC --> EE
-    DD --> EE
+    O --> FF[Add Multi-Intent Result to Context]
+    Q --> FF
+    S --> FF
+    V --> FF
+    W --> FF
+    X --> FF
+    Z --> FF
+    BB --> FF
+    DD --> FF
+    EE --> FF
 
-    EE --> FF[Execute Flow.processMessage]
+    FF --> GG[Execute Flow.processMessage with Full Context]
+
+    HH[Enhanced Features] --> II[Coin Launch Pattern Recognition]
+    HH --> JJ[Secondary Intent Handling]
+    HH --> KK[Context-Aware Routing]
+    HH --> LL[Confidence-Based Priority]
 
     style A fill:#1565C0,color:#ffffff
     style D fill:#7B1FA2,color:#ffffff
-    style L fill:#F57C00,color:#ffffff
-    style M fill:#D32F2F,color:#ffffff
-    style N fill:#4CAF50,color:#ffffff
-    style FF fill:#2E7D32,color:#ffffff
+    style E fill:#8E24AA,color:#ffffff
+    style M fill:#F57C00,color:#ffffff
+    style N fill:#D32F2F,color:#ffffff
+    style O fill:#4CAF50,color:#ffffff
+    style GG fill:#2E7D32,color:#ffffff
+    style HH fill:#FF9800,color:#ffffff
 ```
 
 ---
 
 ## 6. User State Management & Storage
 
-This diagram explains how user data is stored in `user-states.json`, including state creation, updates, multi-user group management, and improved live data injection.
+This diagram explains how user data is stored in `user-states.json`, including state creation, updates, multi-user group management, group-specific states, and advanced live data injection.
 
 ```mermaid
 graph TD
@@ -360,75 +387,87 @@ graph TD
     C --> D[FileStateStorage.get]
     D --> E{User State Exists?}
     E -->|No| F[createNewUserState]
-    E -->|Yes| G[Load from user-states.json]
+    E -->|Yes| G[Load from user-states.json with Date Parsing]
 
     F --> H[Initialize New User]
     H --> I[Status: 'new']
     I --> J[Empty Groups & Coins Arrays]
-    J --> K[Default Preferences]
-    K --> L[Save to Storage]
+    J --> K[Empty GroupStates Object]
+    K --> L[Default Preferences]
+    L --> M[Save to Storage]
 
-    G --> M[Parse JSON & Convert Dates]
-    M --> N[Return User State]
+    G --> N[Parse JSON & Convert Date Objects]
+    N --> O[Return User State with GroupStates]
 
-    L --> O[User State Available]
-    N --> O
+    M --> P[User State Available]
+    O --> P
 
-    O --> P[Flow Processing]
-    P --> Q[SessionManager.updateUserState]
-    Q --> R[Merge Updates with Current State]
-    R --> S[Set updatedAt = now]
-    S --> T[FileStateStorage.set]
+    P --> Q[Flow Processing Requires Group State]
+    Q --> R[SessionManager.getGroupState]
+    R --> S[Extract Group-Specific State]
+    S --> T[Return GroupState for Conversation]
 
-    T --> U[Convert to JSON]
-    U --> V[Write to user-states.json]
+    U[Flow Updates Group State] --> V[SessionManager.updateGroupState]
+    V --> W[Merge Updates with Group-Specific State]
+    W --> X[Update User.groupStates[groupId]]
+    X --> Y[Set updatedAt = now]
+    Y --> Z[FileStateStorage.set]
 
-    W[GroupStorageService] --> X[Add Groups to All Members]
-    X --> Y[Iterate All Receiver Addresses]
-    Y --> Z[Get/Create User State for Each]
-    Z --> AA[Add Group to Each User]
-    AA --> BB[Update Status to 'invited']
+    Z --> AA[Convert to JSON with Date Serialization]
+    AA --> BB[Write to user-states.json]
 
-    CC[UserDataService] --> DD[Inject Live Data]
-    DD --> EE[Fetch from GraphQL API]
-    EE --> FF[Update Groups with Live Data]
-    FF --> GG[Update Coins with Live Data]
-    GG --> HH[Return Enriched State]
+    CC[GroupStorageService] --> DD[storeGroupForAllReceivers]
+    DD --> EE[Collect All Ethereum Addresses]
+    EE --> FF[Iterate All Receiver Addresses]
+    FF --> GG[Get/Create User State for Each Address]
+    GG --> HH[Check if User Exists]
+    HH --> II{User Existed Before?}
+    II -->|No| JJ[Mark as 'invited']
+    II -->|Yes| KK[Keep Current Status]
+    JJ --> LL[Add Group to User]
+    KK --> LL
 
-    II[SessionManager.getUserStateWithLiveData] --> JJ{User has Groups or Coins?}
-    JJ -->|Yes| KK[Inject Live Data Regardless of Status]
-    JJ -->|No| LL[Return State Without Live Data]
+    MM[UserDataService] --> NN[injectGroupData]
+    NN --> OO[Fetch from GraphQL API]
+    OO --> PP[Update Groups with Live Data]
+    PP --> QQ[Update Coins with Live Data]
+    QQ --> RR[Discover New Coins from API]
+    RR --> SS[Return Enriched State]
 
-    KK --> MM[Log: Injecting Live Data]
-    MM --> NN[Call UserDataService.injectGroupData]
-    NN --> OO[Save Enriched State to Storage]
-    OO --> PP[Return Enriched State]
+    TT[SessionManager.getUserStateWithLiveData] --> UU{User has Groups or Coins?}
+    UU -->|Yes| VV[Inject Live Data for All Users]
+    UU -->|No| WW[Return State Without Live Data]
 
-    QQ[Coin Launch Success] --> RR[Update User Status]
-    RR --> SS{User Status 'new' or 'onboarding'?}
-    SS -->|Yes| TT[Update to 'active']
-    SS -->|No| UU[Keep Current Status]
+    VV --> XX[Call UserDataService.injectGroupData]
+    XX --> YY[Save Enriched State to Storage]
+    YY --> ZZ[Return Enriched State]
 
-    TT --> VV[Send Completion Message]
-    VV --> WW[User Now Active]
+    AAA[Coin Launch Success] --> BBB[Update User Status]
+    BBB --> CCC{User Status 'new' or 'onboarding'?}
+    CCC -->|Yes| DDD[Update to 'active']
+    CCC -->|No| EEE[Keep Current Status]
+
+    DDD --> FFF[Clear Progress & Pending TX]
+    FFF --> GGG[User Now Active]
 
     style A fill:#1565C0,color:#ffffff
     style F fill:#7B1FA2,color:#ffffff
-    style T fill:#F57C00,color:#ffffff
-    style CC fill:#2E7D32,color:#ffffff
-    style II fill:#388E3C,color:#ffffff
-    style JJ fill:#388E3C,color:#ffffff
-    style KK fill:#4CAF50,color:#ffffff
-    style QQ fill:#8E24AA,color:#ffffff
-    style RR fill:#AD1457,color:#ffffff
+    style K fill:#8E24AA,color:#ffffff
+    style Z fill:#F57C00,color:#ffffff
+    style MM fill:#2E7D32,color:#ffffff
     style TT fill:#388E3C,color:#ffffff
+    style UU fill:#388E3C,color:#ffffff
+    style VV fill:#4CAF50,color:#ffffff
+    style AAA fill:#8E24AA,color:#ffffff
+    style BBB fill:#AD1457,color:#ffffff
+    style DDD fill:#388E3C,color:#ffffff
 ```
 
 ---
 
 ## 7. Flow Processing System
 
-This diagram shows how the three main flows (QA, Management, Coin Launch) process different types of user messages and handle various scenarios, with updated QA Flow protection against overriding existing progress.
+This diagram shows how the three main flows (QA, Management, Coin Launch) process different types of user messages and handle various scenarios, with sophisticated direct message handling and advanced state management.
 
 ```mermaid
 graph TD
@@ -439,139 +478,174 @@ graph TD
     B -->|Coin Launch Flow| E[CoinLaunchFlow.processMessage]
 
     C --> F{Is Direct Message?}
-    F -->|Yes| G[Send Structured Group Requirement Message]
-    F -->|No| H[Check Multiple Coin Request]
+    F -->|Yes| G[Detect Groups/Coins Query]
+    G --> H{Groups/Coins Query?}
+    H -->|Yes| I[Fetch Live Data & Display]
+    H -->|No| J[Send Structured Group Requirement Message]
+    F -->|No| K[Check Multiple Coin Request]
 
-    H --> I{Multiple Coins?}
-    I -->|Yes| J[Handle Multiple Coin Request]
-    I -->|No| K[Check Existing Groups]
+    K --> L{Multiple Coins?}
+    L -->|Yes| M[Handle Multiple Coin Request]
+    L -->|No| N[Check Existing Groups]
 
-    K --> L{User Has Groups?}
-    L -->|Yes| M[Extract Coin Launch Details]
-    M --> N{Coin Launch Detected?}
-    N -->|Yes| O{Existing Coin Launch Progress?}
-    N -->|No| P[Classify Question Type]
+    N --> O{User Has Groups?}
+    O -->|Yes| P[Extract Coin Launch Details]
+    P --> Q{Coin Launch Detected?}
+    Q -->|Yes| R{Existing Coin Launch Progress?}
+    Q -->|No| S[Classify Question Type]
 
-    O -->|Yes| Q[GUARD: Don't Override - Send Warning]
-    O -->|No| R[Initialize Coin Launch Progress]
+    R -->|Yes| T[GUARD: Don't Override - Send Warning]
+    R -->|No| U[Initialize Coin Launch Progress]
 
-    P --> S{Question Type?}
-    S -->|Capability| T[Handle Capability Question]
-    S -->|Status| U[Handle Status Inquiry]
-    S -->|General| V[Handle General Question]
+    S --> V{Question Type?}
+    V -->|Capability| W[Handle Capability Question with Context]
+    V -->|Status| X[Handle Status Inquiry with Live Data]
+    V -->|General| Y[Handle General Question]
 
-    D --> W{User Status?}
-    W -->|invited| X[Handle Invited User Welcome]
-    W -->|other| Y[Clear Cross-Flow Transactions]
+    D --> Z{User Status?}
+    Z -->|invited| AA[Handle Invited User Welcome]
+    Z -->|other| BB[Clear Cross-Flow Transactions]
 
-    Y --> Z{Pending Transaction?}
-    Z -->|Yes| AA[Handle Pending Transaction]
-    Z -->|No| BB{Management Progress?}
+    BB --> CC{Pending Transaction?}
+    CC -->|Yes| DD[Classify Transaction Intent]
+    DD --> EE{Intent Type?}
+    EE -->|cancel| FF[Cancel Transaction]
+    EE -->|modify| GG[Modify Transaction Parameters]
+    EE -->|inquiry| HH[Handle Transaction Inquiry]
 
-    BB -->|Yes| CC[Handle Ongoing Process]
-    BB -->|No| DD[Classify Management Action]
+    CC -->|No| II{Management Progress?}
+    II -->|Yes| JJ[Handle Ongoing Process]
+    II -->|No| KK[Classify Management Action]
 
-    DD --> EE{Action Type?}
-    EE -->|list_groups| FF[List Groups]
-    EE -->|list_coins| GG[List Coins]
-    EE -->|claim_fees| HH[Claim Fees]
-    EE -->|check_fees| II[Check Fees]
-    EE -->|cancel_transaction| JJ[Cancel Transaction]
-    EE -->|general_help| KK[General Help]
+    KK --> LL{Action Type?}
+    LL -->|list_groups| MM[List Groups with Live Data]
+    LL -->|list_coins| NN[List Coins with Live Data]
+    LL -->|claim_fees| OO[Claim Fees]
+    LL -->|check_fees| PP[Check Fees]
+    LL -->|cancel_transaction| QQ[Cancel Transaction]
+    LL -->|general_help| RR[General Help]
 
-    E --> LL[Clear Cross-Flow Transactions]
-    LL --> MM{Pending Transaction?}
-    MM -->|Yes| NN[Handle Pending Transaction Update]
-    MM -->|No| OO{Coin Launch Progress?}
+    E --> SS[Clear Cross-Flow Transactions]
+    SS --> TT{Pending Transaction?}
+    TT -->|Yes| UU[Handle Pending Transaction Update]
+    TT -->|No| VV[Handle Inquiry Types]
 
-    OO -->|Yes| PP[Continue From Progress]
-    OO -->|No| QQ[Start New Coin Launch]
+    VV --> WW{Inquiry Type?}
+    WW -->|launch_options| XX[Handle Launch Options]
+    WW -->|future_features| YY[Handle Future Features]
+    WW -->|launch_defaults| ZZ[Handle Launch Defaults]
+    WW -->|status| AAA[Handle Status Inquiry]
+    WW -->|launch_command| BBB[Handle Launch Command]
+    WW -->|other| CCC[Process Coin Launch Request]
 
-    QQ --> RR[Extract Coin Data]
-    RR --> SS{Has All Data?}
-    SS -->|Yes| TT[Launch Coin]
-    SS -->|No| UU[Request Missing Data]
+    CCC --> DDD{Coin Launch Progress?}
+    DDD -->|Yes| EEE[Continue From Progress]
+    DDD -->|No| FFF[Start New Coin Launch]
+
+    EEE --> GGG{Attachment-Only During Data Collection?}
+    GGG -->|Yes| HHH[Handle Attachment-Only Special Case]
+    GGG -->|No| III[Normal Progress Continuation]
+
+    FFF --> JJJ[Extract Coin Data with LLM]
+    JJJ --> KKK{Has All Required Data?}
+    KKK -->|Yes| LLL[Launch Coin with Auto Group Creation]
+    KKK -->|No| MMM[Request Missing Data]
 
     style A fill:#1565C0,color:#ffffff
     style C fill:#7B1FA2,color:#ffffff
     style D fill:#F57C00,color:#ffffff
     style E fill:#2E7D32,color:#ffffff
-    style G fill:#D32F2F,color:#ffffff
-    style O fill:#8E24AA,color:#ffffff
-    style Q fill:#D32F2F,color:#ffffff
-    style R fill:#4CAF50,color:#ffffff
+    style I fill:#4CAF50,color:#ffffff
+    style J fill:#D32F2F,color:#ffffff
+    style R fill:#8E24AA,color:#ffffff
+    style T fill:#D32F2F,color:#ffffff
+    style U fill:#4CAF50,color:#ffffff
+    style GGG fill:#AD1457,color:#ffffff
+    style HHH fill:#4CAF50,color:#ffffff
+    style LLL fill:#388E3C,color:#ffffff
 ```
 
 ---
 
 ## 8. Direct Message Handling System
 
-This diagram shows how the system handles direct messages (1-on-1 conversations) differently from group chats, with smart routing for status inquiries, live data fetching for groups/coins queries, and structured guidance for blocked functionality.
+This diagram shows how the system handles direct messages (1-on-1 conversations) differently from group chats, with sophisticated intent detection, live data fetching for groups/coins queries, and structured guidance for blocked functionality.
 
 ```mermaid
 graph TD
     A[Direct Message Received] --> B[EnhancedMessageCoordinator]
-    B --> C[Detect Intent with FlowRouter]
-    C --> D[Classify Message Intent]
+    B --> C[Check Member Count - Detect 1-on-1]
+    C --> D[Detect Intent with FlowRouter Multi-Intent]
+    D --> E[Classify Message Intent with Context]
 
-    D --> E{Intent Type?}
-    E -->|Management| F[Block with Group Requirement]
-    E -->|Coin Launch| G[Block with Group Requirement]
-    E -->|QA/General| H[Allow QA Flow Processing]
+    E --> F{Intent Type Routing?}
+    F -->|Management| G[Block with Group Requirement]
+    F -->|Coin Launch| H[Block with Group Requirement]
+    F -->|QA/General| I[Allow QA Flow Processing]
 
-    F --> I[Send Structured Message]
-    G --> I
-    H --> J[QAFlow.processMessage]
+    G --> J[Send Structured Group Requirement Message]
+    H --> J
+    I --> K[QAFlow.processMessage with DM Flag]
 
-    I --> K[Structured Response:<br/>1. Create group chat<br/>2. Add bot to group<br/>3. Launch coins together]
+    J --> L[Structured Response:<br/>1. Create group chat with friends<br/>2. Add bot to group<br/>3. Launch coins with automatic fee splitting<br/>4. Magic happens when everyone's together]
 
-    J --> L{Question Type?}
-    L -->|Status| M[Detect Status Inquiry Type]
-    L -->|Capability| N[Send Structured Message]
-    L -->|General| N
+    K --> M{Question Type Detection?}
+    M -->|Status| N[Detect Status Inquiry Type]
+    M -->|Capability| O[Handle Capability Question]
+    M -->|General| P[Handle General Question]
 
-    M --> O{Groups/Coins Query?}
-    O -->|Yes| P[Fetch Live Data from Blockchain]
-    O -->|No| Q[Send Structured Message]
+    N --> Q{Groups/Coins Query Detection?}
+    Q -->|Yes| R[Fetch Live Data from Blockchain]
+    Q -->|No| S[Send Structured Group Requirement]
 
-    P --> R[SessionManager.getUserStateWithLiveData]
-    R --> S[UserDataService.injectGroupData]
-    S --> T[GraphQLService.fetchGroupData]
-    T --> U[Display Actual Groups/Coins Data]
+    R --> T[SessionManager.getUserStateWithLiveData]
+    T --> U[UserDataService.injectGroupData]
+    U --> V[GraphQLService.fetchGroupData]
+    V --> W[Display Actual Groups/Coins with Live Data]
 
-    U --> V[Format Groups with Live Data]
-    V --> W[Show Holders, Market Cap, Fees]
-    W --> X[Display Contract Addresses]
+    W --> X[Format Groups with Recipients & Fees]
+    X --> Y[Show Holders, Market Cap, Total Fees]
+    Y --> Z[Display Contract Addresses & Live Data]
 
-    N --> Y[Same Structured Response:<br/>Bot works in groups only]
-    Q --> Y
+    O --> AA[Handle Capability Questions with Context]
+    P --> BB[Handle General Questions with Context]
+    S --> CC[Same Structured Response:<br/>Bot works in groups only]
 
-    Z[Group Chat] --> AA[Normal Flow Processing]
-    AA --> BB[Full Functionality Available]
-    BB --> CC[User State Updates]
-    BB --> DD[Coin Launch Capability]
-    BB --> EE[Management Features]
+    AA --> CC
+    BB --> CC
+
+    DD[Group Chat] --> EE[Normal Flow Processing]
+    EE --> FF[Full Functionality Available]
+    FF --> GG[User State Updates & Group States]
+    FF --> HH[Coin Launch with Auto Group Creation]
+    FF --> II[Management Features & Live Data]
+
+    JJ[Enhanced DM Features] --> KK[Live Data Fetching for Status]
+    JJ --> LL[Sophisticated Intent Detection]
+    JJ --> MM[Context-Aware Responses]
+    JJ --> NN[Flow-Based Routing]
 
     style A fill:#1565C0,color:#ffffff
-    style F fill:#D32F2F,color:#ffffff
     style G fill:#D32F2F,color:#ffffff
-    style K fill:#F57C00,color:#ffffff
-    style P fill:#2E7D32,color:#ffffff
-    style R fill:#388E3C,color:#ffffff
-    style S fill:#388E3C,color:#ffffff
+    style H fill:#D32F2F,color:#ffffff
+    style L fill:#F57C00,color:#ffffff
+    style R fill:#2E7D32,color:#ffffff
     style T fill:#388E3C,color:#ffffff
-    style U fill:#4CAF50,color:#ffffff
-    style V fill:#4CAF50,color:#ffffff
+    style U fill:#388E3C,color:#ffffff
+    style V fill:#388E3C,color:#ffffff
     style W fill:#4CAF50,color:#ffffff
     style X fill:#4CAF50,color:#ffffff
-    style Z fill:#2E7D32,color:#ffffff
+    style Y fill:#4CAF50,color:#ffffff
+    style Z fill:#4CAF50,color:#ffffff
+    style DD fill:#2E7D32,color:#ffffff
+    style JJ fill:#FF9800,color:#ffffff
 ```
 
 ---
 
 ## 9. Services Architecture & Integration
 
-This diagram illustrates how all the services (GraphQL, UserData, ENS, GroupStorage, StatusMonitor) work together to provide functionality.
+This diagram illustrates how all the services (GraphQL, UserData, ENS, GroupStorage, StatusMonitor) work together to provide functionality with sophisticated integration patterns.
 
 ```mermaid
 graph TD
@@ -582,49 +656,63 @@ graph TD
     A --> F[XMTPStatusMonitor]
 
     B --> G[Fetch Group Data from API]
-    G --> H[Query addressFeeSplitManagers]
-    H --> I[Get Live Token Data]
-    I --> J[Get Fee Information]
-    J --> K[Return Structured Data]
+    G --> H[Query addressFeeSplitManagers by Group Addresses]
+    H --> I[Get Live Token Data with Market Cap]
+    I --> J[Get Fee Information & Pool Data]
+    J --> K[Return Structured GroupData with Holdings]
 
-    C --> L[Inject Live Data into User State]
-    L --> M[Use GraphQLService]
-    M --> N[Enrich Groups with Live Data]
-    N --> O[Enrich Coins with Live Data]
-    O --> P[Return Updated State]
+    C --> L[injectGroupData - Comprehensive Live Data]
+    L --> M[Use GraphQLService for API Data]
+    M --> N[Enrich Groups with Live Data & Recipients]
+    N --> O[Enrich Coins with Live Data & Market Info]
+    O --> P[Discover New Coins from Blockchain]
+    P --> Q[Return Fully Enriched State]
 
-    D --> Q[Resolve ENS Names]
-    Q --> R[Batch Address Resolution]
-    R --> S[Query API for ENS Data]
-    S --> T[Return Display Names]
-    T --> U[Fallback to Shortened Addresses]
+    D --> R[Batch Address Resolution]
+    R --> S[Query API for ENS/Basename Data]
+    S --> T[Process Display Names & Avatars]
+    T --> U[Return Display Name Map]
+    U --> V[Fallback to Shortened Addresses]
 
-    E --> V[Store Groups for All Members]
-    V --> W[Get All Receiver Addresses]
-    W --> X[Create User States if Needed]
-    X --> Y[Add Group to Each User]
-    Y --> Z[Mark New Users as 'invited']
+    E --> W[storeGroupForAllReceivers]
+    W --> X[Collect All Ethereum Addresses]
+    X --> Y[Get/Create User States for Each]
+    Y --> Z[Add Group to Each User]
+    Z --> AA[Mark New Users as 'invited']
+    AA --> BB[Generate Fun Group Names]
 
-    F --> AA[Monitor XMTP Status]
-    AA --> BB[Fetch RSS Feed]
-    BB --> CC[Parse Status Updates]
-    CC --> DD[Check for Issues]
-    DD --> EE{Issues Found?}
-    EE -->|Yes| FF[Trigger Application Restart]
-    EE -->|No| GG[Continue Monitoring]
+    F --> CC[Monitor XMTP Status with RSS]
+    CC --> DD[Fetch & Parse RSS Feed]
+    DD --> EE[Filter Critical Incidents]
+    EE --> FF[Check Node SDK & Production Issues]
+    FF --> GG{Issues Found or Resolved?}
+    GG -->|Yes| HH[Trigger Application Restart]
+    GG -->|No| II[Continue Monitoring - 5 min intervals]
 
-    HH[Flow Context] --> B
-    HH --> C
-    HH --> D
-    HH --> E
+    HH --> JJ[Graceful Cleanup & Restart]
+    JJ --> KK[Recreate Application Resources]
+    KK --> LL[Resume Normal Operation]
+
+    MM[Flow Context Integration] --> B
+    MM --> C
+    MM --> D
+    MM --> E
+
+    NN[Enhanced Features] --> OO[Chain-Specific Data Support]
+    NN --> PP[Live Data Caching & Persistence]
+    NN --> QQ[Automatic Status Updates]
+    NN --> RR[Multi-User Group Management]
 
     style A fill:#1565C0,color:#ffffff
-    style HH fill:#7B1FA2,color:#ffffff
+    style MM fill:#7B1FA2,color:#ffffff
     style B fill:#F57C00,color:#ffffff
     style C fill:#2E7D32,color:#ffffff
     style D fill:#4CAF50,color:#ffffff
     style E fill:#8E24AA,color:#ffffff
     style F fill:#FFA726,color:#ffffff
+    style NN fill:#FF9800,color:#ffffff
+    style HH fill:#D32F2F,color:#ffffff
+    style Q fill:#4CAF50,color:#ffffff
 ```
 
 ---
@@ -848,47 +936,47 @@ graph TD
 
 ## 13. Complete System Architecture Overview
 
-This diagram shows the overall system architecture and how all components interact with each other, including the updated flow routing priorities.
+This diagram shows the overall system architecture and how all components interact with each other, including the sophisticated multi-intent detection, group-specific state management, and enhanced service integration.
 
 ```mermaid
 graph TD
-    A[XMTP Message Stream] --> B[EnhancedMessageCoordinator]
-    B --> C[Message Filtering & Coordination]
-    C --> D[FlowRouter with Priority System]
-    D --> E[Intent Classification via LLM]
-    E --> F{Route to Flow with Priority}
+    A[XMTP Message Stream] --> B[EnhancedMessageCoordinator with 1s Coordination]
+    B --> C[Message Filtering & Coordination with Thread Management]
+    C --> D[FlowRouter with Multi-Intent Detection]
+    D --> E[GPT-4o-mini Intent Classification]
+    E --> F{Route to Flow with Priority System}
 
-    F -->|Priority 0: Existing Progress| G[coin_launch - Continue]
-    F -->|Priority 1: High Confidence| H[qa - Status Inquiry]
-    F -->|Priority 2: Actions| I[coin_launch/management - Actions]
-    F -->|Priority 3+: Fallback| J[qa - Help & Questions]
+    F -->|Priority 0: Existing Progress| G[coin_launch - Continue with Attachment Support]
+    F -->|Priority 1: High Confidence| H[qa - Status Inquiry with Live Data]
+    F -->|Priority 2: Actions| I[coin_launch/management - Actions with Auto Group]
+    F -->|Priority 3+: Fallback| J[qa - Help & Questions with DM Handling]
 
-    G --> K[Handle Coin Launch with Attachment Support]
-    H --> L[Handle Questions & Status]
-    I --> M[Manage Groups & Launch Coins]
-    J --> N[Provide Help & Explanations]
+    G --> K[Handle Coin Launch with LLM Extraction]
+    H --> L[Handle Questions & Status with Live Data]
+    I --> M[Manage Groups & Launch Coins with Auto Creation]
+    J --> N[Provide Help & Explanations with Context]
 
-    O[SessionManager] --> P[FileStateStorage]
-    P --> Q[user-states.json]
+    O[SessionManager with Group States] --> P[FileStateStorage with Date Handling]
+    P --> Q[user-states.json with GroupStates]
 
-    R[Services Layer] --> S[GraphQLService]
-    R --> T[UserDataService]
-    R --> U[ENSResolverService]
-    R --> V[GroupStorageService]
+    R[Services Layer] --> S[GraphQLService - Chain-Specific Data]
+    R --> T[UserDataService - Live Data Injection]
+    R --> U[ENSResolverService - Batch Resolution]
+    R --> V[GroupStorageService - Multi-User Management]
 
-    S --> W[External API]
-    T --> X[Live Data Injection]
-    U --> Y[ENS Resolution]
-    V --> Z[Multi-User State Management]
+    S --> W[External API with Holdings Data]
+    T --> X[Live Data Injection with Coin Discovery]
+    U --> Y[ENS/Basename Resolution with Fallbacks]
+    V --> Z[Multi-User State Management with Auto Status]
 
-    AA[XMTPStatusMonitor] --> BB[RSS Feed Monitoring]
-    BB --> CC[Automatic Restart on Issues]
-    CC --> DD[Application Factory]
-    DD --> EE[Recreate All Components]
+    AA[XMTPStatusMonitor] --> BB[RSS Feed Monitoring Every 5 Minutes]
+    BB --> CC[Automatic Restart on Issues/Resolution]
+    CC --> DD[Application Factory with Resource Management]
+    DD --> EE[Recreate All Components with Monitoring]
 
-    FF[InstallationManager] --> GG[XMTP Client Creation]
-    GG --> HH[Handle Installation Limits]
-    HH --> II[Retry Logic & Fallbacks]
+    FF[InstallationManager] --> GG[XMTP Client Creation with Reuse]
+    GG --> HH[Handle Installation Limits with Callbacks]
+    HH --> II[Retry Logic & Fallbacks with Error Handling]
 
     K --> O
     L --> O
@@ -900,19 +988,25 @@ graph TD
     M --> R
     N --> R
 
-    JJ[Tools & Utilities] --> KK[Character System]
-    JJ --> LL[IPFS Upload]
-    JJ --> MM[Transaction Utils]
-    JJ --> NN[ENS Resolution]
+    JJ[Tools & Utilities] --> KK[Character System with Context]
+    JJ --> LL[IPFS Upload with Error Handling]
+    JJ --> MM[Transaction Utils with Flaunch Integration]
+    JJ --> NN[ENS Resolution with Caching]
 
     K --> JJ
     M --> JJ
     N --> JJ
 
-    OO[External Systems] --> PP[Flaunch Protocol]
-    OO --> QQ[Base/Sepolia Networks]
-    OO --> RR[IPFS Storage]
-    OO --> SS[XMTP Network]
+    OO[External Systems] --> PP[Flaunch Protocol with Auto Group Creation]
+    OO --> QQ[Base/Sepolia Networks with Chain Selection]
+    OO --> RR[IPFS Storage with Fallbacks]
+    OO --> SS[XMTP Network with Status Monitoring]
+
+    TT[Enhanced Features] --> UU[Multi-Intent Detection]
+    TT --> VV[Group-Specific State Management]
+    TT --> WW[Live Data Integration]
+    TT --> XX[Sophisticated Message Coordination]
+    TT --> YY[Direct Message Handling]
 
     style A fill:#1565C0,color:#ffffff
     style B fill:#7B1FA2,color:#ffffff
@@ -923,131 +1017,209 @@ graph TD
     style AA fill:#8E24AA,color:#ffffff
     style FF fill:#FFA726,color:#ffffff
     style OO fill:#607D8B,color:#ffffff
+    style TT fill:#FF9800,color:#ffffff
 ```
 
 ---
 
 ## Key System Features
 
-### Message Coordination
+### Advanced Message Coordination
 
-- **1-second wait time** to coordinate text + image messages
-- **Smart queuing** system for related messages
-- **Automatic retry** logic for failed coordination
-- **Attachment-only message handling** with dual-layer protection
+- **1-second wait time** to coordinate text + image messages with sophisticated queuing
+- **Smart queuing** system for related messages with attachment synchronization
+- **Automatic retry** logic for failed coordination with graceful degradation
+- **Attachment-only message handling** with dual-layer protection and special case handling
+- **Combined message text extraction** from primary and related messages
+- **Thread management** with active thread tracking and timeout handling (5 minutes)
 
-### Smart Filtering
+### Sophisticated Message Filtering
 
-- Only responds in group chats when **explicitly mentioned** or in **active threads**
-- **LLM-powered engagement detection** for edge cases
-- **Thread timeout management** (5 minutes of inactivity)
+- **Context-aware filtering** with special handling for coin launch progress
+- **Reply detection** with distinction between agent replies and user replies
+- **Explicit mention detection** with @-symbol and obvious mention patterns
+- **Non-text reply handling** for reactions and other content types
+- **Image-only message processing** during coin data collection phases
+- **Simplified engagement detection** with cost-effective LLM usage
 
-### Priority-Based Flow Routing
+### Multi-Intent Detection & Priority-Based Routing
 
-- **Priority 0 (HIGHEST)**: Continue existing coin launch progress
-- **Priority 1**: High-confidence status inquiries
-- **Priority 2**: Action intents (coin launch, modifications)
-- **Priority 3+**: Questions, management, social, fallback
+- **GPT-4o-mini powered intent classification** with confidence scoring
+- **Primary and secondary intent detection** for comprehensive message understanding
+- **Critical coin launch pattern recognition** with context-aware classification
+- **Priority 0 (HIGHEST)**: Continue existing coin launch progress (attachment support)
+- **Priority 1**: High-confidence status inquiries with live data
+- **Priority 2**: Action intents (coin launch with auto group, modifications)
+- **Priority 3+**: Questions, management, social interactions, fallback handling
 
-### Attachment-Only Message Protection
+### Enhanced Direct Message Handling
 
-- **FlowRouter Priority Check**: Routes to coin_launch flow when existing progress exists
-- **QAFlow Guard Clause**: Prevents overriding existing coin launch progress
-- **Special Case Handler**: Processes attachment-only messages during data collection
-- **Data Preservation**: Maintains existing name/ticker when adding image
-
-### Direct Message Handling
-
-- **Smart flow-based routing** for 1-on-1 conversations
-- **QA Flow messages** (greetings, questions, help) are allowed but provide structured guidance
-- **Groups/Coins status queries** in DMs now fetch and display real live data from GraphQL API with holders, market cap, fees, and contract addresses
-- **Management and Coin Launch flows** are blocked with group requirement message
+- **Smart flow-based routing** for 1-on-1 conversations with intent detection
+- **Live data fetching** for groups/coins status queries in DMs
+- **Context-aware responses** with structured guidance for group requirements
+- **Capability and general question handling** with character voice
+- **Management and coin launch flow blocking** with clear instructions
 - **No user state updates** for blocked direct message interactions
-- **Consistent structured responses** with clear step-by-step instructions
-- **Live data integration** for status inquiries about user's groups and coins
+- **Consistent structured responses** with step-by-step group creation guidance
 
-### State Management
+### Advanced State Management
 
-- **Persistent user states** stored in `user-states.json`
-- **Improved live data injection** from external APIs that works for all users with coins/groups regardless of status
-- **Automatic user status updates** from "new" to "active" after successful coin launch
-- **Multi-user group management** with automatic state sharing
-- **Automatic group creation** for all chat room members during coin launch
+- **Group-specific state management** with per-conversation state tracking
+- **FileStateStorage** with sophisticated date handling and JSON serialization
+- **Live data injection** from blockchain APIs for all users with coins/groups
+- **Automatic user status updates** from "new" to "active" after successful operations
+- **Multi-user group management** with automatic state sharing and invitation handling
+- **Coin discovery** from blockchain data with automatic state updates
 
-### Transaction Processing
+### Comprehensive Transaction Processing
 
-- **Enhanced transaction reference handling** with proper null checks and error validation
-- **Robust error handling** with detailed logging for debugging
-- **Automatic manager address extraction** for first launches
+- **Enhanced transaction reference handling** with comprehensive null checks
+- **Robust error handling** with detailed logging and fallback responses
+- **Automatic manager address extraction** for first launches in chat rooms
 - **Proper coin storage** for all group members after successful launch
+- **Transaction modification support** with LLM-powered parameter updates
+- **Cross-flow transaction clearing** to prevent state conflicts
 
-### Automatic Restart
+### Intelligent Service Integration
 
-- **Monitors XMTP status** via RSS feed every 5 minutes
-- **Automatic restart** on critical issues or when issues are resolved
+- **GraphQLService** with chain-specific data support and holdings information
+- **UserDataService** with live data injection and coin discovery from blockchain
+- **ENSResolverService** with batch resolution and ENS/Basename support
+- **GroupStorageService** with multi-user management and automatic status updates
+- **XMTPStatusMonitor** with RSS feed monitoring and automatic restart capabilities
+
+### Enhanced Flow Processing
+
+- **QA Flow**:
+
+  - Direct message handling with live data for groups/coins queries
+  - Protection against overriding existing coin launch progress
+  - Capability and general question handling with context
+  - Multiple coin request detection and handling
+
+- **Management Flow**:
+
+  - Transaction intent classification (cancel, modify, inquiry)
+  - Live data integration for group and coin listings
+  - Sophisticated parameter modification with LLM extraction
+  - Invited user welcome handling
+
+- **Coin Launch Flow**:
+  - Attachment-only message handling during data collection
+  - LLM-powered coin data extraction with validation
+  - Automatic group creation for chat room members
+  - Launch options and status inquiry handling
+  - Special case handling for image-only messages
+
+### Advanced Installation & Monitoring
+
+- **XMTP client reuse** to avoid hitting installation limits
+- **Installation limit handling** with callbacks and retry logic
+- **Automatic restart** on XMTP status issues (5-minute intervals)
 - **Graceful cleanup** and resource management
+- **RSS feed monitoring** with critical incident detection
+- **Application factory pattern** for resource recreation
 
-### Multi-Flow Architecture
+### Production-Ready Features
 
-- **QA Flow**: Handles questions, explanations, and help requests (with DM awareness and live data for groups/coins queries) + Protection against overriding existing progress
-- **Management Flow**: Manages existing groups, coins, and transactions (group chats only)
-- **Coin Launch Flow**: Handles new coin creation with automatic group setup and member management (group chats only) + Special attachment-only handling
-
-### Installation Limit Handling
-
-- **Graceful handling** of XMTP's 5-installation limit
-- **Retry logic** with exponential backoff
-- **Fallback strategies** and error notifications
-
-### Service Integration
-
-- **External API calls** for live data with proper type handling (string to number conversions)
-- **ENS resolution** for user-friendly addresses
-- **Multi-user management** for group operations
-- **IPFS integration** for image storage
+- **Error handling** with fallback responses and graceful degradation
+- **Logging** with detailed debugging information and structured output
+- **Performance optimization** with simplified engagement detection
+- **Cost optimization** with strategic LLM usage
+- **Chain support** for Base and Base Sepolia networks
+- **IPFS integration** with error handling and fallbacks
+- **Character system** with context-aware responses
 
 ## Debugging Guide
 
 When debugging issues, refer to these diagrams to understand:
 
-1. **Message not being processed**: Check diagram #4 (Message Filtering)
-2. **Flow routing issues**: Check diagram #5 (Flow Router & Intent Classification)
-3. **State persistence problems**: Check diagram #6 (User State Management)
-4. **Restart/connection issues**: Check diagram #2 (Status Monitor)
-5. **Transaction handling**: Check diagram #11 (Coin Launch Flow) and #3 (Transaction Reference Processing)
-6. **Direct message handling**: Check diagram #8 (Direct Message Handling System)
-7. **QA Flow responses in DMs**: Check diagram #7 (Flow Processing System) and #8 (Direct Message Handling)
-8. **Attachment-only message issues**: Check diagram #12 (Attachment-Only Message Handling)
+1. **Message not being processed**: Check diagram #4 (Message Filtering) - focus on coin launch progress detection and engagement filtering
+2. **Flow routing issues**: Check diagram #5 (Flow Router & Intent Classification) - examine multi-intent detection and priority system
+3. **State persistence problems**: Check diagram #6 (User State Management) - verify group-specific state handling
+4. **Restart/connection issues**: Check diagram #2 (Status Monitor) - check RSS feed monitoring and restart logic
+5. **Transaction handling**: Check diagram #11 (Coin Launch Flow) and #3 (Transaction Reference Processing) - verify null checks and processing
+6. **Direct message handling**: Check diagram #8 (Direct Message Handling System) - examine intent detection and live data fetching
+7. **Service integration issues**: Check diagram #9 (Services Architecture) - verify GraphQL, UserData, ENS, and GroupStorage services
+8. **Complete system flow**: Check diagram #13 (Complete System Architecture) - understand overall component interaction
 
-### Attachment-Only Message Debugging
+### Message Coordination Debugging
 
-- **Attachment routed to wrong flow**: Check FlowRouter priority 0 check for existing coinLaunchProgress
-- **Existing progress overridden**: Check QAFlow guard clause protection layer
-- **Image not processed during collection**: Check CoinLaunchFlow special case handler
-- **Data loss (name/ticker cleared)**: Verify both protection layers are working and no bypass occurred
-- **User state corruption**: Check if attachment processing preserves existing coinData
-- **Flow routing bypassed**: Verify FlowRouter.getPrimaryFlow priority 0 logic
+- **Messages not coordinating**: Check 1-second timer and message queuing logic
+- **Attachment-only messages ignored**: Verify special case handling in message filtering
+- **Combined text extraction failing**: Check extractCombinedMessageText function
+- **Thread management issues**: Verify active thread tracking and timeout logic (5 minutes)
+- **Non-text reply handling**: Check filtering for reactions and other content types
 
-### Flow Router Priority Debugging
+### Multi-Intent Detection Debugging
 
-- **Priority 0 not working**: Check if groupState.coinLaunchProgress exists
-- **Wrong priority triggered**: Verify LLM intent classification and confidence levels
-- **Flow routing inconsistent**: Check priority order and fallback logic
-- **Intent classification failing**: Verify LLM prompt and response parsing
+- **Wrong intent classification**: Check GPT-4o-mini prompt and response parsing
+- **Primary intent incorrect**: Verify confidence scoring and intent validation
+- **Secondary intents ignored**: Check if secondary intents are being processed
+- **Coin launch patterns not detected**: Verify critical pattern recognition in prompt
+- **Priority routing bypassed**: Check priority 0-3+ logic in getPrimaryFlow
 
-### Coin Launch Progress Debugging
+### Enhanced State Management Debugging
 
-- **Progress not continuing**: Check if existing coinLaunchProgress is detected
-- **Data collection step stuck**: Verify attachment-only special case handler
-- **Missing data not requested**: Check requestMissingData logic
-- **Transaction not created**: Verify all required data is present
+- **Group-specific state issues**: Check if groupStates[groupId] is being created/updated
+- **FileStateStorage errors**: Verify JSON serialization and date handling
+- **Live data not injecting**: Check if user has coins/groups and API calls are working
+- **Coin discovery failing**: Verify GraphQL API responses and data parsing
+- **User status not updating**: Check status transition logic from "new" to "active"
+- **Multi-user group issues**: Verify all receiver addresses are being processed
 
-### User State Management Debugging
+### Direct Message Handling Debugging
 
-- **Status stuck at "new"**: Check if coin launch success triggers status update to "active"
-- **Groups not appearing**: Verify automatic group creation during coin launch
-- **Coins missing after launch**: Check if `addCoinToAllGroupMembers` is being called
-- **Live data not persisting**: Verify enriched state is being saved back to storage
-- **Progress state corrupted**: Check if coinLaunchProgress is being properly updated
+- **DM flow routing wrong**: Check intent detection and management/coin launch blocking
+- **Live data not fetching**: Verify groups/coins query detection and API calls
+- **Structured responses not sent**: Check group requirement message logic
+- **Context-aware responses failing**: Verify capability and general question handling
+- **Status queries not working**: Check getUserStateWithLiveData integration
 
-Each diagram provides the logical flow to trace through when investigating specific types of issues. The new attachment-only message handling system provides comprehensive protection against data loss during coin launch data collection.
+### Service Integration Debugging
+
+- **GraphQL API issues**: Check chain-specific headers and query formatting
+- **UserData service errors**: Verify live data injection and coin discovery logic
+- **ENS resolution failing**: Check batch resolution and fallback to shortened addresses
+- **GroupStorage problems**: Verify multi-user management and automatic status updates
+- **StatusMonitor not working**: Check RSS feed parsing and restart logic
+
+### Flow Processing Debugging
+
+- **QA Flow issues**:
+
+  - DM handling not working: Check direct message detection and live data fetching
+  - Coin launch progress override: Verify guard clause protection
+  - Multiple coin detection: Check multiple coin request handling
+  - Status inquiry errors: Verify live data integration
+
+- **Management Flow issues**:
+
+  - Transaction intent classification: Check LLM-powered intent detection
+  - Parameter modification: Verify LLM extraction and validation
+  - Invited user handling: Check welcome message logic
+  - Live data integration: Verify GraphQL API calls
+
+- **Coin Launch Flow issues**:
+  - Attachment-only handling: Check special case handler during data collection
+  - LLM extraction failing: Verify coin data extraction and validation
+  - Auto group creation: Check chat room member detection and group setup
+  - Launch options: Verify inquiry type handling
+
+### Installation & Monitoring Debugging
+
+- **Client reuse failing**: Check buildExistingClient vs createClient logic
+- **Installation limit hit**: Verify callback handling and retry logic
+- **Restart not triggering**: Check RSS feed monitoring and incident detection
+- **Resource cleanup issues**: Verify graceful cleanup and resource management
+- **Factory pattern errors**: Check application resource recreation logic
+
+### Performance & Cost Debugging
+
+- **Excessive LLM calls**: Check simplified engagement detection and strategic usage
+- **Slow response times**: Verify message coordination timing and processing
+- **Memory leaks**: Check resource cleanup and state management
+- **API rate limiting**: Verify GraphQL and ENS service call patterns
+- **Storage performance**: Check FileStateStorage read/write operations
+
+Each diagram provides the logical flow to trace through when investigating specific types of issues. The enhanced system includes comprehensive error handling, detailed logging, and fallback mechanisms to ensure reliable operation.

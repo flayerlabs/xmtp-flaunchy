@@ -514,12 +514,26 @@ export class EnhancedMessageCoordinator {
       // Get user state by Ethereum address (the actual on-chain identity)
       let userState = await this.sessionManager.getUserState(creatorAddress);
 
+      // Get group state for processing decision
+      const groupState = await this.sessionManager.getGroupState(
+        creatorAddress,
+        primaryMessage.conversationId
+      );
+
+      // Check if this is a reply to an image attachment during coin data collection
+      const isReplyToImage = await this.isReplyToImageAttachment(
+        primaryMessage,
+        conversation,
+        groupState
+      );
+
       // Check if we should process this message
       const shouldProcess = await this.shouldProcessMessage(
         primaryMessage,
         conversation,
-        userState,
-        relatedMessages
+        groupState,
+        relatedMessages,
+        isReplyToImage
       );
 
       if (!shouldProcess) {
@@ -549,6 +563,7 @@ export class EnhancedMessageCoordinator {
         creatorAddress,
         conversationHistory: relatedMessages,
         isDirectMessage: !isGroupChat,
+        isReplyToImage,
       });
 
       // Route to appropriate flow
@@ -570,6 +585,7 @@ export class EnhancedMessageCoordinator {
     creatorAddress,
     conversationHistory,
     isDirectMessage,
+    isReplyToImage = false,
   }: {
     primaryMessage: DecodedMessage;
     relatedMessages: DecodedMessage[];
@@ -579,6 +595,7 @@ export class EnhancedMessageCoordinator {
     creatorAddress: string;
     conversationHistory: DecodedMessage[];
     isDirectMessage: boolean;
+    isReplyToImage?: boolean;
   }): Promise<FlowContext> {
     // Determine message text and attachment info
     const isAttachment = primaryMessage.contentType?.sameAs(
@@ -588,7 +605,41 @@ export class EnhancedMessageCoordinator {
     let hasAttachment = false;
     let attachment: any = undefined;
 
-    if (isAttachment) {
+    // Handle reply to image case
+    if (
+      isReplyToImage &&
+      primaryMessage.contentType?.sameAs(ContentTypeReply)
+    ) {
+      const replyContent = primaryMessage.content as Reply;
+      messageText =
+        typeof replyContent.content === "string"
+          ? replyContent.content.trim()
+          : "";
+
+      // Extract attachment from the replied-to message
+      const messages = await conversation.messages({ limit: 100 });
+      const referenceId = replyContent.reference as string;
+      const referencedMessage = messages.find(
+        (msg: any) => msg.id === referenceId
+      );
+
+      if (
+        referencedMessage &&
+        referencedMessage.contentType?.sameAs(ContentTypeRemoteAttachment)
+      ) {
+        hasAttachment = true;
+        attachment = referencedMessage.content;
+
+        console.log(
+          "🖼️ REPLY TO IMAGE: Extracted attachment from replied-to message",
+          {
+            referenceId: referenceId?.slice(0, 16) + "...",
+            hasAttachment,
+            messageText: messageText.substring(0, 50) + "...",
+          }
+        );
+      }
+    } else if (isAttachment) {
       hasAttachment = true;
       attachment = primaryMessage.content;
 
@@ -1917,8 +1968,9 @@ export class EnhancedMessageCoordinator {
   private async shouldProcessMessage(
     primaryMessage: DecodedMessage,
     conversation: any,
-    userState: any,
-    relatedMessages: DecodedMessage[] = []
+    groupState: any,
+    relatedMessages: DecodedMessage[] = [],
+    isReplyToImage: boolean = false
   ): Promise<boolean> {
     // Always process messages in 1:1 conversations
     const members = await conversation.members();
@@ -1944,6 +1996,48 @@ export class EnhancedMessageCoordinator {
       extractedText: messageText.substring(0, 100) + "...",
       hasText: messageText.length > 0,
     });
+
+    // Check if user is in coin data collection step AND sending image without text
+    if (
+      groupState.coinLaunchProgress?.step === "collecting_coin_data" &&
+      primaryMessage.contentType?.sameAs(ContentTypeRemoteAttachment) &&
+      (!messageText || messageText.trim() === "")
+    ) {
+      console.log("🪙 COIN DATA COLLECTION: Image-only message - processing", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        step: groupState.coinLaunchProgress.step,
+        hasText: !!messageText,
+        hasAttachment: true,
+      });
+
+      // Start/update active thread since they're providing content for their coin launch
+      await this.updateActiveThread(
+        conversationId,
+        senderInboxId,
+        primaryMessage
+      );
+      return true;
+    }
+
+    // Check if this is a reply to an image attachment during coin data collection
+    if (isReplyToImage) {
+      console.log("🪙 COIN DATA COLLECTION: Reply to image - processing", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        step: groupState.coinLaunchProgress?.step,
+        hasText: !!messageText,
+        isReplyToImage: true,
+      });
+
+      // Start/update active thread since they're providing content for their coin launch
+      await this.updateActiveThread(
+        conversationId,
+        senderInboxId,
+        primaryMessage
+      );
+      return true;
+    }
 
     // Check if this is a reply to a flaunchy message (high confidence engagement)
     const isReplyToAgent = await this.isReplyToAgentMessage(primaryMessage);
@@ -2033,93 +2127,99 @@ export class EnhancedMessageCoordinator {
         primaryMessage
       );
       return true;
+    } else {
+      return false;
     }
+    // skiping the non-tag or reply as detection for all messages is not reliable + costs llm calls
 
-    // LLM fallback for bot commands and edge cases that regex might miss
-    const engagementCheck = await this.checkConversationEngagement(
-      messageText,
-      conversationId,
-      senderInboxId,
-      "new_message"
-    );
+    /**
+      // LLM fallback for bot commands and edge cases that regex might miss
+      const engagementCheck = await this.checkConversationEngagement(
+        messageText,
+        conversationId,
+        senderInboxId,
+        "new_message",
+        primaryMessage
+      );
 
-    if (engagementCheck.isEngaged) {
-      console.log("🧠 LLM DETECTED ENGAGEMENT - processing message", {
-        senderInboxId: senderInboxId.slice(0, 8) + "...",
-        conversationId: conversationId.slice(0, 8) + "...",
-        messageText: messageText.substring(0, 100) + "...",
-        reason: engagementCheck.reason,
-      });
+      if (engagementCheck.isEngaged) {
+        console.log("🧠 LLM DETECTED ENGAGEMENT - processing message", {
+          senderInboxId: senderInboxId.slice(0, 8) + "...",
+          conversationId: conversationId.slice(0, 8) + "...",
+          messageText: messageText.substring(0, 100) + "...",
+          reason: engagementCheck.reason,
+        });
 
-      // Start/update active thread when LLM detects engagement
-      await this.updateActiveThread(
+        // Start/update active thread when LLM detects engagement
+        await this.updateActiveThread(
+          conversationId,
+          senderInboxId,
+          primaryMessage
+        );
+        return true;
+      }
+
+      // Check if this is part of an active conversation thread
+      const isActiveThread = await this.isInActiveThread(
         conversationId,
         senderInboxId,
         primaryMessage
       );
-      return true;
-    }
 
-    // Check if this is part of an active conversation thread
-    const isActiveThread = await this.isInActiveThread(
-      conversationId,
-      senderInboxId,
-      primaryMessage
-    );
+      if (isActiveThread) {
+        console.log("🔄 ACTIVE THREAD - continuing conversation", {
+          senderInboxId: senderInboxId.slice(0, 8) + "...",
+          conversationId: conversationId.slice(0, 8) + "...",
+        });
 
-    if (isActiveThread) {
-      console.log("🔄 ACTIVE THREAD - continuing conversation", {
-        senderInboxId: senderInboxId.slice(0, 8) + "...",
-        conversationId: conversationId.slice(0, 8) + "...",
-      });
+        // Update thread activity
+        await this.updateThreadActivity(conversationId, senderInboxId);
+        return true;
+      }
 
-      // Update thread activity
-      await this.updateThreadActivity(conversationId, senderInboxId);
-      return true;
-    }
-
-    // Special case: Check if user has ongoing coin launch process and this is an attachment
-    // Coin launches often involve images, so we should process attachment-only messages
-    if (primaryMessage.contentType?.sameAs(ContentTypeRemoteAttachment)) {
-      const creatorAddress = await this.getCreatorAddressFromInboxId(
-        senderInboxId
-      );
-      if (creatorAddress) {
-        const groupState = await this.sessionManager.getGroupState(
-          creatorAddress,
-          conversationId
+      // Special case: Check if user has ongoing coin launch process and this is an attachment
+      // Coin launches often involve images, so we should process attachment-only messages
+      if (primaryMessage.contentType?.sameAs(ContentTypeRemoteAttachment)) {
+        const creatorAddress = await this.getCreatorAddressFromInboxId(
+          senderInboxId
         );
-
-        if (groupState.coinLaunchProgress) {
-          console.log("🪙 COIN LAUNCH IN PROGRESS - processing attachment", {
-            senderInboxId: senderInboxId.slice(0, 8) + "...",
-            conversationId: conversationId.slice(0, 8) + "...",
-            step: groupState.coinLaunchProgress.step,
-          });
-
-          // Start/update active thread since they're providing content for their coin launch
-          await this.updateActiveThread(
-            conversationId,
-            senderInboxId,
-            primaryMessage
+        if (creatorAddress) {
+          const groupState = await this.sessionManager.getGroupState(
+            creatorAddress,
+            conversationId
           );
-          return true;
+
+          if (groupState.coinLaunchProgress) {
+            console.log("🪙 COIN LAUNCH IN PROGRESS - processing attachment", {
+              senderInboxId: senderInboxId.slice(0, 8) + "...",
+              conversationId: conversationId.slice(0, 8) + "...",
+              step: groupState.coinLaunchProgress.step,
+            });
+
+            // Start/update active thread since they're providing content for their coin launch
+            await this.updateActiveThread(
+              conversationId,
+              senderInboxId,
+              primaryMessage
+            );
+            return true;
+          }
         }
       }
-    }
 
-    // REMOVED: Critical process logic was too broad and caused bot to respond to all messages
-    // The bot should ONLY respond when explicitly mentioned or in active conversation thread
-    // Having ongoing processes doesn't mean every message should be processed
+      // REMOVED: Critical process logic was too broad and caused bot to respond to all messages
+      // The bot should ONLY respond when explicitly mentioned or in active conversation thread
+      // Having ongoing processes doesn't mean every message should be processed
 
-    console.log("⏭️ IGNORING MESSAGE - no explicit engagement detected", {
-      senderInboxId: senderInboxId.slice(0, 8) + "...",
-      conversationId: conversationId.slice(0, 8) + "...",
-      messageText: messageText.substring(0, 50) + "...",
-      reason: "not_mentioned_and_not_in_active_thread",
-    });
+      console.log("⏭️ IGNORING MESSAGE - no explicit engagement detected", {
+        senderInboxId: senderInboxId.slice(0, 8) + "...",
+        conversationId: conversationId.slice(0, 8) + "...",
+        messageText: messageText.substring(0, 50) + "...",
+        reason: "not_mentioned_and_not_in_active_thread",
+      });
 
-    return false;
+      return false;
+     */
   }
 
   /**
@@ -2293,7 +2393,8 @@ export class EnhancedMessageCoordinator {
       messageText,
       conversationId,
       senderInboxId,
-      "active_thread"
+      "active_thread",
+      message
     );
 
     if (!engagementResult.isEngaged) {
@@ -2318,6 +2419,84 @@ export class EnhancedMessageCoordinator {
   }
 
   /**
+   * Fetch and filter the previous text messages from conversation history
+   * Only returns actual text messages, excluding read receipts, reactions, etc.
+   * Excludes the latest message since it's provided separately
+   */
+  private async fetchTextMessageHistory(
+    conversationId: string,
+    latestMessageId: string,
+    limit: number = 10
+  ): Promise<
+    Array<{
+      senderInboxId: string;
+      content: string;
+      timestamp: Date;
+      isBot: boolean;
+    }>
+  > {
+    try {
+      const conversation = await this.client.conversations.getConversationById(
+        conversationId
+      );
+      if (!conversation) return [];
+
+      // Fetch more messages than needed to account for filtering
+      const messages = await conversation.messages({ limit: limit * 3 });
+      const textMessages = [];
+
+      for (const message of messages) {
+        // Skip the latest message since it's provided separately
+        if (message.id === latestMessageId) {
+          continue;
+        }
+
+        const contentTypeId = message.contentType?.typeId;
+
+        // Skip read receipts, wallet send calls, and other non-text types
+        if (
+          contentTypeId === "readReceipt" ||
+          contentTypeId === "wallet-send-calls" ||
+          message.contentType?.sameAs(ContentTypeTransactionReference) ||
+          message.contentType?.sameAs(ContentTypeRemoteAttachment)
+        ) {
+          continue;
+        }
+
+        // Skip transaction receipt messages with '...' content
+        if (
+          typeof message.content === "string" &&
+          message.content.trim() === "..."
+        ) {
+          continue;
+        }
+
+        // Extract text content
+        const textContent = this.extractMessageText(message);
+        if (textContent && textContent.trim().length > 0) {
+          textMessages.push({
+            senderInboxId: message.senderInboxId,
+            content: textContent.trim(),
+            timestamp: new Date(message.sentAt),
+            isBot: message.senderInboxId === this.client.inboxId,
+          });
+
+          // Stop when we have enough text messages
+          if (textMessages.length >= limit) {
+            break;
+          }
+        }
+      }
+
+      // Reverse to get chronological order (oldest first)
+      return textMessages.reverse();
+    } catch (error) {
+      console.error("Error fetching text message history:", error);
+      return [];
+    }
+  }
+
+  /**
    * Use LLM to determine conversation engagement with proper context
    * Handles both initial engagement detection and ongoing conversation analysis
    */
@@ -2325,15 +2504,23 @@ export class EnhancedMessageCoordinator {
     messageText: string,
     conversationId: string,
     senderInboxId: string,
-    context: "new_message" | "active_thread"
+    context: "new_message" | "active_thread",
+    primaryMessage: DecodedMessage
   ): Promise<{ isEngaged: boolean; reason: string }> {
     if (!messageText) return { isEngaged: false, reason: "empty_message" };
 
     try {
+      // Fetch previous text messages for context
+      const messageHistory = await this.fetchTextMessageHistory(
+        conversationId,
+        primaryMessage.id,
+        10
+      );
+
       const contextualPrompt =
         context === "active_thread"
-          ? this.buildActiveThreadPrompt(messageText)
-          : this.buildNewMessagePrompt(messageText);
+          ? this.buildActiveThreadPrompt(messageText, messageHistory)
+          : this.buildNewMessagePrompt(messageText, messageHistory);
 
       const response = await this.openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -2351,6 +2538,7 @@ export class EnhancedMessageCoordinator {
         context,
         userId: senderInboxId.slice(0, 8) + "...",
         messageText: messageText.substring(0, 50) + "...",
+        historyMessages: messageHistory.length,
         result: answer,
         reason,
         isEngaged,
@@ -2365,14 +2553,37 @@ export class EnhancedMessageCoordinator {
     }
   }
 
-  private buildActiveThreadPrompt(messageText: string): string {
+  private buildActiveThreadPrompt(
+    messageText: string,
+    messageHistory: Array<{
+      senderInboxId: string;
+      content: string;
+      timestamp: Date;
+      isBot: boolean;
+    }>
+  ): string {
+    // Format message history for context
+    const historyContext =
+      messageHistory.length > 0
+        ? `RECENT CONVERSATION HISTORY (last ${messageHistory.length} messages):\n` +
+          messageHistory
+            .map((msg, index) => {
+              const sender = msg.isBot
+                ? "Bot (flaunchy)"
+                : `User (${msg.senderInboxId.slice(0, 8)}...)`;
+              return `${index + 1}. ${sender}: "${msg.content}"`;
+            })
+            .join("\n") +
+          "\n\n"
+        : "";
+
     return `You are analyzing if a user is still engaged with bot "flaunchy" in an ACTIVE conversation thread.
 
 CONTEXT: User was previously talking to flaunchy and is in an active conversation thread.
 
-USER MESSAGE: "${messageText}"
+${historyContext}LATEST USER MESSAGE: "${messageText}"
 
-Is the user still engaged with flaunchy? Be STRICT:
+Is the user still engaged with flaunchy? Be STRICT and consider the conversation context:
 
 ENGAGED (respond "YES:continuing"):
 - Asking questions about bot features: "what can you do?", "how does this work?"
@@ -2383,26 +2594,55 @@ ENGAGED (respond "YES:continuing"):
 - Modification requests: "remove user", "add person", "change percentage", "exclude someone"
 - User management: "remove alice", "add bob", "kick user", "exclude person"
 - Group/coin modifications: "change that", "remove noblet", "add javery", "exclude @user"
+- Continuing previous bot-related conversations based on history
 
 DISENGAGED (respond "NO:reason"):
 - Greeting others: "hey alice", "hi bob" → "NO:greeting_others"
 - General chat without bot context: "lol", "nice", "cool" → "NO:general_chat"  
 - Unrelated topics: "what's for lunch?" → "NO:off_topic"
 - Side conversations about non-bot things → "NO:side_conversation"
+- Completely switching topics from bot conversation → "NO:topic_switch"
 
-IMPORTANT: If user says "remove [username]" or "add [username]" in context of group creation, they are continuing the bot interaction.
+IMPORTANT: 
+- Use the conversation history to understand context better
+- Look at both bot messages and user messages to understand the conversation flow
+- If user says "remove [username]" or "add [username]" in context of group creation, they are continuing the bot interaction
+- Consider whether the latest message relates to the previous conversation flow
 
 Respond: "YES:continuing" or "NO:reason"`;
   }
 
-  private buildNewMessagePrompt(messageText: string): string {
+  private buildNewMessagePrompt(
+    messageText: string,
+    messageHistory: Array<{
+      senderInboxId: string;
+      content: string;
+      timestamp: Date;
+      isBot: boolean;
+    }>
+  ): string {
+    // Format message history for context
+    const historyContext =
+      messageHistory.length > 0
+        ? `RECENT CONVERSATION HISTORY (last ${messageHistory.length} messages):\n` +
+          messageHistory
+            .map((msg, index) => {
+              const sender = msg.isBot
+                ? "Bot (flaunchy)"
+                : `User (${msg.senderInboxId.slice(0, 8)}...)`;
+              return `${index + 1}. ${sender}: "${msg.content}"`;
+            })
+            .join("\n") +
+          "\n\n"
+        : "";
+
     return `You are analyzing if a user wants to engage with bot "flaunchy" in a group chat.
 
 CONTEXT: Most obvious mentions like "@flaunchy" and "hey flaunchy" are pre-filtered. You handle BOT COMMANDS and edge cases.
 
-USER MESSAGE: "${messageText}"
+${historyContext}LATEST USER MESSAGE: "${messageText}"
 
-Does this message want to engage with flaunchy?
+Does this message want to engage with flaunchy? Consider the conversation context:
 
 ENGAGE (respond "YES:reason"):
 - Bot commands: "launch a coin", "show my coins" → "YES:bot_command"
@@ -2411,6 +2651,7 @@ ENGAGE (respond "YES:reason"):
 - Bot actions: "start", "begin", "initialize" → "YES:action_request"
 - Addressing flaunchy: "ok flaunchy let's...", "sure flaunchy...", "alright flaunchy..." → "YES:addressing_bot"
 - Creative mentions: "flaunchy?", "yo flaunchy!" → "YES:creative_mention"
+- Continuing previous bot-related conversations based on history → "YES:continuing_conversation"
 
 CRITICAL: COIN LAUNCH PATTERNS (respond "YES:coin_launch"):
 - Token/coin specifications: "Launch Test (TEST)", "MyCoin (MCN)", "DOGE token" → "YES:coin_launch"
@@ -2424,10 +2665,14 @@ DO NOT ENGAGE (respond "NO:reason"):
 - Casual chat: "what's up", "how are you", "nice", "cool" → "NO:casual_chat"
 - Pure social talk: "hey alice", "bob how are you" (not involving bot) → "NO:talking_to_others"
 - Unrelated topics: "what's for lunch", "did you see the game" → "NO:off_topic"
+- Random messages unrelated to previous bot conversation → "NO:unrelated_to_context"
 
 IMPORTANT: 
-- If someone says "flaunchy [action]" like "flaunchy add javery please" they are clearly addressing the bot.
-- Coin launch patterns like "Launch Test (TEST)" are core bot functionality and should ALWAYS trigger engagement.
+- Use the conversation history to understand context better
+- Look at both bot messages and user messages to understand the conversation flow
+- If someone says "flaunchy [action]" like "flaunchy add javery please" they are clearly addressing the bot
+- Coin launch patterns like "Launch Test (TEST)" are core bot functionality and should ALWAYS trigger engagement
+- Consider whether the latest message relates to or continues a previous bot conversation
 
 Respond: "YES:reason" or "NO:reason"`;
   }
@@ -2627,6 +2872,74 @@ Respond: "YES:reason" or "NO:reason"`;
       return isFromAgent;
     } catch (error) {
       console.error("Error checking if message is reply to agent:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if the message is a reply to an image attachment during coin data collection
+   */
+  private async isReplyToImageAttachment(
+    message: DecodedMessage,
+    conversation: any,
+    groupState: any
+  ): Promise<boolean> {
+    try {
+      // First check if we're in coin data collection step
+      if (groupState.coinLaunchProgress?.step !== "collecting_coin_data") {
+        return false;
+      }
+
+      // Check if this message has reply content type
+      if (!message.contentType?.sameAs(ContentTypeReply)) {
+        return false;
+      }
+
+      const replyContent = message.content as Reply;
+
+      // Get the referenced message ID
+      if (!replyContent.reference) {
+        return false;
+      }
+
+      // Get more messages to find the referenced message
+      const messages = await conversation.messages({ limit: 100 });
+      const referenceId = replyContent.reference as string;
+
+      // Find the message being replied to
+      const referencedMessage = messages.find(
+        (msg: any) => msg.id === referenceId
+      );
+
+      if (!referencedMessage) {
+        console.log("❌ REPLY TO IMAGE: Referenced message not found", {
+          referenceId: referenceId?.slice(0, 16) + "...",
+        });
+        return false;
+      }
+
+      // Check if the referenced message is an image attachment
+      const isImageAttachment = referencedMessage.contentType?.sameAs(
+        ContentTypeRemoteAttachment
+      );
+
+      if (isImageAttachment) {
+        console.log(
+          "✅ REPLY TO IMAGE: Found reply to image attachment during coin data collection",
+          {
+            referenceId: referenceId?.slice(0, 16) + "...",
+            step: groupState.coinLaunchProgress?.step,
+          }
+        );
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error(
+        "Error checking if message is reply to image attachment:",
+        error
+      );
       return false;
     }
   }
