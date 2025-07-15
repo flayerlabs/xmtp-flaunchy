@@ -51,6 +51,10 @@ export class GroupStorageService {
     // Collect all Ethereum addresses (including creator's address)
     const allAddresses = new Set<string>();
 
+    console.log(
+      `[GroupStorageService] Collecting addresses for group ${contractAddress}`
+    );
+
     // Add creator's address
     if (
       creatorAddress &&
@@ -58,6 +62,9 @@ export class GroupStorageService {
       creatorAddress.length === 42
     ) {
       allAddresses.add(creatorAddress.toLowerCase());
+      console.log(
+        `[GroupStorageService] ✅ Added creator address: ${creatorAddress}`
+      );
     } else {
       console.warn(`⚠️ Invalid creator address: ${creatorAddress}`);
     }
@@ -70,6 +77,9 @@ export class GroupStorageService {
         receiver.resolvedAddress.length === 42
       ) {
         allAddresses.add(receiver.resolvedAddress.toLowerCase());
+        console.log(
+          `[GroupStorageService] ✅ Added receiver address: ${receiver.resolvedAddress} (${receiver.username})`
+        );
       } else {
         console.warn(
           `⚠️ Invalid receiver address for ${receiver.username}: ${receiver.resolvedAddress}`
@@ -77,14 +87,29 @@ export class GroupStorageService {
       }
     }
 
+    console.log(
+      `[GroupStorageService] Total addresses to update: ${allAddresses.size}`
+    );
+    console.log(
+      `[GroupStorageService] Addresses: ${Array.from(allAddresses).join(", ")}`
+    );
+
     // Store the group for each address
     const promises = Array.from(allAddresses).map(async (address) => {
       try {
+        console.log(`[GroupStorageService] Processing address: ${address}`);
+
         // Check if user state exists in storage before getting it
         const userExists = await this.sessionManager.userExists(address);
+        console.log(
+          `[GroupStorageService] User ${address} exists: ${userExists}`
+        );
 
         // Get user state by address (this creates new state if none exists)
         let userState = await this.sessionManager.getUserState(address);
+        console.log(
+          `[GroupStorageService] User ${address} current groups: ${userState.groups.length}`
+        );
 
         // If user didn't exist before (truly new), mark them as invited
         // This will trigger a welcome message when they first interact
@@ -92,6 +117,9 @@ export class GroupStorageService {
           userState = await this.sessionManager.updateUserState(address, {
             status: "invited",
           });
+          console.log(
+            `[GroupStorageService] Marked new user ${address} as invited`
+          );
         }
 
         // Check if they already have this group (avoid duplicates)
@@ -99,6 +127,9 @@ export class GroupStorageService {
           (g) => g.id === contractAddress
         );
         if (existingGroup) {
+          console.log(
+            `[GroupStorageService] User ${address} already has group ${contractAddress} - skipping`
+          );
           return;
         }
 
@@ -106,6 +137,10 @@ export class GroupStorageService {
         await this.sessionManager.updateUserState(address, {
           groups: [...userState.groups, newGroup],
         });
+
+        console.log(
+          `[GroupStorageService] ✅ Added group ${contractAddress} to user ${address}`
+        );
       } catch (error) {
         console.error(`❌ Failed to add group to address ${address}:`, error);
         // Continue with other addresses even if one fails
@@ -143,9 +178,22 @@ export class GroupStorageService {
     creatorAddress: string
   ): Promise<void> {
     try {
+      console.log(
+        `[CoinAddition] Adding coin "${coin.ticker}" to all members of group ${groupId}`
+      );
+
       // Get the creator's user state to find the group and its members
       const creatorState = await this.sessionManager.getUserState(
         creatorAddress
+      );
+
+      console.log(
+        `[CoinAddition] Creator ${creatorAddress} has ${creatorState.groups.length} groups`
+      );
+      console.log(
+        `[CoinAddition] Creator's groups: ${creatorState.groups
+          .map((g) => g.id)
+          .join(", ")}`
       );
 
       // Find the target group in the creator's groups
@@ -155,8 +203,20 @@ export class GroupStorageService {
 
       if (!targetGroup) {
         console.error(`❌ Group ${groupId} not found in creator's state`);
+        console.error(
+          `❌ Available groups: ${creatorState.groups
+            .map((g) => g.id)
+            .join(", ")}`
+        );
         return;
       }
+
+      console.log(
+        `[CoinAddition] ✅ Found target group: ${targetGroup.name} (${targetGroup.id})`
+      );
+      console.log(
+        `[CoinAddition] Target group has ${targetGroup.receivers.length} receivers`
+      );
 
       // Collect all member addresses (receivers + creator)
       const allAddresses = new Set<string>();
@@ -178,7 +238,15 @@ export class GroupStorageService {
       // Add the coin to each member's state
       const promises = Array.from(allAddresses).map(async (address) => {
         try {
-          const userState = await this.sessionManager.getUserState(address);
+          console.log(
+            `[CoinAddition] Processing coin addition for address: ${address}`
+          );
+
+          let userState = await this.sessionManager.getUserState(address);
+
+          console.log(
+            `[CoinAddition] User ${address} has ${userState.coins.length} coins and ${userState.groups.length} groups`
+          );
 
           // Check if they already have this coin (avoid duplicates)
           const existingCoin = userState.coins.find(
@@ -187,7 +255,49 @@ export class GroupStorageService {
               c.groupId.toLowerCase() === groupId.toLowerCase()
           );
           if (existingCoin) {
+            console.log(
+              `[CoinAddition] User ${address} already has coin ${coin.ticker} - skipping`
+            );
             return;
+          }
+
+          // Check if they have the group - if not, add it
+          let userGroup = userState.groups.find(
+            (g) => g.id.toLowerCase() === groupId.toLowerCase()
+          );
+          if (!userGroup) {
+            console.warn(
+              `[CoinAddition] ⚠️ User ${address} doesn't have group ${groupId} - adding it first`
+            );
+
+            // Create a basic group object for this user
+            const basicGroup = {
+              id: groupId,
+              name: targetGroup.name,
+              createdBy: targetGroup.createdBy,
+              type: targetGroup.type,
+              receivers: targetGroup.receivers,
+              coins: [],
+              chainId: targetGroup.chainId,
+              chainName: targetGroup.chainName,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            // Add the group to the user
+            await this.sessionManager.updateUserState(address, {
+              groups: [...userState.groups, basicGroup],
+            });
+
+            console.log(
+              `[CoinAddition] ✅ Added group ${groupId} to user ${address}`
+            );
+
+            // Update userState to include the new group
+            userState = await this.sessionManager.getUserState(address);
+            userGroup = userState.groups.find(
+              (g) => g.id.toLowerCase() === groupId.toLowerCase()
+            );
           }
 
           // Add the coin to their coins array and update the group's coins list
@@ -203,6 +313,10 @@ export class GroupStorageService {
                 : group
             ),
           });
+
+          console.log(
+            `[CoinAddition] ✅ Added coin ${coin.ticker} to user ${address}`
+          );
         } catch (error) {
           console.error(`❌ Failed to add coin to address ${address}:`, error);
           // Continue with other addresses even if one fails

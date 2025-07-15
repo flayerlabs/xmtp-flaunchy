@@ -29,6 +29,7 @@ import {
   createPublicClient,
   http,
   isAddress,
+  Hex,
 } from "viem";
 import { base, baseSepolia, mainnet } from "viem/chains";
 import { uploadImageToIPFS } from "../../../utils/ipfs";
@@ -1084,13 +1085,21 @@ export class EnhancedMessageCoordinator {
       }
 
       const transactionRef = messageContent.transactionReference;
+      let txHash: Hex | undefined = undefined;
 
       if (!transactionRef) {
-        console.error("❌ Transaction reference is undefined");
-        return false;
+        const oldMessageContent = messageContent as unknown as {
+          reference: Hex; // txHash
+        };
+        if (oldMessageContent.reference) {
+          txHash = oldMessageContent.reference;
+        } else {
+          console.error("❌ Transaction reference is undefined");
+          return false;
+        }
+      } else {
+        txHash = transactionRef.reference;
       }
-
-      const txHash = transactionRef.reference;
 
       if (!txHash) {
         console.error("❌ Transaction hash is undefined");
@@ -1490,12 +1499,53 @@ export class EnhancedMessageCoordinator {
               createdAt: new Date(),
             };
 
-            // Ensure the group exists in user state before adding the coin
-            await this.ensureGroupExistsForChatRoom(
+            // For chat room launches, ensure the group exists properly using GroupStorageService
+            await this.ensureGroupExistsForChatRoomLaunch(
               conversation,
               groupAddress,
               chainId,
-              chainName
+              chainName,
+              creatorAddress
+            );
+
+            // Verify the group exists - if not, forcefully create it
+            const creatorStateAfterGroupCreation =
+              await this.sessionManager.getUserState(creatorAddress);
+            let groupExists = creatorStateAfterGroupCreation.groups.find(
+              (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+            );
+
+            if (!groupExists) {
+              console.warn(
+                `⚠️ Group ${groupAddress} not found in creator's state after initial creation - forcefully adding it`
+              );
+
+              // Forcefully add the group to the creator
+              await this.forcefullyEnsureGroupForChatRoom(
+                conversation,
+                groupAddress,
+                chainId,
+                chainName,
+                creatorAddress
+              );
+
+              // Verify again
+              const updatedCreatorState =
+                await this.sessionManager.getUserState(creatorAddress);
+              groupExists = updatedCreatorState.groups.find(
+                (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+              );
+
+              if (!groupExists) {
+                console.error(
+                  `❌ CRITICAL: Group ${groupAddress} still not found after forceful creation - this is a serious issue`
+                );
+                return false;
+              }
+            }
+
+            console.log(
+              `[CoinAddition] ✅ Group ${groupAddress} exists, adding coin "${newCoin.ticker}" to all members`
             );
 
             // Add coin to ALL group members (not just creator)
@@ -1503,6 +1553,10 @@ export class EnhancedMessageCoordinator {
               groupAddress,
               newCoin,
               creatorAddress
+            );
+
+            console.log(
+              `[CoinAddition] ✅ Successfully added coin "${newCoin.ticker}" to all group members`
             );
           } else if (groupAddress === "unknown-group") {
             console.error(
@@ -1776,13 +1830,13 @@ export class EnhancedMessageCoordinator {
         console.log(`📊 Found ${logs.length} logs in transaction receipt`);
 
         // Log each log for debugging
-        logs.forEach((log: any, index: number) => {
-          console.log(`Log ${index}:`, {
-            address: log.address,
-            topics: log.topics,
-            data: log.data ? log.data.substring(0, 100) + "..." : "no data",
-          });
-        });
+        // logs.forEach((log: any, index: number) => {
+        //   console.log(`Log ${index}:`, {
+        //     address: log.address,
+        //     topics: log.topics,
+        //     data: log.data ? log.data.substring(0, 100) + "..." : "no data",
+        //   });
+        // });
 
         if (transactionType === "group_creation") {
           // For group creation, look for the ManagerDeployed event with specific topic[0]
@@ -3126,6 +3180,267 @@ Respond: "YES:reason" or "NO:reason"`;
       );
     } catch (error) {
       console.error(`Failed to ensure group exists for chat room:`, error);
+    }
+  }
+
+  /**
+   * Ensure that a group exists properly for chat room coin launches
+   * This uses GroupStorageService to create the group with proper structure
+   */
+  private async ensureGroupExistsForChatRoomLaunch(
+    conversation: any,
+    groupAddress: string,
+    chainId: number,
+    chainName: "base" | "baseSepolia",
+    creatorAddress: string
+  ): Promise<void> {
+    try {
+      console.log(
+        `[GroupCreation] Ensuring group ${groupAddress} exists for chat room launch`
+      );
+
+      // Check if the creator already has this group
+      const creatorState = await this.sessionManager.getUserState(
+        creatorAddress
+      );
+      const existingGroup = creatorState.groups.find(
+        (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+      );
+
+      if (existingGroup) {
+        console.log(
+          `[GroupCreation] Group ${groupAddress} already exists for creator - skipping creation`
+        );
+        return;
+      }
+
+      // Get all chat room members
+      const members = await conversation.members();
+      console.log(
+        `[GroupCreation] Found ${members.length} total members (including bot)`
+      );
+
+      // Get all member addresses and create receivers array
+      const receivers = [];
+      for (const member of members) {
+        if (member.inboxId !== this.client.inboxId) {
+          const memberInboxState =
+            await this.client.preferences.inboxStateFromInboxIds([
+              member.inboxId,
+            ]);
+          if (
+            memberInboxState.length > 0 &&
+            memberInboxState[0].identifiers.length > 0
+          ) {
+            const memberAddress = memberInboxState[0].identifiers[0].identifier;
+
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName =
+                await this.ensResolverService.resolveSingleAddress(
+                  memberAddress
+                );
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              // If resolution fails, use shortened address as fallback
+              username = `${memberAddress.slice(0, 6)}...${memberAddress.slice(
+                -4
+              )}`;
+            }
+
+            receivers.push({
+              username: username,
+              resolvedAddress: memberAddress,
+              percentage: 100 / (members.length - 1), // Equal split excluding bot
+            });
+
+            console.log(
+              `[GroupCreation] Added receiver: ${username} (${memberAddress})`
+            );
+          }
+        }
+      }
+
+      if (receivers.length === 0) {
+        console.error(
+          "❌ No valid receivers found for chat room group creation"
+        );
+        return;
+      }
+
+      console.log(
+        `[GroupCreation] Created ${receivers.length} receivers for group ${groupAddress}`
+      );
+      console.log(`[GroupCreation] Creator address: ${creatorAddress}`);
+
+      // Use GroupStorageService to create the group properly
+      const groupName =
+        await this.groupStorageService.storeGroupForAllReceivers(
+          conversation.creatorInboxId || "unknown",
+          creatorAddress,
+          groupAddress,
+          receivers,
+          chainId,
+          chainName,
+          "chat-room-launch" // Use a placeholder tx hash for chat room launches
+        );
+
+      console.log(
+        `[GroupCreation] ✅ Created group "${groupName}" (${groupAddress}) for ${receivers.length} chat room members`
+      );
+
+      // Verify the group was created for the creator
+      const updatedCreatorState = await this.sessionManager.getUserState(
+        creatorAddress
+      );
+      const creatorGroup = updatedCreatorState.groups.find(
+        (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+      );
+
+      if (creatorGroup) {
+        console.log(
+          `[GroupCreation] ✅ Verified group exists in creator's state`
+        );
+      } else {
+        console.error(
+          `[GroupCreation] ❌ CRITICAL: Group NOT found in creator's state after creation`
+        );
+        console.error(
+          `[GroupCreation] Creator's groups: ${updatedCreatorState.groups
+            .map((g) => g.id)
+            .join(", ")}`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Failed to ensure group exists for chat room launch:`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Forcefully ensure a group exists for the creator and all chat room members
+   * This is a fallback method that doesn't check if the group exists first
+   */
+  private async forcefullyEnsureGroupForChatRoom(
+    conversation: any,
+    groupAddress: string,
+    chainId: number,
+    chainName: "base" | "baseSepolia",
+    creatorAddress: string
+  ): Promise<void> {
+    try {
+      console.log(
+        `[ForcefulGroupCreation] Forcefully ensuring group ${groupAddress} exists for all chat room members`
+      );
+
+      // Get all chat room members
+      const members = await conversation.members();
+
+      // Get all member addresses and create receivers array
+      const receivers = [];
+      const allAddresses = new Set<string>();
+
+      for (const member of members) {
+        if (member.inboxId !== this.client.inboxId) {
+          const memberInboxState =
+            await this.client.preferences.inboxStateFromInboxIds([
+              member.inboxId,
+            ]);
+          if (
+            memberInboxState.length > 0 &&
+            memberInboxState[0].identifiers.length > 0
+          ) {
+            const memberAddress = memberInboxState[0].identifiers[0].identifier;
+            allAddresses.add(memberAddress.toLowerCase());
+
+            // Try to resolve address to username/ENS
+            let username = memberAddress;
+            try {
+              const resolvedName =
+                await this.ensResolverService.resolveSingleAddress(
+                  memberAddress
+                );
+              if (resolvedName) {
+                username = resolvedName;
+              }
+            } catch (error) {
+              username = `${memberAddress.slice(0, 6)}...${memberAddress.slice(
+                -4
+              )}`;
+            }
+
+            receivers.push({
+              username: username,
+              resolvedAddress: memberAddress,
+              percentage: 100 / (members.length - 1),
+            });
+          }
+        }
+      }
+
+      // Generate a group name
+      const groupName = `Chat Room ${groupAddress.slice(
+        0,
+        6
+      )}...${groupAddress.slice(-4)}`;
+
+      // Create the group object
+      const newGroup = {
+        id: groupAddress,
+        name: groupName,
+        createdBy: conversation.creatorInboxId || "unknown",
+        type: "username_split" as const,
+        receivers,
+        coins: [],
+        chainId,
+        chainName,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      // Forcefully add the group to all addresses
+      for (const address of allAddresses) {
+        try {
+          const userState = await this.sessionManager.getUserState(address);
+
+          // Check if they already have this group
+          const existingGroup = userState.groups.find(
+            (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+          );
+
+          if (!existingGroup) {
+            await this.sessionManager.updateUserState(address, {
+              groups: [...userState.groups, newGroup],
+            });
+            console.log(
+              `[ForcefulGroupCreation] ✅ Added group ${groupAddress} to user ${address}`
+            );
+          } else {
+            console.log(
+              `[ForcefulGroupCreation] User ${address} already has group ${groupAddress}`
+            );
+          }
+        } catch (error) {
+          console.error(
+            `[ForcefulGroupCreation] ❌ Failed to add group to ${address}:`,
+            error
+          );
+        }
+      }
+
+      console.log(
+        `[ForcefulGroupCreation] ✅ Forcefully ensured group ${groupAddress} exists for all chat room members`
+      );
+    } catch (error) {
+      console.error(
+        `[ForcefulGroupCreation] ❌ Failed to forcefully ensure group exists:`,
+        error
+      );
     }
   }
 }
