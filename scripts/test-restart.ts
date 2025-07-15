@@ -19,7 +19,7 @@ async function testRestartMechanism() {
     return {
       client: {} as any, // Mock client
       statusMonitor,
-      messageStream: {} as any, // Mock stream
+      streamPromise: Promise.resolve(), // Mock stream promise
       cleanup: async () => {
         console.log("🧹 Mock cleanup called");
       },

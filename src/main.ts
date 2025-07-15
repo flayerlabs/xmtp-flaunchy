@@ -23,6 +23,144 @@ import { XMTPStatusMonitor } from "./services/XMTPStatusMonitor";
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
 
+// Stream failure handling configuration
+const MAX_STREAM_RETRIES = 5;
+const STREAM_RETRY_INTERVAL = 5000; // 5 seconds
+let streamRetries = MAX_STREAM_RETRIES;
+let isStreamActive = true;
+
+/**
+ * Handles the XMTP message stream with proper failure handling and restart logic
+ */
+async function handleMessageStream(
+  client: Client,
+  messageCoordinator: EnhancedMessageCoordinator
+): Promise<void> {
+  console.log("🔄 Starting message stream with failure handling...");
+
+  const retry = () => {
+    console.log(
+      `🔄 Retrying stream in ${
+        STREAM_RETRY_INTERVAL / 1000
+      }s, ${streamRetries} retries left`
+    );
+    if (streamRetries > 0 && isStreamActive) {
+      streamRetries--;
+      setTimeout(() => {
+        handleMessageStream(client, messageCoordinator);
+      }, STREAM_RETRY_INTERVAL);
+    } else {
+      console.error("💥 Max stream retries reached, ending process");
+      process.exit(1);
+    }
+  };
+
+  const onFail = (error?: Error) => {
+    console.error("❌ XMTP stream failed:", error?.message || "Unknown error");
+    if (isStreamActive) {
+      retry();
+    }
+  };
+
+  try {
+    console.log("✓ Syncing conversations...");
+    const syncStartTime = Date.now();
+    await client.conversations.sync();
+    const syncDuration = Date.now() - syncStartTime;
+    console.log(`✓ Conversation sync completed in ${syncDuration}ms`);
+
+    console.log("📡 Starting message stream...");
+    const streamStartTime = Date.now();
+
+    // Create stream with onFail callback
+    const stream = await client.conversations.streamAllMessages(
+      undefined, // onMessage callback (we'll handle in the loop)
+      undefined, // filter
+      undefined, // options
+      onFail // onFail callback for stream failures
+    );
+
+    const streamSetupDuration = Date.now() - streamStartTime;
+    console.log(
+      `📡 Message stream setup completed in ${streamSetupDuration}ms`
+    );
+
+    // Add connection health check and force readiness
+    console.log("🔍 Checking XMTP connection health...");
+    try {
+      const healthCheckStart = Date.now();
+      await client.conversations.list({ limit: 1 });
+      const healthCheckDuration = Date.now() - healthCheckStart;
+      console.log(
+        `✅ XMTP connection health check passed in ${healthCheckDuration}ms`
+      );
+    } catch (healthError) {
+      console.warn("⚠️ XMTP health check failed, but continuing:", healthError);
+    }
+
+    // Allow stream to fully initialize
+    console.log("⏳ Allowing stream to fully initialize...");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    console.log("✅ Stream initialization complete, ready for messages");
+
+    // Reset retry count on successful stream start
+    streamRetries = MAX_STREAM_RETRIES;
+    let firstMessageReceived = false;
+    const messageStreamStartTime = Date.now();
+
+    console.log("🔄 Starting to listen for messages...");
+
+    // Process messages from the stream
+    for await (const message of stream) {
+      if (!firstMessageReceived) {
+        const timeToFirstMessage = Date.now() - messageStreamStartTime;
+        console.log(
+          `🎉 First message received after ${timeToFirstMessage}ms from stream start`
+        );
+        firstMessageReceived = true;
+      }
+
+      if (!isStreamActive) {
+        console.log("📡 Message stream stopped");
+        break;
+      }
+
+      if (message) {
+        try {
+          console.log(
+            `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
+          );
+
+          // Process message through the enhanced coordinator
+          await messageCoordinator.processMessage(message);
+        } catch (error) {
+          console.error("❌ Error processing message:", error);
+
+          // Try to send an error response
+          try {
+            const conversation = await client.conversations.getConversationById(
+              message.conversationId
+            );
+            if (conversation) {
+              await conversation.send(
+                "sorry, something went wrong. please try again."
+              );
+            }
+          } catch (sendError) {
+            console.error("❌ Could not send error response:", sendError);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error in message stream handling:", error);
+    // The onFail callback will handle the retry
+    if (isStreamActive) {
+      onFail(error as Error);
+    }
+  }
+}
+
 /**
  * Creates all application resources and components
  */
@@ -141,94 +279,8 @@ async function createApplication() {
 
   console.log("✅ Architecture initialized successfully!");
 
-  console.log("✓ Syncing conversations...");
-  const syncStartTime = Date.now();
-  await client.conversations.sync();
-  const syncDuration = Date.now() - syncStartTime;
-  console.log(`✓ Conversation sync completed in ${syncDuration}ms`);
-
-  console.log("📡 Starting message stream...");
-  const streamStartTime = Date.now();
-
-  // Start listening for messages
-  const stream = await client.conversations.streamAllMessages();
-  const streamSetupDuration = Date.now() - streamStartTime;
-  console.log(`📡 Message stream setup completed in ${streamSetupDuration}ms`);
-
-  // Add connection health check and force readiness
-  console.log("🔍 Checking XMTP connection health...");
-  try {
-    // Force a quick operation to ensure connection is ready
-    const healthCheckStart = Date.now();
-    await client.conversations.list({ limit: 1 });
-    const healthCheckDuration = Date.now() - healthCheckStart;
-    console.log(
-      `✅ XMTP connection health check passed in ${healthCheckDuration}ms`
-    );
-  } catch (healthError) {
-    console.warn("⚠️ XMTP health check failed, but continuing:", healthError);
-  }
-
-  // Add a small delay to let the stream fully initialize
-  console.log("⏳ Allowing stream to fully initialize...");
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  console.log("✅ Stream initialization complete, ready for messages");
-
-  let isStreamActive = true;
-  let firstMessageReceived = false;
-
-  // Process messages in the background
-  const messageProcessingPromise = (async () => {
-    try {
-      console.log("🔄 Starting to listen for messages...");
-      const messageStreamStartTime = Date.now();
-
-      for await (const message of stream) {
-        if (!firstMessageReceived) {
-          const timeToFirstMessage = Date.now() - messageStreamStartTime;
-          console.log(
-            `🎉 First message received after ${timeToFirstMessage}ms from stream start`
-          );
-          firstMessageReceived = true;
-        }
-
-        if (!isStreamActive) {
-          console.log("📡 Message stream stopped");
-          break;
-        }
-
-        if (message) {
-          try {
-            console.log(
-              `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
-            );
-
-            // Process message through the enhanced coordinator
-            await messageCoordinator.processMessage(message);
-          } catch (error) {
-            console.error("❌ Error processing message:", error);
-
-            // Try to send an error response
-            try {
-              const conversation =
-                await client.conversations.getConversationById(
-                  message.conversationId
-                );
-              if (conversation) {
-                await conversation.send(
-                  "sorry, something went wrong. please try again."
-                );
-              }
-            } catch (sendError) {
-              console.error("❌ Could not send error response:", sendError);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error in message stream:", error);
-    }
-  })();
+  // Start the message stream with failure handling
+  const streamPromise = handleMessageStream(client, messageCoordinator);
 
   // Cleanup function
   const cleanup = async () => {
@@ -237,16 +289,10 @@ async function createApplication() {
     try {
       // Stop message stream
       isStreamActive = false;
-      if (stream) {
-        try {
-          await stream.return();
-        } catch (error) {
-          console.warn("⚠️ Error closing message stream:", error);
-        }
-      }
+      streamRetries = 0; // Prevent retries during cleanup
 
-      // Wait for message processing to complete
-      await messageProcessingPromise;
+      // Wait a bit for the stream to stop gracefully
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       console.log("✅ Application cleanup completed");
     } catch (error) {
@@ -257,7 +303,7 @@ async function createApplication() {
   return {
     client,
     statusMonitor,
-    messageStream: stream,
+    streamPromise,
     cleanup,
   };
 }
@@ -289,10 +335,14 @@ main().catch((error) => {
 // Graceful shutdown handling
 process.on("SIGINT", async () => {
   console.log("\n🛑 Received SIGINT, shutting down gracefully...");
+  isStreamActive = false;
+  streamRetries = 0;
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
   console.log("\n🛑 Received SIGTERM, shutting down gracefully...");
+  isStreamActive = false;
+  streamRetries = 0;
   process.exit(0);
 });

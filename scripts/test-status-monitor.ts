@@ -32,7 +32,7 @@ async function testStatusMonitor() {
       return {
         client: {} as any,
         statusMonitor: monitor,
-        messageStream: {} as any,
+        streamPromise: Promise.resolve(),
         cleanup: async () => console.log("Mock cleanup called"),
       };
     };

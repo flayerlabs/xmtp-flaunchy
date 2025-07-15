@@ -24,7 +24,7 @@ interface StatusIncident {
 interface ApplicationResources {
   client: Client;
   statusMonitor: XMTPStatusMonitor;
-  messageStream: any;
+  streamPromise: Promise<void>;
   cleanup: () => Promise<void>;
 }
 
