@@ -1426,6 +1426,7 @@ If no parameters are mentioned, return:
             0,
             8
           )}...${coin.contractAddress.slice(-6)}\n`;
+          message += `  • https://flaunch.gg/${currentChain.slug}/coin/${coin.contractAddress}\n`;
         }
 
         message += `\n`;

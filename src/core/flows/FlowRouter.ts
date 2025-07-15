@@ -190,24 +190,31 @@ DETECT ALL INTENTS in order of importance:
 
 PRIMARY INTENT (most important):
 
-CRITICAL COIN LAUNCH PATTERNS:
-These patterns always indicate coin launch (chat group group must be created first):
+CRITICAL: VIEW/STATUS REQUESTS vs LAUNCH REQUESTS
+These are STATUS INQUIRIES (→ inquiry), NOT coin launches:
+- "what are my coins", "list my coins", "show my coins"
+- "what coins do I have", "do I have any coins", "my coin portfolio"
+- "what's my group", "show my group", "group info"
+- "what's my status", "how many coins", "portfolio"
+- "show me", "list", "display", "view" + [coins/groups/status]
+
+COIN LAUNCH PATTERNS (→ coin_launch):
+These patterns indicate NEW coin creation:
 - "Name (TICKER)" format: "Test (TEST)", "Dogecoin (DOGE)", "MyCoin (MCN)"
 - "Token/Coin name ticker" format: "Token TEST", "Coin DOGE", "Launch MyCoin"  
 - "Create/Launch token/coin" with name/ticker: "create token Test", "launch coin DOGE"
 - Single words that could be coin names: "Ethereum", "Bitcoin", "Solana"
 - Ticker symbols: "TEST", "DOGE", "BTC"
+- "launch", "create", "flaunch" + coin details
 - Image uploads with minimal text (likely coin images)
 
 ACTIONS (classify based on patterns above):
-1. coin_launch: Token/coin creation patterns (creates chat group group automatically if needed)
-2. modify_existing: Modifying coin parameters or pending transactions
-
-QUESTIONS: 
-3. inquiry: Status questions, how-tos, what coins do I have?, what's our chat group group?
+1. inquiry: Status questions, viewing existing data, "what/show/list/display" requests
+2. coin_launch: Token/coin creation patterns (creates chat group automatically if needed)
+3. modify_existing: Modifying coin parameters or pending transactions
 
 MANAGEMENT:
-4. cancel, management: Managing existing coins or viewing chat group group
+4. cancel, management: Managing existing coins or viewing chat group
 
 SOCIAL:
 5. greeting: Social interactions
@@ -224,7 +231,7 @@ FLAGS (detect these patterns):
 - isGreeting: Contains greeting words
 - isTransactionInquiry: Asking about pending transactions/status
 - isCancellation: Wants to cancel something  
-- isStatusInquiry: "do I have", "what's my status", "what coins", "what's our group"
+- isStatusInquiry: "what are my", "list my", "show my", "do I have", "what's my status", "what coins", "what's our group", "my portfolio", "view", "display"
 
 Return JSON:
 \`\`\`json
@@ -360,16 +367,8 @@ Return JSON:
 
     // SIMPLIFIED PRIORITY LOGIC
 
-    // Priority 0: HIGHEST PRIORITY - Continue existing coin launch progress
-    // This ensures attachment-only messages during coin launch go to the right flow
-    if (groupState.coinLaunchProgress) {
-      console.log(
-        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
-      );
-      return "coin_launch";
-    }
-
-    // Priority 1: High-confidence status inquiries always go to QA
+    // Priority 0: HIGHEST PRIORITY - Status inquiries always go to QA
+    // User wants to know about their current state, not continue a process
     if (
       primaryIntent.action === "inquiry" &&
       (flags.isStatusInquiry || flags.isTransactionInquiry) &&
@@ -377,6 +376,15 @@ Return JSON:
     ) {
       console.log(`[FlowRouter] ✅ Status inquiry → qa`);
       return "qa";
+    }
+
+    // Priority 1: Continue existing coin launch progress ONLY if not a status inquiry
+    // This ensures attachment-only messages during coin launch go to the right flow
+    if (groupState.coinLaunchProgress) {
+      console.log(
+        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
+      );
+      return "coin_launch";
     }
 
     // Priority 2: Action intents (what user wants to DO)

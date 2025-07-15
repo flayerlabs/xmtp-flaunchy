@@ -9,7 +9,7 @@ import {
 } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { safeParseJSON } from "../../core/utils/jsonUtils";
-import { getDefaultChain } from "../utils/ChainSelection";
+import { ChainConfig, getDefaultChain } from "../utils/ChainSelection";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -459,39 +459,39 @@ export class QAFlow extends BaseFlow {
       `[QAFlow] User ${context.userState.userId} - Groups: ${context.userState.groups.length}, Coins: ${context.userState.coins.length}`
     );
 
-    // Check if this is a direct message
-    if (context.isDirectMessage) {
-      // For DMs, check if user is specifically asking about groups or coins
-      console.log(`[QAFlow] 🔍 Detecting groups/coins query for DM...`);
-      const isGroupsOrCoinsQuery = await this.detectGroupsOrCoinsQuery(
-        messageText,
-        context
-      );
+    // Check if user is specifically asking about groups or coins (both DMs and group chats)
+    console.log(`[QAFlow] 🔍 Detecting groups/coins query...`);
+    const isGroupsOrCoinsQuery = await this.detectGroupsOrCoinsQuery(
+      messageText,
+      context
+    );
+
+    console.log(
+      `[QAFlow] Groups/coins query detected: ${isGroupsOrCoinsQuery}`
+    );
+
+    if (isGroupsOrCoinsQuery) {
+      // Fetch actual groups/coins data from API
+      console.log(`[QAFlow] 📡 Fetching live data from blockchain...`);
+      const userStateWithLiveData =
+        await context.sessionManager.getUserStateWithLiveData(
+          context.userState.userId
+        );
 
       console.log(
-        `[QAFlow] Groups/coins query detected: ${isGroupsOrCoinsQuery}`
+        `[QAFlow] ✅ Got live data - Groups: ${userStateWithLiveData.groups.length}, Coins: ${userStateWithLiveData.coins.length}`
       );
 
-      if (isGroupsOrCoinsQuery) {
-        // Fetch actual groups/coins data from API
-        console.log(`[QAFlow] 📡 Fetching live data from blockchain...`);
-        const userStateWithLiveData =
-          await context.sessionManager.getUserStateWithLiveData(
-            context.userState.userId
-          );
+      await this.handleGroupsOrCoinsQuery(
+        context,
+        messageText,
+        userStateWithLiveData
+      );
+      return;
+    }
 
-        console.log(
-          `[QAFlow] ✅ Got live data - Groups: ${userStateWithLiveData.groups.length}, Coins: ${userStateWithLiveData.coins.length}`
-        );
-
-        await this.handleGroupsOrCoinsQuery(
-          context,
-          messageText,
-          userStateWithLiveData
-        );
-        return;
-      }
-
+    // Handle other status inquiries differently for DMs vs group chats
+    if (context.isDirectMessage) {
       // For other status inquiries in DMs, provide structured guidance to group chats
       console.log(`[QAFlow] 💬 Sending DM guidance message`);
       const directMessageResponse =
@@ -601,12 +601,15 @@ export class QAFlow extends BaseFlow {
           - "list my groups"
           - "show my groups"
           - "what groups do I have"
+          - "what are my groups"
           - "my groups"
           - "list my coins"
           - "show my coins"
           - "what coins do I have"
+          - "what are my coins"
           - "my coins"
           - "what tokens do I have"
+          - "what are my tokens"
           - "my tokens"
           - "show my holdings"
           
@@ -663,9 +666,12 @@ export class QAFlow extends BaseFlow {
           userState.groups.length > 1 ? "s" : ""
         }:\n\n`;
 
+        const currentChain = getDefaultChain();
+
         for (const group of userState.groups) {
           const groupDisplay = await this.formatGroupDisplay(group, context);
           response += `${groupDisplay}\n`;
+          response += `  ${currentChain.viemChain.blockExplorers.default.url}/address/${group.id}\n`;
         }
       }
     } else if (isCoinsQuery || (!isGroupsQuery && userState.coins.length > 0)) {
@@ -708,7 +714,7 @@ export class QAFlow extends BaseFlow {
         } on ${currentChain.displayName}:\n\n`;
 
         for (const coin of currentNetworkCoins) {
-          const coinDisplay = await this.formatCoinDisplay(coin);
+          const coinDisplay = await this.formatCoinDisplay(coin, currentChain);
           response += `${coinDisplay}\n`;
         }
       }
@@ -752,7 +758,10 @@ export class QAFlow extends BaseFlow {
   /**
    * Format coin display with live data
    */
-  private async formatCoinDisplay(coin: any): Promise<string> {
+  private async formatCoinDisplay(
+    coin: any,
+    currentChain: ChainConfig
+  ): Promise<string> {
     console.log(
       `[QAFlow] 🎨 Formatting coin display for ${coin.name} (${coin.ticker})`
     );
@@ -800,6 +809,8 @@ export class QAFlow extends BaseFlow {
         0,
         8
       )}...${coin.contractAddress.slice(-6)}\n`;
+      // add flaunch link
+      display += `  • https://flaunch.gg/${currentChain.slug}/coin/${coin.contractAddress}\n`;
     }
 
     return display;
