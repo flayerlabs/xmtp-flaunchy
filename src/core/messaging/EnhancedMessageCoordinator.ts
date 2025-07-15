@@ -1378,9 +1378,11 @@ export class EnhancedMessageCoordinator {
           const networkPath =
             network === "baseSepolia" ? "base-sepolia" : "base";
           await conversation.send(
-            `coin created! CA: ${contractAddress}\n\nview details: https://flaunch.gg/${networkPath}/coin/${contractAddress}`
+            `coin created! CA: ${contractAddress}\n\nlink: https://flaunch.gg/${networkPath}/coin/${contractAddress}\n\nview in mini app:`
           );
-          await conversation.send("https://mini.flaunch.gg");
+          await conversation.send(
+            `https://mini.flaunch.gg/${networkPath}/coin/${contractAddress}`
+          );
 
           // Check if this was a first launch and store manager address
           if (pendingTx.launchParameters?.isFirstLaunch) {
