@@ -1,5 +1,6 @@
 import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
+import { UserState } from "../../core/types/UserState";
 import { getCharacterResponse } from "../../../utils/character";
 // Note: createLaunchExtractionPrompt import removed - was used for onboarding flow which has been removed
 import {
@@ -8,6 +9,7 @@ import {
 } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { safeParseJSON } from "../../core/utils/jsonUtils";
+import { ChainConfig, getDefaultChain } from "../utils/ChainSelection";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -42,6 +44,28 @@ export class QAFlow extends BaseFlow {
           extraction.tokenDetails.ticker ||
           context.hasAttachment)
       ) {
+        // GUARD: Don't override existing coin launch progress
+        if (context.groupState.coinLaunchProgress) {
+          console.log(
+            "🚨 QAFlow detected coin launch but existing progress exists - not overriding"
+          );
+          this.log(
+            "Existing coin launch progress detected, not overriding in QA flow",
+            {
+              userId: context.userState.userId,
+              existingStep: context.groupState.coinLaunchProgress.step,
+              existingCoinData: context.groupState.coinLaunchProgress.coinData,
+            }
+          );
+
+          // Send a message acknowledging the existing progress
+          await this.sendResponse(
+            context,
+            "you already have a coin launch in progress! continue with the current launch or type 'cancel' to start over."
+          );
+          return;
+        }
+
         this.log(
           "Coin launch detected in QA flow, redirecting to coin launch",
           {
@@ -71,7 +95,7 @@ export class QAFlow extends BaseFlow {
             extraction.launchParameters.buybackPercentage || undefined,
         };
 
-        await context.updateState({
+        await context.updateGroupState({
           coinLaunchProgress: {
             step: "collecting_coin_data",
             coinData,
@@ -127,11 +151,10 @@ export class QAFlow extends BaseFlow {
     const isCapabilityQuestion =
       context.detectionResult?.questionType === "capability";
 
-    // Check if this is a status/transaction inquiry
-    const isStatusInquiry = await this.detectStatusInquiry(
-      context,
-      messageText
-    );
+    // Check if this is a status/transaction inquiry (use FlowRouter's detection result first)
+    const isStatusInquiry =
+      context.multiIntentResult?.flags?.isStatusInquiry ||
+      (await this.detectStatusInquiry(context, messageText));
 
     if (isStatusInquiry) {
       await this.handleStatusInquiry(context, messageText);
@@ -225,9 +248,10 @@ export class QAFlow extends BaseFlow {
         max_tokens: 5,
       });
 
-      return (
-        response.choices[0]?.message?.content?.trim().toLowerCase() === "yes"
-      );
+      const result = response.choices[0]?.message?.content
+        ?.trim()
+        .toLowerCase();
+      return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to detect multiple coin request", error);
       return false;
@@ -253,15 +277,33 @@ export class QAFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<void> {
-    // Handle questions about how the agent/system works
+    // Check if this is a direct message
+    if (context.isDirectMessage) {
+      // For direct messages, provide structured guidance to group chats
+      const directMessageResponse =
+        "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
+        "to get started:\n" +
+        "1. create a group chat with your friends\n" +
+        "2. add me to the group\n" +
+        "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
+        "the magic happens when everyone's together in a group. stay based!";
+
+      await this.sendResponse(context, directMessageResponse);
+      return;
+    }
+
+    // Handle questions about how the agent/system works in group chats
     const response = await getCharacterResponse({
       openai: context.openai,
       character: context.character,
       prompt: `
         User is asking a CAPABILITY question about how you (the agent) or the system works: "${messageText}"
         
+        This is a GROUP CHAT (not a direct message).
+        
         SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
         
         Key points about the new system:
         - You automatically create groups for everyone in the chat when they launch coins
@@ -281,6 +323,13 @@ export class QAFlow extends BaseFlow {
         - Emphasize the simplicity - no complex setup needed
         - Keep it concise but informative
         
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different concepts and create line breaks
+        - Break up long explanations into multiple paragraphs
+        - Use bullet points or numbered lists when appropriate
+        - Make the response easy to read and scan, but keep it short and concise
+        - DON'T use markdown (like **bold** or *italic*)
+        
         Use your character's voice but focus on explaining your role and the simplified workflow.
       `,
     });
@@ -295,7 +344,23 @@ export class QAFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<void> {
-    // Handle general guidance questions about using the system
+    // Check if this is a direct message
+    if (context.isDirectMessage) {
+      // For direct messages, provide structured guidance to group chats
+      const directMessageResponse =
+        "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
+        "to get started:\n" +
+        "1. create a group chat with your friends\n" +
+        "2. add me to the group\n" +
+        "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
+        "the magic happens when everyone's together in a group. stay based!";
+
+      await this.sendResponse(context, directMessageResponse);
+      return;
+    }
+
+    // Handle general guidance questions about using the system in group chats
     const response = await getCharacterResponse({
       openai: context.openai,
       character: context.character,
@@ -306,11 +371,12 @@ export class QAFlow extends BaseFlow {
         - Status: ${context.userState.status}
         - Has ${context.userState.coins.length} coins
         - Has ${context.userState.groups.length} groups
+        - This is a GROUP CHAT (not a direct message)
         
         This is a GENERAL question about using the system (not about your capabilities).
         
         SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group"
+        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
         
         Provide helpful guidance about:
         - Coin launching with automatic group creation
@@ -319,6 +385,13 @@ export class QAFlow extends BaseFlow {
         - No complex setup needed - just launch coins
         
         IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.
+        
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different concepts and create line breaks
+        - Break up long explanations into multiple paragraphs
+        - Use bullet points or numbered lists when appropriate
+        - Make the response easy to read and scan, but keep it short and concise
+        - DON'T use markdown (like **bold** or *italic*)
         
         Use your character's voice but prioritize brevity and helpfulness.
       `,
@@ -363,9 +436,10 @@ export class QAFlow extends BaseFlow {
         max_tokens: 5,
       });
 
-      return (
-        response.choices[0]?.message?.content?.trim().toLowerCase() === "yes"
-      );
+      const result = response.choices[0]?.message?.content
+        ?.trim()
+        .toLowerCase();
+      return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to detect status inquiry", error);
       return false;
@@ -379,6 +453,60 @@ export class QAFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<void> {
+    console.log(`[QAFlow] 📊 Handling status inquiry: "${messageText}"`);
+    console.log(`[QAFlow] Is direct message: ${context.isDirectMessage}`);
+    console.log(
+      `[QAFlow] User ${context.userState.userId} - Groups: ${context.userState.groups.length}, Coins: ${context.userState.coins.length}`
+    );
+
+    // Check if user is specifically asking about groups or coins (both DMs and group chats)
+    console.log(`[QAFlow] 🔍 Detecting groups/coins query...`);
+    const isGroupsOrCoinsQuery = await this.detectGroupsOrCoinsQuery(
+      messageText,
+      context
+    );
+
+    console.log(
+      `[QAFlow] Groups/coins query detected: ${isGroupsOrCoinsQuery}`
+    );
+
+    if (isGroupsOrCoinsQuery) {
+      // Fetch actual groups/coins data from API
+      console.log(`[QAFlow] 📡 Fetching live data from blockchain...`);
+      const userStateWithLiveData =
+        await context.sessionManager.getUserStateWithLiveData(
+          context.userState.userId
+        );
+
+      console.log(
+        `[QAFlow] ✅ Got live data - Groups: ${userStateWithLiveData.groups.length}, Coins: ${userStateWithLiveData.coins.length}`
+      );
+
+      await this.handleGroupsOrCoinsQuery(
+        context,
+        messageText,
+        userStateWithLiveData
+      );
+      return;
+    }
+
+    // Handle other status inquiries differently for DMs vs group chats
+    if (context.isDirectMessage) {
+      // For other status inquiries in DMs, provide structured guidance to group chats
+      console.log(`[QAFlow] 💬 Sending DM guidance message`);
+      const directMessageResponse =
+        "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
+        "to get started:\n" +
+        "1. create a group chat with your friends\n" +
+        "2. add me to the group\n" +
+        "3. then i can help you launch coins with automatic fee splitting!\n\n" +
+        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
+        "the magic happens when everyone's together in a group. stay based!";
+
+      await this.sendResponse(context, directMessageResponse);
+      return;
+    }
+
     const { userState } = context;
 
     // Build status information
@@ -401,9 +529,12 @@ export class QAFlow extends BaseFlow {
       statusInfo.push(`Coins: none launched yet`);
     }
 
-    // Pending transaction
-    if (userState.pendingTransaction) {
-      const txType = userState.pendingTransaction.type.replace("_", " ");
+    // Pending transaction (group-specific)
+    if (context.groupState.pendingTransaction) {
+      const txType = context.groupState.pendingTransaction.type.replace(
+        "_",
+        " "
+      );
       statusInfo.push(`Pending: ${txType} transaction ready to sign`);
     } else {
       statusInfo.push(`Pending: no transactions`);
@@ -411,15 +542,15 @@ export class QAFlow extends BaseFlow {
 
     // Note: Onboarding progress removed - onboarding flow has been removed
 
-    // Coin launch progress
-    if (userState.coinLaunchProgress) {
-      const step = userState.coinLaunchProgress.step || "unknown";
+    // Coin launch progress (group-specific)
+    if (context.groupState.coinLaunchProgress) {
+      const step = context.groupState.coinLaunchProgress.step || "unknown";
       statusInfo.push(`Coin launch: ${step} step`);
     }
 
-    // Management progress
-    if (userState.managementProgress) {
-      const action = userState.managementProgress.action || "unknown";
+    // Management progress (group-specific)
+    if (context.groupState.managementProgress) {
+      const action = context.groupState.managementProgress.action || "unknown";
       statusInfo.push(`Management: ${action} in progress`);
     }
 
@@ -436,10 +567,252 @@ export class QAFlow extends BaseFlow {
         Be direct and informative. If they have a pending transaction, mention they need to sign it.
         If they're in onboarding, briefly explain what step they're on.
         
+        FORMATTING REQUIREMENTS:
+        - Use \n to separate different status items and create line breaks
+        - Make the response easy to read and scan, but keep it short and concise
+        - Use bullet points or numbered lists when appropriate
+        - DON'T use markdown (like **bold** or *italic*)
+        
         Use your character's voice but prioritize clarity and helpfulness.
       `,
     });
 
     await this.sendResponse(context, response);
+  }
+
+  /**
+   * Detect if user is specifically asking about groups or coins
+   */
+  private async detectGroupsOrCoinsQuery(
+    messageText: string,
+    context: FlowContext
+  ): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `Is this message specifically asking about groups or coins/tokens? "${messageText}"
+          
+          Look for patterns like:
+          - "list my groups"
+          - "show my groups"
+          - "what groups do I have"
+          - "what are my groups"
+          - "my groups"
+          - "list my coins"
+          - "show my coins"
+          - "what coins do I have"
+          - "what are my coins"
+          - "my coins"
+          - "what tokens do I have"
+          - "what are my tokens"
+          - "my tokens"
+          - "show my holdings"
+          
+          Answer only "yes" or "no".`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 5,
+      });
+
+      const result = response.choices[0]?.message?.content
+        ?.trim()
+        .toLowerCase();
+
+      return result?.startsWith("yes") || false;
+    } catch (error) {
+      this.logError("Failed to detect groups/coins query", error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle groups or coins query by fetching and displaying actual data
+   */
+  private async handleGroupsOrCoinsQuery(
+    context: FlowContext,
+    messageText: string,
+    userState: UserState
+  ): Promise<void> {
+    console.log(`[QAFlow] 🔍 Handling groups/coins query: "${messageText}"`);
+    console.log(
+      `[QAFlow] UserState - Groups: ${userState.groups.length}, Coins: ${userState.coins.length}`
+    );
+
+    // Check if asking about groups specifically
+    const isGroupsQuery = messageText.toLowerCase().includes("group");
+    const isCoinsQuery =
+      messageText.toLowerCase().includes("coin") ||
+      messageText.toLowerCase().includes("token");
+
+    console.log(
+      `[QAFlow] Query type - Groups: ${isGroupsQuery}, Coins: ${isCoinsQuery}`
+    );
+
+    let response = "";
+
+    if (isGroupsQuery || (!isCoinsQuery && userState.groups.length > 0)) {
+      // Handle groups query
+      if (userState.groups.length === 0) {
+        response =
+          "you don't have any groups yet! when you launch coins, i'll automatically create groups for fee splitting.";
+      } else {
+        response = `you have ${userState.groups.length} group${
+          userState.groups.length > 1 ? "s" : ""
+        }:\n\n`;
+
+        const currentChain = getDefaultChain();
+
+        for (const group of userState.groups) {
+          const groupDisplay = await this.formatGroupDisplay(group, context);
+          response += `${groupDisplay}\n`;
+          response += `  ${currentChain.viemChain.blockExplorers.default.url}/address/${group.id}\n`;
+        }
+      }
+    } else if (isCoinsQuery || (!isGroupsQuery && userState.coins.length > 0)) {
+      // Handle coins query
+      console.log(
+        `[QAFlow] 🪙 Processing coins query - found ${userState.coins.length} total coins`
+      );
+
+      const currentChain = getDefaultChain();
+
+      // Filter coins for current chain only
+      const currentNetworkCoins = userState.coins.filter(
+        (coin) => coin.launched && coin.chainName === currentChain.name
+      );
+
+      console.log(`[QAFlow] 🌐 Current chain: ${currentChain.displayName}`);
+      console.log(
+        `[QAFlow] 📊 Coins filtered for current chain: ${currentNetworkCoins.length}`
+      );
+
+      if (currentNetworkCoins.length === 0) {
+        console.log(
+          `[QAFlow] ⚠️  No coins found on current chain ${currentChain.displayName}`
+        );
+        response = `you haven't launched any coins on ${currentChain.displayName} yet! launch your first coin and i'll handle the fee splitting automatically.`;
+      } else {
+        console.log(
+          `[QAFlow] 📊 Coins found on ${currentChain.displayName}:`,
+          currentNetworkCoins.map((coin) => ({
+            name: coin.name,
+            ticker: coin.ticker,
+            contractAddress: coin.contractAddress,
+            hasLiveData: !!coin.liveData,
+            chainName: coin.chainName,
+          }))
+        );
+
+        response = `you have ${currentNetworkCoins.length} coin${
+          currentNetworkCoins.length > 1 ? "s" : ""
+        } on ${currentChain.displayName}:\n\n`;
+
+        for (const coin of currentNetworkCoins) {
+          const coinDisplay = await this.formatCoinDisplay(coin, currentChain);
+          response += `${coinDisplay}\n`;
+        }
+      }
+    } else {
+      // General status if neither groups nor coins specified
+      response = `status summary:\n`;
+      response += `• groups: ${userState.groups.length}\n`;
+      response += `• coins: ${userState.coins.length}\n`;
+
+      if (userState.groups.length === 0 && userState.coins.length === 0) {
+        response +=
+          "\nlaunch your first coin and i'll automatically set up fee splitting!";
+      }
+    }
+
+    console.log(`[QAFlow] 📤 Sending response: ${response.length} chars`);
+    await this.sendResponse(context, response);
+  }
+
+  /**
+   * Format group display with live data
+   */
+  private async formatGroupDisplay(
+    group: any,
+    context: FlowContext
+  ): Promise<string> {
+    const groupDisplay = await GroupCreationUtils.formatAddress(
+      group.id,
+      context.ensResolver
+    );
+
+    let display = `• ${groupDisplay}`;
+
+    if (group.liveData) {
+      display += ` (${group.liveData.totalCoins} coins, $${group.liveData.totalFeesUSDC} fees)`;
+    }
+
+    return display;
+  }
+
+  /**
+   * Format coin display with live data
+   */
+  private async formatCoinDisplay(
+    coin: any,
+    currentChain: ChainConfig
+  ): Promise<string> {
+    console.log(
+      `[QAFlow] 🎨 Formatting coin display for ${coin.name} (${coin.ticker})`
+    );
+    console.log(`[QAFlow] Coin has live data: ${!!coin.liveData}`);
+
+    let display = `🪙 ${coin.name} (${coin.ticker})\n`;
+
+    if (coin.liveData) {
+      console.log(`[QAFlow] 📊 Live data:`, {
+        holders: coin.liveData.totalHolders,
+        marketCap: coin.liveData.marketCapUSDC,
+        priceChange: coin.liveData.priceChangePercentage,
+        fees: coin.liveData.totalFeesUSDC,
+      });
+
+      display += `  • holders: ${coin.liveData.totalHolders}\n`;
+      display += `  • market cap: $${parseFloat(
+        coin.liveData.marketCapUSDC
+      ).toLocaleString()}\n`;
+
+      if (
+        coin.liveData.priceChangePercentage &&
+        parseFloat(coin.liveData.priceChangePercentage) !== 0
+      ) {
+        const priceChangeNum = parseFloat(coin.liveData.priceChangePercentage);
+        const change = priceChangeNum > 0 ? "+" : "";
+        display += `  • 24h change: ${change}${priceChangeNum.toFixed(2)}%\n`;
+      }
+
+      if (
+        coin.liveData.totalFeesUSDC &&
+        parseFloat(coin.liveData.totalFeesUSDC) > 0
+      ) {
+        display += `  • fees: $${parseFloat(
+          coin.liveData.totalFeesUSDC
+        ).toLocaleString()}\n`;
+      }
+    } else {
+      console.log(`[QAFlow] ⚠️  No live data available for ${coin.name}`);
+      display += `  • no live data available\n`;
+    }
+
+    if (coin.contractAddress) {
+      display += `  • contract: ${coin.contractAddress.slice(
+        0,
+        8
+      )}...${coin.contractAddress.slice(-6)}\n`;
+      // add flaunch link
+      display += `  • https://flaunch.gg/${currentChain.slug}/coin/${coin.contractAddress}\n`;
+    }
+
+    return display;
   }
 }

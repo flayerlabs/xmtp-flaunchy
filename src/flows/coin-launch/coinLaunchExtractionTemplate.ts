@@ -15,20 +15,28 @@ TOKEN DETAILS EXTRACTION
 
 Name and Ticker Extraction Priority:
 
-Pattern 1: "Name (TICKER)" format
+Pattern 1: Key-Value format (HIGHEST PRIORITY)
+- "Name: YouTube" → name: "YouTube", ticker: null
+- "Ticker: YTBE" → name: null, ticker: "YTBE"
+- "Name: Test Token" → name: "Test Token", ticker: null
+- "Ticker: TEST" → name: null, ticker: "TEST"
+- "Ticker and Name Test" → name: "Test", ticker: "TEST"
+- "Name and Ticker Test" → name: "Test", ticker: "TEST"
+
+Pattern 2: "Name (TICKER)" format
 - "Timer (TIME)" → name: "Timer", ticker: "TIME"
 - "Launch Timer (TIME)" → name: "Timer", ticker: "TIME" (remove "Launch" prefix)
 - "Space Coin (SPACE)" → name: "Space Coin", ticker: "SPACE"
 
-Pattern 2: "Launch/Create [called/named] Name"
+Pattern 3: "Launch/Create [called/named] Name"
 - "Launch token called Moonshot" → name: "Moonshot", ticker: "MOON" (generate)
 - "Create token named Solar" → name: "Solar", ticker: "SOLR" (generate)
 
-Pattern 3: "Launch Name" (without called/named)
+Pattern 4: "Launch Name" (without called/named)
 - "Launch Moonshot" → name: "Moonshot", ticker: "MOON" (generate)
 - "Launch Space Token" → name: "Space Token", ticker: "SPTK" (generate)
 
-Pattern 4: Ticker only
+Pattern 5: Ticker only
 - "Launch ticker DOGE" → name: "DOGE", ticker: "DOGE"
 - "Create MOON token" → name: "MOON", ticker: "MOON"
 
@@ -105,6 +113,21 @@ Return ONLY this JSON structure:
 }
 
 Examples:
+
+Key-value format (most common):
+"Name: YouTube" →
+{
+  "tokenDetails": {"name": "YouTube", "ticker": null, "image": null},
+  "targetGroup": null,
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+}
+
+"Ticker: YTBE" →
+{
+  "tokenDetails": {"name": null, "ticker": "YTBE", "image": null},
+  "targetGroup": null,
+  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+}
 
 Full launch command:
 "launch nobi (NOBI) into 0xfdb02c98d215ee60e19822a42dee9e6c26fe7394" →

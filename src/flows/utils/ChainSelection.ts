@@ -4,6 +4,7 @@ import { numToHex } from "../../../utils/hex";
 export interface ChainConfig {
   id: number;
   name: "base" | "baseSepolia"; // Match viem naming convention
+  slug: "base" | "base-sepolia"; // flaunch url slug
   displayName: string;
   hexId: string;
   viemChain: typeof base | typeof baseSepolia;
@@ -14,6 +15,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   base: {
     id: base.id,
     name: "base",
+    slug: "base",
     displayName: "Base Mainnet",
     hexId: numToHex(base.id),
     viemChain: base,
@@ -22,6 +24,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   baseSepolia: {
     id: baseSepolia.id,
     name: "baseSepolia",
+    slug: "base-sepolia",
     displayName: "Base Sepolia",
     hexId: numToHex(baseSepolia.id),
     viemChain: baseSepolia,

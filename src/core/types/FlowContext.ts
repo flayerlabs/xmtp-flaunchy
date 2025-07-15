@@ -6,7 +6,7 @@ import type {
 } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
 import type { Character } from "../../../types";
-import type { UserState } from "./UserState";
+import type { UserState, GroupState } from "./UserState";
 import type { SessionManager } from "../session/SessionManager";
 import type { ENSResolverService } from "../../services/ENSResolverService";
 import type {
@@ -30,6 +30,10 @@ export interface FlowContext {
   senderInboxId: string;
   creatorAddress: string;
 
+  // Group context
+  groupId: string;
+  groupState: GroupState;
+
   // Session management
   sessionManager: SessionManager;
 
@@ -42,6 +46,7 @@ export interface FlowContext {
   attachment?: any;
   relatedMessages?: DecodedMessage[];
   conversationHistory: DecodedMessage[];
+  isDirectMessage: boolean;
 
   // Detection results from FlowRouter (avoids redundant LLM calls)
   detectionResult?: UnifiedRoutingResult;
@@ -52,6 +57,10 @@ export interface FlowContext {
   // Helper functions
   sendResponse: (message: string) => Promise<void>;
   updateState: (updates: Partial<UserState>) => Promise<void>;
+
+  // Group-specific state management
+  updateGroupState: (updates: Partial<GroupState>) => Promise<void>;
+  clearGroupState: () => Promise<void>;
 
   // Utility functions
   resolveUsername: (username: string) => Promise<string | undefined>;

@@ -97,7 +97,7 @@ export interface TransactionReferenceMessage {
   content: {
     transactionReference: {
       networkId: Hex;
-      reference: Hex;
+      reference: Hex; // transaction hash
       metadata: {
         transactionType: string;
         fromAddress: Address;

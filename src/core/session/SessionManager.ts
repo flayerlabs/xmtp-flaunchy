@@ -1,4 +1,4 @@
-import { UserState } from "../types/UserState";
+import { UserState, GroupState } from "../types/UserState";
 import { StateStorage } from "../storage/StateStorage";
 import { UserDataService } from "../../services/UserDataService";
 
@@ -22,19 +22,81 @@ export class SessionManager {
   }
 
   /**
+   * Get group-specific state for a user in a specific group
+   */
+  async getGroupState(userId: string, groupId: string): Promise<GroupState> {
+    const userState = await this.getUserState(userId);
+    return userState.groupStates?.[groupId] || {};
+  }
+
+  /**
+   * Update group-specific state for a user in a specific group
+   */
+  async updateGroupState(
+    userId: string,
+    groupId: string,
+    updates: Partial<GroupState>
+  ): Promise<UserState> {
+    const userState = await this.getUserState(userId);
+
+    // Initialize groupStates if it doesn't exist
+    if (!userState.groupStates) {
+      userState.groupStates = {};
+    }
+
+    // Initialize this group's state if it doesn't exist
+    if (!userState.groupStates[groupId]) {
+      userState.groupStates[groupId] = {};
+    }
+
+    // Update the group-specific state
+    userState.groupStates[groupId] = {
+      ...userState.groupStates[groupId],
+      ...updates,
+    };
+
+    // Update the overall user state
+    const newState = {
+      ...userState,
+      updatedAt: new Date(),
+    };
+
+    await this.stateStore.set(userId, newState);
+    return newState;
+  }
+
+  /**
+   * Clear group-specific state for a user in a specific group
+   */
+  async clearGroupState(userId: string, groupId: string): Promise<UserState> {
+    const userState = await this.getUserState(userId);
+
+    if (userState.groupStates?.[groupId]) {
+      delete userState.groupStates[groupId];
+    }
+
+    const newState = {
+      ...userState,
+      updatedAt: new Date(),
+    };
+
+    await this.stateStore.set(userId, newState);
+    return newState;
+  }
+
+  /**
    * Get user state with live data injected from API
    */
   async getUserStateWithLiveData(userId: string): Promise<UserState> {
     const state = await this.getUserState(userId);
 
-    // Only inject live data for active users with groups/coins
-    if (
-      state.status === "active" &&
-      (state.groups.length > 0 || state.coins.length > 0)
-    ) {
+    // Inject live data for users who have groups/coins, regardless of status
+    // This ensures that users who have launched coins but are still "new" get live data
+    if (state.groups.length > 0 || state.coins.length > 0) {
       try {
         console.log("💉 INJECTING LIVE DATA", {
           userId,
+          status: state.status,
           groupCount: state.groups.length,
           coinCount: state.coins.length,
         });
@@ -90,7 +152,6 @@ export class SessionManager {
   async completeOnboarding(userId: string): Promise<UserState> {
     return this.updateUserState(userId, {
       status: "active",
-      onboardingProgress: undefined, // Clear onboarding progress completely when done
     });
   }
 
@@ -104,13 +165,9 @@ export class SessionManager {
     return {
       userId,
       status: "new",
-      onboardingProgress: {
-        step: "coin_creation",
-        startedAt: now,
-        coinData: {},
-      },
       coins: [],
       groups: [],
+      groupStates: {},
       preferences: {
         defaultMarketCap: 1000,
         defaultFairLaunchPercent: 10,
@@ -130,18 +187,10 @@ export class SessionManager {
     userId: string,
     step: "coin_creation" | "username_collection" | "completed"
   ): Promise<UserState> {
-    const state = await this.getUserState(userId);
     const isCompleted = step === "completed";
 
     return this.updateUserState(userId, {
       status: isCompleted ? "active" : "onboarding",
-      onboardingProgress: isCompleted
-        ? undefined
-        : {
-            ...state.onboardingProgress!,
-            step,
-            completedAt: undefined,
-          },
     });
   }
 
@@ -149,17 +198,9 @@ export class SessionManager {
     userId: string,
     coinData: Partial<{ name: string; ticker: string; image: string }>
   ): Promise<UserState> {
-    const state = await this.getUserState(userId);
-
-    return this.updateUserState(userId, {
-      onboardingProgress: {
-        ...state.onboardingProgress!,
-        coinData: {
-          ...state.onboardingProgress!.coinData,
-          ...coinData,
-        },
-      },
-    });
+    // This method is deprecated - coin data should be updated per-group using updateGroupState
+    console.warn("updateCoinData is deprecated - use updateGroupState instead");
+    return this.getUserState(userId);
   }
 
   async updateSplitData(
@@ -174,14 +215,11 @@ export class SessionManager {
       creatorPercent?: number;
     }
   ): Promise<UserState> {
-    const state = await this.getUserState(userId);
-
-    return this.updateUserState(userId, {
-      onboardingProgress: {
-        ...state.onboardingProgress!,
-        splitData,
-      },
-    });
+    // This method is deprecated - split data should be updated per-group using updateGroupState
+    console.warn(
+      "updateSplitData is deprecated - use updateGroupState instead"
+    );
+    return this.getUserState(userId);
   }
 
   async addCoin(

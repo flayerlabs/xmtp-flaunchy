@@ -77,6 +77,49 @@ export class FileStateStorage implements StateStorage {
             createdAt: new Date(group.createdAt),
             updatedAt: new Date(group.updatedAt),
           })),
+          // Handle group states conversion
+          groupStates: userState.groupStates
+            ? Object.fromEntries(
+                Object.entries(userState.groupStates).map(
+                  ([groupId, groupState]: [string, any]) => [
+                    groupId,
+                    {
+                      ...groupState,
+                      onboardingProgress: groupState.onboardingProgress
+                        ? {
+                            ...groupState.onboardingProgress,
+                            startedAt: new Date(
+                              groupState.onboardingProgress.startedAt
+                            ),
+                            completedAt: groupState.onboardingProgress
+                              .completedAt
+                              ? new Date(
+                                  groupState.onboardingProgress.completedAt
+                                )
+                              : undefined,
+                          }
+                        : undefined,
+                      managementProgress: groupState.managementProgress
+                        ? {
+                            ...groupState.managementProgress,
+                            startedAt: new Date(
+                              groupState.managementProgress.startedAt
+                            ),
+                          }
+                        : undefined,
+                      coinLaunchProgress: groupState.coinLaunchProgress
+                        ? {
+                            ...groupState.coinLaunchProgress,
+                            startedAt: new Date(
+                              groupState.coinLaunchProgress.startedAt
+                            ),
+                          }
+                        : undefined,
+                    },
+                  ]
+                )
+              )
+            : {},
         });
       }
 

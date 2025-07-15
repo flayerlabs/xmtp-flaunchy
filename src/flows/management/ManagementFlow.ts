@@ -59,7 +59,7 @@ export class ManagementFlow extends BaseFlow {
     await this.clearCrossFlowTransactions(context);
 
     // Handle pending transactions
-    if (userState.pendingTransaction && messageText) {
+    if (context.groupState.pendingTransaction && messageText) {
       const transactionResponse = await this.handlePendingTransaction(
         context,
         messageText
@@ -72,7 +72,7 @@ export class ManagementFlow extends BaseFlow {
     }
 
     // Handle ongoing management progress
-    if (userState.managementProgress) {
+    if (context.groupState.managementProgress) {
       await this.handleOngoingProcess(context);
       return;
     }
@@ -86,19 +86,19 @@ export class ManagementFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<string | null> {
-    const { userState } = context;
+    const { groupState } = context;
 
-    if (!userState.pendingTransaction) {
+    if (!groupState.pendingTransaction) {
       return null;
     }
 
-    const pendingTx = userState.pendingTransaction;
+    const pendingTx = groupState.pendingTransaction;
 
     // Use LLM to determine if the message is about the pending transaction
     const isTransactionRelated = await this.isMessageAboutPendingTransaction(
       context,
       messageText,
-      userState.pendingTransaction?.type || "unknown"
+      groupState.pendingTransaction?.type || "unknown"
     );
 
     // If message is not transaction-related, don't handle it here
@@ -136,8 +136,8 @@ export class ManagementFlow extends BaseFlow {
     messageText: string,
     transactionType: string
   ): Promise<boolean> {
-    const { userState } = context;
-    const pendingTx = userState.pendingTransaction;
+    const { groupState } = context;
+    const pendingTx = groupState.pendingTransaction;
 
     if (!pendingTx) return false;
 
@@ -172,10 +172,10 @@ export class ManagementFlow extends BaseFlow {
     } else if (pendingTx.type === "group_creation") {
       // Get group creation details from progress
       let receivers: any[] = [];
-      if (userState.managementProgress?.groupCreationData?.receivers) {
-        receivers = userState.managementProgress.groupCreationData.receivers;
-      } else if (userState.onboardingProgress?.splitData?.receivers) {
-        receivers = userState.onboardingProgress.splitData.receivers;
+      if (groupState.managementProgress?.groupCreationData?.receivers) {
+        receivers = groupState.managementProgress.groupCreationData.receivers;
+      } else if (groupState.onboardingProgress?.splitData?.receivers) {
+        receivers = groupState.onboardingProgress.splitData.receivers;
       }
 
       if (receivers.length > 0) {
@@ -301,8 +301,8 @@ Respond with only: cancel, modify, or inquiry`,
     context: FlowContext,
     messageText: string
   ): Promise<string | null> {
-    const { userState } = context;
-    const pendingTx = userState.pendingTransaction;
+    const { groupState } = context;
+    const pendingTx = groupState.pendingTransaction;
 
     if (!pendingTx) {
       return "no pending transaction to modify.";
@@ -325,8 +325,8 @@ Respond with only: cancel, modify, or inquiry`,
     context: FlowContext,
     messageText: string
   ): Promise<string | null> {
-    const { userState } = context;
-    const pendingTx = userState.pendingTransaction!;
+    const { groupState, userState } = context;
+    const pendingTx = groupState.pendingTransaction!;
 
     // Use LLM to extract parameter changes from the message
     try {
@@ -436,7 +436,9 @@ If no parameters are mentioned, return:
       const targetGroupId =
         updatedLaunchParameters.targetGroupId ||
         pendingTx.launchParameters?.targetGroupId;
-      const targetGroup = userState.groups.find((g) => g.id === targetGroupId);
+      const targetGroup = userState.groups.find(
+        (g: any) => g.id === targetGroupId
+      );
 
       if (!targetGroup) {
         return "couldn't find the target group for your coin launch.";
@@ -479,15 +481,15 @@ If no parameters are mentioned, return:
     context: FlowContext,
     messageText: string
   ): Promise<string | null> {
-    const { userState } = context;
+    const { groupState } = context;
 
     // Get existing receivers
     let existingReceivers: any[] = [];
-    if (userState.managementProgress?.groupCreationData?.receivers) {
+    if (groupState.managementProgress?.groupCreationData?.receivers) {
       existingReceivers =
-        userState.managementProgress.groupCreationData.receivers;
-    } else if (userState.onboardingProgress?.splitData?.receivers) {
-      existingReceivers = userState.onboardingProgress.splitData.receivers;
+        groupState.managementProgress.groupCreationData.receivers;
+    } else if (groupState.onboardingProgress?.splitData?.receivers) {
+      existingReceivers = groupState.onboardingProgress.splitData.receivers;
     }
 
     // Check if this is a removal request
@@ -579,7 +581,7 @@ If no parameters are mentioned, return:
           );
 
         // Update state
-        await context.updateState({
+        await context.updateGroupState({
           pendingTransaction: {
             type: "group_creation",
             network: getDefaultChain().name,
@@ -783,7 +785,7 @@ If no parameters are mentioned, return:
           );
 
         // Update state
-        await context.updateState({
+        await context.updateGroupState({
           pendingTransaction: {
             type: "group_creation",
             network: getDefaultChain().name,
@@ -953,7 +955,7 @@ If no parameters are mentioned, return:
         );
 
       // Update state
-      await context.updateState({
+      await context.updateGroupState({
         pendingTransaction: {
           type: "group_creation",
           network: getDefaultChain().name,
@@ -1085,11 +1087,11 @@ If no parameters are mentioned, return:
     context: FlowContext,
     messageText: string
   ): Promise<string | null> {
-    const { userState } = context;
+    const { userState, groupState } = context;
 
-    if (!userState.pendingTransaction) return null;
+    if (!groupState.pendingTransaction) return null;
 
-    const pendingTx = userState.pendingTransaction;
+    const pendingTx = groupState.pendingTransaction;
 
     // Use LLM to generate a comprehensive response about the transaction
     let transactionDetails = "";
@@ -1143,10 +1145,10 @@ If no parameters are mentioned, return:
     } else if (pendingTx.type === "group_creation") {
       // Get group creation details
       let receivers: any[] = [];
-      if (userState.managementProgress?.groupCreationData?.receivers) {
-        receivers = userState.managementProgress.groupCreationData.receivers;
-      } else if (userState.onboardingProgress?.splitData?.receivers) {
-        receivers = userState.onboardingProgress.splitData.receivers;
+      if (groupState.managementProgress?.groupCreationData?.receivers) {
+        receivers = groupState.managementProgress.groupCreationData.receivers;
+      } else if (groupState.onboardingProgress?.splitData?.receivers) {
+        receivers = groupState.onboardingProgress.splitData.receivers;
       }
 
       if (receivers.length > 0) {
@@ -1180,7 +1182,7 @@ If no parameters are mentioned, return:
   private async handleOngoingProcess(context: FlowContext): Promise<void> {
     // Management progress is now simplified - no group creation
     // Any ongoing processes should be cleared since groups are auto-created
-    await context.updateState({
+    await context.updateGroupState({
       managementProgress: undefined,
     });
 
@@ -1316,56 +1318,142 @@ If no parameters are mentioned, return:
   }
 
   private async listCoins(context: FlowContext): Promise<void> {
-    const { userState } = context;
     const currentChain = getDefaultChain();
 
-    // Only show coins on current network
-    const currentNetworkCoins = userState.coins.filter(
-      (coin) => coin.launched && coin.chainName === currentChain.name
+    console.log(
+      `[ManagementFlow] 🪙 Listing coins for user ${context.userState.userId}`
     );
-    const currentNetworkGroups = userState.groups.filter(
-      (group) => group.chainName === currentChain.name
+    console.log(`[ManagementFlow] Current chain: ${currentChain.displayName}`);
+    console.log(
+      `[ManagementFlow] Cached coins: ${context.userState.coins.length}`
     );
-
-    if (currentNetworkCoins.length === 0) {
-      if (currentNetworkGroups.length === 0) {
-        await this.sendResponse(
-          context,
-          `no coins launched in this chat group on ${currentChain.displayName} yet. launch a coin and I'll automatically create a group for everyone!`
-        );
-      } else {
-        await this.sendResponse(
-          context,
-          `no coins launched in this chat group on ${currentChain.displayName} yet. launch one and it'll use the chat group's group!`
-        );
-      }
-      return;
-    }
+    console.log(
+      `[ManagementFlow] Cached groups: ${context.userState.groups.length}`
+    );
 
     try {
+      // Fetch live data from blockchain
+      console.log(`[ManagementFlow] 📡 Fetching live data from blockchain...`);
+      const userStateWithLiveData =
+        await context.sessionManager.getUserStateWithLiveData(
+          context.userState.userId
+        );
+
+      console.log(
+        `[ManagementFlow] ✅ Got live data - coins: ${userStateWithLiveData.coins.length}, groups: ${userStateWithLiveData.groups.length}`
+      );
+
+      // Only show coins on current network
+      const currentNetworkCoins = userStateWithLiveData.coins.filter(
+        (coin) => coin.launched && coin.chainName === currentChain.name
+      );
+      const currentNetworkGroups = userStateWithLiveData.groups.filter(
+        (group) => group.chainName === currentChain.name
+      );
+
+      console.log(
+        `[ManagementFlow] Filtered coins for ${currentChain.displayName}: ${currentNetworkCoins.length}`
+      );
+      console.log(
+        `[ManagementFlow] Filtered groups for ${currentChain.displayName}: ${currentNetworkGroups.length}`
+      );
+
+      if (currentNetworkCoins.length === 0) {
+        if (currentNetworkGroups.length === 0) {
+          console.log(`[ManagementFlow] No coins or groups found`);
+          await this.sendResponse(
+            context,
+            `no coins launched in this chat group on ${currentChain.displayName} yet. launch a coin and I'll automatically create a group for everyone!`
+          );
+        } else {
+          console.log(`[ManagementFlow] No coins found but groups exist`);
+          await this.sendResponse(
+            context,
+            `no coins launched in this chat group on ${currentChain.displayName} yet. launch one and it'll use the chat group's group!`
+          );
+        }
+        return;
+      }
+
+      // Log coin details for debugging
+      console.log(
+        `[ManagementFlow] Found coins:`,
+        currentNetworkCoins.map((coin) => ({
+          name: coin.name,
+          ticker: coin.ticker,
+          contractAddress: coin.contractAddress,
+          groupId: coin.groupId,
+          hasLiveData: !!coin.liveData,
+        }))
+      );
+
       // Check fee balances for current network groups
       const totalFees = await this.checkFeeBalances(
         currentNetworkGroups,
         context.creatorAddress
       );
 
+      // Build detailed message with coin information
       let message = `you have ${currentNetworkCoins.length} coin${
         currentNetworkCoins.length > 1 ? "s" : ""
-      } on ${currentChain.displayName}.`;
+      } on ${currentChain.displayName}:\n\n`;
+
+      // Add coin details
+      for (const coin of currentNetworkCoins) {
+        message += `🪙 ${coin.name} (${coin.ticker})\n`;
+
+        if (coin.liveData) {
+          message += `  • holders: ${coin.liveData.totalHolders}\n`;
+          message += `  • market cap: $${parseFloat(
+            coin.liveData.marketCapUSDC
+          ).toLocaleString()}\n`;
+          if (
+            coin.liveData.priceChangePercentage &&
+            parseFloat(coin.liveData.priceChangePercentage) !== 0
+          ) {
+            const priceChangeNum = parseFloat(
+              coin.liveData.priceChangePercentage
+            );
+            const change = priceChangeNum > 0 ? "+" : "";
+            message += `  • 24h change: ${change}${priceChangeNum.toFixed(
+              2
+            )}%\n`;
+          }
+        }
+
+        if (coin.contractAddress) {
+          message += `  • contract: ${coin.contractAddress.slice(
+            0,
+            8
+          )}...${coin.contractAddress.slice(-6)}\n`;
+          message += `  • https://flaunch.gg/${currentChain.slug}/coin/${coin.contractAddress}\n`;
+        }
+
+        message += `\n`;
+      }
 
       if (totalFees > 0) {
-        message += ` claimable fees: ${totalFees.toFixed(6)} ETH.`;
+        message += `\n💰 claimable fees: ${totalFees.toFixed(6)} ETH`;
       }
 
       await this.sendResponse(context, message);
       await this.sendMiniAppUrl(context);
     } catch (error) {
-      this.logError("Failed to check fee balances", error);
+      this.logError("Failed to list coins", error);
+      console.error(`[ManagementFlow] ❌ Error listing coins:`, error);
+
+      // Fallback to cached state if live data fails
+      const currentNetworkCoins = context.userState.coins.filter(
+        (coin) => coin.launched && coin.chainName === currentChain.name
+      );
+
       await this.sendResponse(
         context,
-        `you have ${currentNetworkCoins.length} coin${
-          currentNetworkCoins.length > 1 ? "s" : ""
-        } on ${currentChain.displayName}.`
+        `having trouble fetching live data. from cached state: you have ${
+          currentNetworkCoins.length
+        } coin${currentNetworkCoins.length > 1 ? "s" : ""} on ${
+          currentChain.displayName
+        }. try again in a moment.`
       );
       await this.sendMiniAppUrl(context);
     }
@@ -1454,7 +1542,7 @@ If no parameters are mentioned, return:
     );
 
     if (isTransactionStatusQuestion) {
-      if (userState.pendingTransaction) {
+      if (context.groupState.pendingTransaction) {
         // User has a pending transaction, provide details
         const transactionDetails = await this.handleTransactionInquiry(
           context,
@@ -1630,7 +1718,7 @@ Answer only "yes" or "no".`,
         );
 
       // Update state
-      await context.updateState({
+      await context.updateGroupState({
         managementProgress: undefined,
         pendingTransaction: {
           type: "group_creation",
@@ -1802,23 +1890,23 @@ Answer only "yes" or "no".`,
   private async clearCrossFlowTransactions(
     context: FlowContext
   ): Promise<void> {
-    const { userState } = context;
+    const { groupState } = context;
 
     // Only clear coin_creation transactions, since management flow handles group_creation
     if (
-      userState.pendingTransaction &&
-      userState.pendingTransaction.type === "coin_creation"
+      groupState.pendingTransaction &&
+      groupState.pendingTransaction.type === "coin_creation"
     ) {
-      const pendingTx = userState.pendingTransaction;
+      const pendingTx = groupState.pendingTransaction;
 
       this.log("Clearing cross-flow pending transaction", {
-        userId: userState.userId,
+        userId: context.userState.userId,
         transactionType: pendingTx.type,
         reason: "User explicitly started management operation",
       });
 
       // Clear the pending transaction and related progress SILENTLY
-      await context.updateState({
+      await context.updateGroupState({
         pendingTransaction: undefined,
         // Clear coin launch progress if it exists (user switching from coin launch to management)
         coinLaunchProgress: undefined,
