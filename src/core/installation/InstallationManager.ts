@@ -63,14 +63,49 @@ export class InstallationManager {
           `📦 Creating XMTP client (attempt ${attempt}/${retryAttempts})...`
         );
 
-        const client = await Client.create(signer, {
+        // Add timeout wrapper for client creation to prevent hanging
+        const clientCreationPromise = Client.create(signer, {
           env,
           codecs,
           dbPath,
           dbEncryptionKey,
         });
 
+        // Race against timeout (30 seconds for first attempt, 60 seconds for retries)
+        const timeoutMs = attempt === 1 ? 30000 : 60000;
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(`XMTP client creation timeout after ${timeoutMs}ms`)
+              ),
+            timeoutMs
+          )
+        );
+
+        const client = (await Promise.race([
+          clientCreationPromise,
+          timeoutPromise,
+        ])) as Client<any>;
+
         console.log("✅ XMTP client created successfully!");
+
+        // Validate client connection immediately
+        try {
+          console.log("🔍 Validating client connection...");
+          const validationStart = Date.now();
+          await client.conversations.list({ limit: 1 });
+          const validationDuration = Date.now() - validationStart;
+          console.log(
+            `✅ Client connection validated in ${validationDuration}ms`
+          );
+        } catch (validationError) {
+          console.warn(
+            "⚠️ Client connection validation failed, but proceeding:",
+            validationError
+          );
+        }
+
         return client;
       } catch (error: any) {
         lastError = error;
@@ -267,18 +302,51 @@ export class InstallationManager {
           `📦 Building XMTP client from existing installation (attempt ${attempt}/${retryAttempts})...`
         );
 
-        // Use Client.create() with same database path and encryption key to reuse existing installation
-        // XMTP will automatically reuse the existing installation if the database already exists
-        const client = await Client.create(signer, {
+        // Add timeout wrapper for client creation to prevent hanging
+        const clientCreationPromise = Client.create(signer, {
           env,
           codecs,
           dbPath,
           dbEncryptionKey,
         });
 
+        // Race against timeout (30 seconds for first attempt, 60 seconds for retries)
+        const timeoutMs = attempt === 1 ? 30000 : 60000;
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(`XMTP client creation timeout after ${timeoutMs}ms`)
+              ),
+            timeoutMs
+          )
+        );
+
+        const client = (await Promise.race([
+          clientCreationPromise,
+          timeoutPromise,
+        ])) as Client<any>;
+
         console.log(
           "✅ XMTP client created successfully (reused existing installation)!"
         );
+
+        // Validate client connection immediately
+        try {
+          console.log("🔍 Validating client connection...");
+          const validationStart = Date.now();
+          await client.conversations.list({ limit: 1 });
+          const validationDuration = Date.now() - validationStart;
+          console.log(
+            `✅ Client connection validated in ${validationDuration}ms`
+          );
+        } catch (validationError) {
+          console.warn(
+            "⚠️ Client connection validation failed, but proceeding:",
+            validationError
+          );
+        }
+
         return client;
       } catch (error: any) {
         lastError = error;

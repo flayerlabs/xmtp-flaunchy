@@ -29,6 +29,15 @@ let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
 async function createApplication() {
   console.log("🚀 Starting Flaunchy with new architecture...");
 
+  // Check if running on Railway and add startup delay if needed
+  const isRailway = process.env.RAILWAY_ENVIRONMENT !== undefined;
+  if (isRailway) {
+    console.log("🚄 Railway environment detected");
+    console.log("⏳ Allowing Railway container network to stabilize...");
+    await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay for Railway
+    console.log("✅ Railway network stabilization complete");
+  }
+
   // Validate and load environment variables
   const { WALLET_KEY, ENCRYPTION_KEY, XMTP_ENV, OPENAI_API_KEY } =
     validateEnvironment([
@@ -133,18 +142,56 @@ async function createApplication() {
   console.log("✅ Architecture initialized successfully!");
 
   console.log("✓ Syncing conversations...");
+  const syncStartTime = Date.now();
   await client.conversations.sync();
+  const syncDuration = Date.now() - syncStartTime;
+  console.log(`✓ Conversation sync completed in ${syncDuration}ms`);
 
   console.log("📡 Starting message stream...");
+  const streamStartTime = Date.now();
 
   // Start listening for messages
   const stream = await client.conversations.streamAllMessages();
+  const streamSetupDuration = Date.now() - streamStartTime;
+  console.log(`📡 Message stream setup completed in ${streamSetupDuration}ms`);
+
+  // Add connection health check and force readiness
+  console.log("🔍 Checking XMTP connection health...");
+  try {
+    // Force a quick operation to ensure connection is ready
+    const healthCheckStart = Date.now();
+    await client.conversations.list({ limit: 1 });
+    const healthCheckDuration = Date.now() - healthCheckStart;
+    console.log(
+      `✅ XMTP connection health check passed in ${healthCheckDuration}ms`
+    );
+  } catch (healthError) {
+    console.warn("⚠️ XMTP health check failed, but continuing:", healthError);
+  }
+
+  // Add a small delay to let the stream fully initialize
+  console.log("⏳ Allowing stream to fully initialize...");
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  console.log("✅ Stream initialization complete, ready for messages");
+
   let isStreamActive = true;
+  let firstMessageReceived = false;
 
   // Process messages in the background
   const messageProcessingPromise = (async () => {
     try {
+      console.log("🔄 Starting to listen for messages...");
+      const messageStreamStartTime = Date.now();
+
       for await (const message of stream) {
+        if (!firstMessageReceived) {
+          const timeToFirstMessage = Date.now() - messageStreamStartTime;
+          console.log(
+            `🎉 First message received after ${timeToFirstMessage}ms from stream start`
+          );
+          firstMessageReceived = true;
+        }
+
         if (!isStreamActive) {
           console.log("📡 Message stream stopped");
           break;
