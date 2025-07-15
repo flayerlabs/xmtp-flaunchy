@@ -618,7 +618,10 @@ export class EnhancedMessageCoordinator {
           : "";
 
       // Extract attachment from the replied-to message
-      const messages = await conversation.messages({ limit: 100 });
+      const messages = await conversation.messages({
+        limit: 100,
+        direction: 1,
+      }); // Descending order
       const referenceId = replyContent.reference as string;
       const referencedMessage = messages.find(
         (msg: any) => msg.id === referenceId
@@ -2496,7 +2499,10 @@ export class EnhancedMessageCoordinator {
       if (!conversation) return [];
 
       // Fetch more messages than needed to account for filtering
-      const messages = await conversation.messages({ limit: limit * 3 });
+      const messages = await conversation.messages({
+        limit: limit * 3,
+        direction: 1,
+      }); // Descending order
       const textMessages = [];
 
       for (const message of messages) {
@@ -2745,7 +2751,7 @@ Respond: "YES:reason" or "NO:reason"`;
       if (!conversation) return false;
 
       // Get recent messages to check sequence
-      const messages = await conversation.messages({ limit: 10 });
+      const messages = await conversation.messages({ limit: 10, direction: 1 }); // Descending order
 
       // Find messages between the last agent activity and now
       const messageTime = new Date(message.sentAt);
@@ -2876,7 +2882,14 @@ Respond: "YES:reason" or "NO:reason"`;
       }
 
       // Get more messages to find the referenced message (increase limit)
-      const messages = await conversation.messages({ limit: 100 });
+      const messages = await conversation.messages({
+        limit: 100,
+        direction: 1,
+      }); // Descending order
+
+      console.log("🔍 MESSAGE HISTORY", {
+        messages,
+      });
 
       // Enhanced debugging for message ID comparison
       const referenceId = replyContent.reference as string;
@@ -2957,7 +2970,10 @@ Respond: "YES:reason" or "NO:reason"`;
       }
 
       // Get more messages to find the referenced message
-      const messages = await conversation.messages({ limit: 100 });
+      const messages = await conversation.messages({
+        limit: 100,
+        direction: 1,
+      }); // Descending order
       const referenceId = replyContent.reference as string;
 
       // Find the message being replied to
@@ -3008,7 +3024,7 @@ Respond: "YES:reason" or "NO:reason"`;
   ): Promise<boolean> {
     try {
       // Get recent messages to check for intervening messages
-      const messages = await conversation.messages({ limit: 20 });
+      const messages = await conversation.messages({ limit: 20, direction: 1 }); // Descending order
 
       // Find the index of the original message
       const originalMessageIndex = messages.findIndex(
