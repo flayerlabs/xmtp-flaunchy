@@ -29,6 +29,11 @@ interface ManagerInfo {
   address: string;
   isFirstLaunch: boolean;
   initializeData?: string;
+  feeRecipients?: Array<{
+    address: string;
+    displayName: string;
+    percentage: number;
+  }>;
 }
 
 export class CoinLaunchFlow extends BaseFlow {
@@ -251,11 +256,24 @@ export class CoinLaunchFlow extends BaseFlow {
         ContentTypeWalletSendCalls
       );
 
-      // Confirmation message
-      await this.sendResponse(
-        context,
-        `rebuilding transaction for $${coinData.ticker}! sign to launch.`
-      );
+      // Get manager info to display fee split
+      const managerInfo = await this.getChatRoomManagerAddress(context);
+
+      // Confirmation message with fee split info
+      let confirmationMessage = `rebuilding transaction for $${coinData.ticker}! sign to launch.`;
+
+      // Add fee split information
+      if (managerInfo.feeRecipients && managerInfo.feeRecipients.length > 0) {
+        const recipients = managerInfo.feeRecipients;
+        const equalPercentage = recipients[0].percentage; // They should all have equal percentages
+
+        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers:`;
+        recipients.forEach((recipient, index) => {
+          confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
+        });
+      }
+
+      await this.sendResponse(context, confirmationMessage);
 
       // Update pending transaction timestamp
       await context.updateGroupState({
@@ -510,9 +528,17 @@ export class CoinLaunchFlow extends BaseFlow {
         chatRoomId,
         managerAddress: existingManager,
       });
+
+      // Fetch fee recipients for existing manager
+      const feeRecipients = await this.fetchExistingManagerFeeRecipients(
+        context,
+        existingManager
+      );
+
       return {
         address: existingManager,
         isFirstLaunch: false,
+        feeRecipients,
       };
     }
 
@@ -531,19 +557,109 @@ export class CoinLaunchFlow extends BaseFlow {
       }
     );
 
-    // Get all chat room members as fee recipients
-    const initializeData = await this.createInitializeDataForChatRoom(context);
+    // Get all chat room members as fee recipients and initialize data
+    const { initializeData, feeRecipients } =
+      await this.createInitializeDataForChatRoom(context);
 
     return {
       address: implementationAddress,
       isFirstLaunch: true,
       initializeData,
+      feeRecipients,
     };
   }
 
-  private async createInitializeDataForChatRoom(
-    context: FlowContext
-  ): Promise<string> {
+  private async fetchExistingManagerFeeRecipients(
+    context: FlowContext,
+    managerAddress: string
+  ): Promise<
+    Array<{ address: string; displayName: string; percentage: number }>
+  > {
+    try {
+      // Query the manager data from GraphQL
+      const groupData = await this.graphqlService.fetchSingleGroupData(
+        managerAddress
+      );
+
+      if (!groupData || !groupData.recipients) {
+        console.log(
+          `[CoinLaunch] No recipients found for manager ${managerAddress}`
+        );
+        return [];
+      }
+
+      // Calculate total shares
+      const totalShares = groupData.recipients.reduce(
+        (sum, recipient) => sum + BigInt(recipient.recipientShare),
+        0n
+      );
+
+      // Get all recipient addresses for ENS resolution
+      const recipientAddresses = groupData.recipients.map(
+        (recipient) => recipient.recipient
+      );
+
+      // Add creator address (it's not in recipients but gets fees)
+      recipientAddresses.push(context.creatorAddress);
+
+      // Resolve addresses to display names
+      const resolvedNames = await context.ensResolver.resolveAddresses(
+        recipientAddresses
+      );
+
+      // Build fee recipients array
+      const feeRecipients: Array<{
+        address: string;
+        displayName: string;
+        percentage: number;
+      }> = [];
+
+      // Add creator (always gets fees in this setup)
+      const creatorPercentage = 100 / (groupData.recipients.length + 1); // Equal split
+      feeRecipients.push({
+        address: context.creatorAddress,
+        displayName:
+          resolvedNames.get(context.creatorAddress.toLowerCase()) ||
+          `${context.creatorAddress.slice(
+            0,
+            6
+          )}...${context.creatorAddress.slice(-4)}`,
+        percentage: Math.round(creatorPercentage * 100) / 100,
+      });
+
+      // Add other recipients
+      for (const recipient of groupData.recipients) {
+        const sharePercentage =
+          (Number(recipient.recipientShare) / Number(totalShares)) * 100;
+        feeRecipients.push({
+          address: recipient.recipient,
+          displayName:
+            resolvedNames.get(recipient.recipient.toLowerCase()) ||
+            `${recipient.recipient.slice(0, 6)}...${recipient.recipient.slice(
+              -4
+            )}`,
+          percentage: Math.round(sharePercentage * 100) / 100,
+        });
+      }
+
+      return feeRecipients;
+    } catch (error) {
+      console.error(
+        `[CoinLaunch] Error fetching fee recipients for manager ${managerAddress}:`,
+        error
+      );
+      return [];
+    }
+  }
+
+  private async createInitializeDataForChatRoom(context: FlowContext): Promise<{
+    initializeData: string;
+    feeRecipients: Array<{
+      address: string;
+      displayName: string;
+      percentage: number;
+    }>;
+  }> {
     try {
       // Get all chat room members
       const members = await context.conversation.members();
@@ -708,7 +824,49 @@ export class CoinLaunchFlow extends BaseFlow {
         initializeData,
       });
 
-      return initializeData;
+      // Prepare fee recipients for display
+      const allAddresses = [context.creatorAddress, ...uniqueFeeReceivers];
+      const resolvedNames = await context.ensResolver.resolveAddresses(
+        allAddresses
+      );
+
+      const feeRecipients: Array<{
+        address: string;
+        displayName: string;
+        percentage: number;
+      }> = [];
+
+      // Add creator first
+      const creatorPercentage =
+        (Number(adjustedCreatorShare) / Number(VALID_SHARE_TOTAL)) * 100;
+      feeRecipients.push({
+        address: context.creatorAddress,
+        displayName:
+          resolvedNames.get(context.creatorAddress.toLowerCase()) ||
+          `${context.creatorAddress.slice(
+            0,
+            6
+          )}...${context.creatorAddress.slice(-4)}`,
+        percentage: Math.round(creatorPercentage * 100) / 100,
+      });
+
+      // Add other recipients
+      for (const recipientShare of recipientShares) {
+        const sharePercentage =
+          (Number(recipientShare.share) / Number(VALID_SHARE_TOTAL)) * 100;
+        feeRecipients.push({
+          address: recipientShare.recipient,
+          displayName:
+            resolvedNames.get(recipientShare.recipient.toLowerCase()) ||
+            `${recipientShare.recipient.slice(
+              0,
+              6
+            )}...${recipientShare.recipient.slice(-4)}`,
+          percentage: Math.round(sharePercentage * 100) / 100,
+        });
+      }
+
+      return { initializeData, feeRecipients };
     } catch (error) {
       console.error("Error creating initializeData for chat room:", error);
       throw error;
@@ -1023,12 +1181,23 @@ export class CoinLaunchFlow extends BaseFlow {
         ContentTypeWalletSendCalls
       );
 
-      // Confirmation with prebuy suggestion
+      // Confirmation with prebuy suggestion and fee split info
       const currentPrebuy = coinData.premineAmount || 0;
       let confirmationMessage = `ready to launch $${coinData.ticker}! sign the transaction to make it happen.`;
 
       if (currentPrebuy === 0) {
         confirmationMessage += `\n\n💡 tip: try "5% prebuy" to get tokens when your coin launches.`;
+      }
+
+      // Add fee split information
+      if (managerInfo.feeRecipients && managerInfo.feeRecipients.length > 0) {
+        const recipients = managerInfo.feeRecipients;
+        const equalPercentage = recipients[0].percentage; // They should all have equal percentages
+
+        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers:`;
+        recipients.forEach((recipient, index) => {
+          confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
+        });
       }
 
       await this.sendResponse(context, confirmationMessage);
