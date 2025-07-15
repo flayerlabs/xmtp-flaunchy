@@ -245,12 +245,12 @@ __metadata:
   resolution: "@examples/xmtp-flaunch@workspace:."
   dependencies:
     "@types/node": "npm:^22.14.1"
-    "@xmtp/content-type-reaction": "npm:^2.0.0"
+    "@xmtp/content-type-reaction": "npm:^2.0.2"
     "@xmtp/content-type-remote-attachment": "npm:^2.0.2"
     "@xmtp/content-type-reply": "npm:^2.0.2"
     "@xmtp/content-type-transaction-reference": "npm:^2.0.2"
     "@xmtp/content-type-wallet-send-calls": "npm:^2.0.0"
-    "@xmtp/node-sdk": "npm:^3.0.0"
+    "@xmtp/node-sdk": "npm:^3.1.2"
     ai: "npm:^4.2.9"
     axios: "npm:^1.9.0"
     dotenv: "npm:^16.5.0"
@@ -523,7 +523,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/content-type-reaction@npm:^2.0.0":
+"@xmtp/content-type-reaction@npm:^2.0.2":
   version: 2.0.2
   resolution: "@xmtp/content-type-reaction@npm:2.0.2"
   dependencies:
@@ -580,22 +580,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@xmtp/node-bindings@npm:1.2.4":
-  version: 1.2.4
-  resolution: "@xmtp/node-bindings@npm:1.2.4"
-  checksum: 10c0/b4d42af24f7e5cf951e18e88392f3a64d49fc1aa01c557c37e25282e60c07d92a525628b99b15ebf2e1d6359fac0064f6222e3eab4f04d73ff98329e29ded9c6
+"@xmtp/node-bindings@npm:1.2.8":
+  version: 1.2.8
+  resolution: "@xmtp/node-bindings@npm:1.2.8"
+  checksum: 10c0/af449d1be7f9b27d7bad421a9572e82ce996865385c9ef04865da68892ad380ac7bd605aea4a30436765c525246ab3286565479f2beceb4ccffffc4a451fba99
   languageName: node
   linkType: hard
 
-"@xmtp/node-sdk@npm:^3.0.0":
-  version: 3.0.0
-  resolution: "@xmtp/node-sdk@npm:3.0.0"
+"@xmtp/node-sdk@npm:^3.1.2":
+  version: 3.1.2
+  resolution: "@xmtp/node-sdk@npm:3.1.2"
   dependencies:
     "@xmtp/content-type-group-updated": "npm:^2.0.2"
     "@xmtp/content-type-primitives": "npm:^2.0.2"
     "@xmtp/content-type-text": "npm:^2.0.2"
-    "@xmtp/node-bindings": "npm:1.2.4"
-  checksum: 10c0/90d5e5892eb2eaf0380b47f64b13878afe54c347aca905c4c8223c77fa7b4a3732c0755427be65b59ed640907c549022fcad2ae540e0cfaf8108f33fa2cbdfee
+    "@xmtp/node-bindings": "npm:1.2.8"
+  checksum: 10c0/a2861851db3eca4c2cbf7278efa34b28ebd67267e126358908ee51339ced1adb5e0bdf16cfb1662ec94f3ea612fd4329369e4abff90f106b34aa94b58166ab43
   languageName: node
   linkType: hard
 
