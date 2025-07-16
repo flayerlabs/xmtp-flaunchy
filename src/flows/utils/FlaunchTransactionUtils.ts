@@ -150,7 +150,7 @@ export async function createFlaunchTransaction(
         pinataConfig: { jwt: pinataJWT },
         metadata: {
           imageUrl: imageUrl,
-          description: `Flaunched via Flaunchy on XMTP`,
+          description: `Launched on the Base App`,
           websiteUrl: "",
           discordUrl: "",
           twitterUrl: "",
