@@ -267,10 +267,10 @@ export class CoinLaunchFlow extends BaseFlow {
         const recipients = managerInfo.feeRecipients;
         const equalPercentage = recipients[0].percentage; // They should all have equal percentages
 
-        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers:`;
-        recipients.forEach((recipient, index) => {
-          confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
-        });
+        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers.`;
+        // recipients.forEach((recipient, index) => {
+        //   confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
+        // });
       }
 
       await this.sendResponse(context, confirmationMessage);
@@ -1194,10 +1194,10 @@ export class CoinLaunchFlow extends BaseFlow {
         const recipients = managerInfo.feeRecipients;
         const equalPercentage = recipients[0].percentage; // They should all have equal percentages
 
-        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers:`;
-        recipients.forEach((recipient, index) => {
-          confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
-        });
+        confirmationMessage += `\n\nFees will be split ${equalPercentage}% equally between ${recipients.length} receivers.`;
+        // recipients.forEach((recipient, index) => {
+        //   confirmationMessage += `\n${index + 1}. ${recipient.displayName}`;
+        // });
       }
 
       await this.sendResponse(context, confirmationMessage);
