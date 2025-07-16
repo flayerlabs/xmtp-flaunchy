@@ -150,7 +150,7 @@ export async function createFlaunchTransaction(
         pinataConfig: { jwt: pinataJWT },
         metadata: {
           imageUrl: imageUrl,
-          description: `Flaunched via Flaunchy on XMTP`,
+          description: `Launched on the Base App`,
           websiteUrl: "",
           discordUrl: "",
           twitterUrl: "",
@@ -296,14 +296,7 @@ export async function createFlaunchTransaction(
         data: functionData,
         value: `0x${BigInt(transactionValue).toString(16)}`,
         metadata: {
-          description: params.ensResolver
-            ? `Launch $${ticker} into ${await params.ensResolver.resolveSingleAddress(
-                treasuryManagerAddress
-              )}`
-            : `Launch $${ticker} into ${treasuryManagerAddress.slice(
-                0,
-                6
-              )}...${treasuryManagerAddress.slice(-4)}`,
+          description: `Launch $${ticker}`,
         },
       },
     ],

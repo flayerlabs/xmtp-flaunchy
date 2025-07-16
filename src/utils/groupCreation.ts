@@ -6,29 +6,12 @@ import {
   createPublicClient,
   http,
 } from "viem";
-import { baseSepolia } from "viem/chains";
-
-// TODO: Import these from the actual ABI files
-const treasuryManagerFactoryAbi = [
-  {
-    name: "deployAndInitializeManager",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "implementation", type: "address" },
-      { name: "owner", type: "address" },
-      { name: "initializeData", type: "bytes" },
-    ],
-    outputs: [{ name: "manager", type: "address" }],
-  },
-] as const;
-
-// TODO: Get these from addresses.ts
-const addresses = {
-  treasuryManagerFactory: "0x..." as Address, // TODO: Add actual address
-  addressFeeSplitManagerImplementation: "0x..." as Address, // TODO: Add actual address
-  flaunchyOwner: "0x..." as Address, // TODO: Add actual address
-};
+import { TreasuryManagerFactoryAbi } from "../../abi/TreasuryManagerFactory";
+import {
+  TreasuryManagerFactoryAddress,
+  AddressFeeSplitManagerAddress,
+} from "../../addresses";
+import { getDefaultChain } from "../flows/utils/ChainSelection";
 
 export interface FeeReceiver {
   username: string;
@@ -109,14 +92,17 @@ export async function deployAddressFeeSplitManager(
   rpcUrl: string,
   creatorPercent: number = 0
 ): Promise<GroupCreationResult> {
+  // Get environment-aware chain configuration
+  const chainConfig = getDefaultChain();
+
   // Create clients
   const publicClient = createPublicClient({
-    chain: baseSepolia,
+    chain: chainConfig.viemChain,
     transport: http(rpcUrl),
   });
 
   const walletClient = createWalletClient({
-    chain: baseSepolia,
+    chain: chainConfig.viemChain,
     transport: http(rpcUrl),
   });
 
@@ -159,12 +145,12 @@ export async function deployAddressFeeSplitManager(
 
   // Deploy the manager
   const txHash = await walletClient.writeContract({
-    address: addresses.treasuryManagerFactory,
-    abi: treasuryManagerFactoryAbi,
+    address: TreasuryManagerFactoryAddress[chainConfig.id],
+    abi: TreasuryManagerFactoryAbi,
     functionName: "deployAndInitializeManager",
     args: [
-      addresses.addressFeeSplitManagerImplementation,
-      addresses.flaunchyOwner,
+      AddressFeeSplitManagerAddress[chainConfig.id],
+      creatorAddress, // The creator becomes the owner
       initializeParams,
     ],
     account: creatorAddress,

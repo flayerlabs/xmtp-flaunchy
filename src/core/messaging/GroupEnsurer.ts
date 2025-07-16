@@ -73,26 +73,7 @@ export class GroupEnsurer {
         updatedAt: new Date(),
       };
 
-      // Add the group to all members who don't have it
-      const promises = receivers.map(async (receiver) => {
-        const userState = await this.sessionManager.getUserState(
-          receiver.resolvedAddress
-        );
-
-        // Check if they already have this group
-        const existingGroup = userState.groups.find(
-          (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
-        );
-
-        if (!existingGroup) {
-          await this.sessionManager.addGroup(
-            receiver.resolvedAddress,
-            newGroup
-          );
-        }
-      });
-
-      await Promise.all(promises);
+      // The new group-centric architecture handles participant management automatically
 
       console.log(
         `[GroupCreation] Created group ${groupAddress} for ${receivers.length} members`
@@ -118,17 +99,15 @@ export class GroupEnsurer {
         `[GroupCreation] Ensuring group ${groupAddress} exists for chat room launch`
       );
 
-      // Check if the creator already has this group
-      const creatorState = await this.sessionManager.getUserState(
-        creatorAddress
-      );
-      const existingGroup = creatorState.groups.find(
-        (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
-      );
+      // Check if the group already exists using the new architecture
+      const groupChatId = conversation.id;
+      const existingGroup = await this.sessionManager
+        .getGroupStateManager()
+        .getGroupState(groupChatId);
 
       if (existingGroup) {
         console.log(
-          `[GroupCreation] Group ${groupAddress} already exists for creator - skipping creation`
+          `[GroupCreation] Group ${groupAddress} already exists in chat ${groupChatId} - skipping creation`
         );
         return;
       }
@@ -196,41 +175,33 @@ export class GroupEnsurer {
       console.log(`[GroupCreation] Creator address: ${creatorAddress}`);
 
       // Use GroupStorageService to create the group properly
-      const groupName =
-        await this.groupStorageService.storeGroupForAllReceivers(
-          "unknown", // Conversation creator info not available
-          creatorAddress,
-          groupAddress,
-          receivers,
-          chainId,
-          chainName,
-          "chat-room-launch" // Use a placeholder tx hash for chat room launches
-        );
+      // groupChatId already declared above
+      const groupName = await this.groupStorageService.storeManagerInGroupChat(
+        groupChatId,
+        creatorAddress,
+        groupAddress,
+        receivers,
+        chainId,
+        chainName,
+        "chat-room-launch" // Use a placeholder tx hash for chat room launches
+      );
 
       console.log(
         `[GroupCreation] ✅ Created group "${groupName}" (${groupAddress}) for ${receivers.length} chat room members`
       );
 
-      // Verify the group was created for the creator
-      const updatedCreatorState = await this.sessionManager.getUserState(
-        creatorAddress
-      );
-      const creatorGroup = updatedCreatorState.groups.find(
-        (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
-      );
+      // Verify the group was created using the new architecture
+      const verificationGroup = await this.sessionManager
+        .getGroupStateManager()
+        .getGroupState(groupChatId);
 
-      if (creatorGroup) {
+      if (verificationGroup) {
         console.log(
-          `[GroupCreation] ✅ Verified group exists in creator's state`
+          `[GroupCreation] ✅ Verified group exists in group-centric storage`
         );
       } else {
         console.error(
-          `[GroupCreation] ❌ CRITICAL: Group NOT found in creator's state after creation`
-        );
-        console.error(
-          `[GroupCreation] Creator's groups: ${updatedCreatorState.groups
-            .map((g) => g.id)
-            .join(", ")}`
+          `[GroupCreation] ❌ CRITICAL: Group NOT found in group-centric storage after creation`
         );
       }
     } catch (error) {
@@ -322,35 +293,11 @@ export class GroupEnsurer {
         updatedAt: new Date(),
       };
 
-      // Forcefully add the group to all addresses
-      for (const address of allAddresses) {
-        try {
-          const userState = await this.sessionManager.getUserState(address);
-
-          // Check if they already have this group
-          const existingGroup = userState.groups.find(
-            (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
-          );
-
-          if (!existingGroup) {
-            await this.sessionManager.updateUserState(address, {
-              groups: [...userState.groups, newGroup],
-            });
-            console.log(
-              `[ForcefulGroupCreation] ✅ Added group ${groupAddress} to user ${address}`
-            );
-          } else {
-            console.log(
-              `[ForcefulGroupCreation] User ${address} already has group ${groupAddress}`
-            );
-          }
-        } catch (error) {
-          console.error(
-            `[ForcefulGroupCreation] ❌ Failed to add group to ${address}:`,
-            error
-          );
-        }
-      }
+      // This method is deprecated - the new group-centric architecture
+      // handles participant management automatically through storeManagerInGroupChat
+      console.log(
+        `[ForcefulGroupCreation] ⚠️ This method is deprecated. Use ensureGroupExistsForChatRoomLaunch instead.`
+      );
 
       console.log(
         `[ForcefulGroupCreation] ✅ Forcefully ensured group ${groupAddress} exists for all chat room members`
@@ -364,18 +311,32 @@ export class GroupEnsurer {
   }
 
   /**
-   * Check if a group exists for a user
+   * Check if a group exists for a user using the new group-centric architecture
    */
   async groupExistsForUser(
     userAddress: string,
     groupAddress: string
   ): Promise<boolean> {
     try {
-      const userState = await this.sessionManager.getUserState(userAddress);
-      const existingGroup = userState.groups.find(
-        (g) => g.id.toLowerCase() === groupAddress.toLowerCase()
+      // In the new architecture, we check if the user is a participant in any group
+      // that has a manager with the specified contract address
+      const groupStateManager = this.sessionManager.getGroupStateManager();
+      const allGroups = await groupStateManager.getGroupsForParticipant(
+        userAddress
       );
-      return !!existingGroup;
+
+      for (const { state } of allGroups) {
+        // Check if any manager in this group has the matching contract address
+        const hasMatchingManager = state.managers.some(
+          (manager) =>
+            manager.contractAddress.toLowerCase() === groupAddress.toLowerCase()
+        );
+        if (hasMatchingManager) {
+          return true;
+        }
+      }
+
+      return false;
     } catch (error) {
       console.error("Error checking if group exists for user:", error);
       return false;

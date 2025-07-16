@@ -17,7 +17,10 @@ export abstract class BaseFlow {
   ): Promise<void> {
     // Log the outgoing agent reply
     this.log("🤖 AGENT REPLY", {
-      userId: context.userState?.userId || "unknown",
+      userId:
+        context.participantState?.address ||
+        context.creatorAddress ||
+        "unknown",
       message: message,
       timestamp: new Date().toISOString(),
       messageLength: message.length,
@@ -109,7 +112,7 @@ export abstract class BaseFlow {
       if (result) {
         this.log("Cancellation detected", {
           messageText: messageText.substring(0, 50),
-          userId: context.userState.userId.substring(0, 8) + "...",
+          userId: context.participantState.address.substring(0, 8) + "...",
         });
       }
 
@@ -123,13 +126,13 @@ export abstract class BaseFlow {
   // Centralized transaction cancellation
   protected async cancelTransaction(context: FlowContext): Promise<void> {
     // Clear all transaction-related state comprehensively
-    await context.updateGroupState({
+    await context.updateParticipantState({
       pendingTransaction: undefined,
       managementProgress: undefined,
-      // Clear onboarding group data if it exists
-      onboardingProgress: context.groupState.onboardingProgress
+      // Clear onboarding progress data if it exists
+      onboardingProgress: context.participantState.onboardingProgress
         ? {
-            ...context.groupState.onboardingProgress,
+            ...context.participantState.onboardingProgress,
             splitData: undefined,
           }
         : undefined,
@@ -138,7 +141,7 @@ export abstract class BaseFlow {
     });
 
     this.log("Transaction cancelled", {
-      userId: context.userState.userId.substring(0, 8) + "...",
+      userId: context.participantState.address.substring(0, 8) + "...",
     });
   }
 }

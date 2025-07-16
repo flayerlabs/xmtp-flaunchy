@@ -75,24 +75,32 @@ export class ThreadManager {
         client
       );
     if (creatorAddress) {
-      const groupState = await sessionManager.getGroupState(
-        creatorAddress,
-        conversationId
-      );
-      const hasActiveFlow =
-        groupState.pendingTransaction ||
-        groupState.onboardingProgress ||
-        groupState.managementProgress ||
-        groupState.coinLaunchProgress;
+      // Check for active flow using group-centric architecture
+      let hasActiveFlow = false;
+
+      try {
+        const groupStateManager = sessionManager.getGroupStateManager();
+        const participantState = await groupStateManager.getParticipantState(
+          conversationId,
+          creatorAddress
+        );
+
+        if (participantState) {
+          hasActiveFlow =
+            participantState.pendingTransaction ||
+            participantState.onboardingProgress ||
+            participantState.managementProgress ||
+            participantState.coinLaunchProgress;
+        }
+      } catch (error) {
+        console.warn("Could not get participant state:", error);
+      }
 
       if (hasActiveFlow) {
         console.log("⚡ ACTIVE FLOW DETECTED - skipping engagement check", {
           conversationId: conversationId.slice(0, 8) + "...",
           userId: senderInboxId.slice(0, 8) + "...",
-          pendingTx: groupState.pendingTransaction?.type,
-          onboarding: !!groupState.onboardingProgress,
-          management: !!groupState.managementProgress,
-          coinLaunch: !!groupState.coinLaunchProgress,
+          hasActiveFlow: true,
         });
 
         // Update thread activity and return true

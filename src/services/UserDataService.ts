@@ -1,5 +1,12 @@
 import { GraphQLService, GroupData } from "./GraphQLService";
 import { UserState, UserGroup, UserCoin } from "../core/types/UserState";
+import {
+  GroupChatState,
+  GroupParticipant,
+  GroupManager,
+  GroupCoin,
+  AggregatedUserData,
+} from "../core/types/GroupState";
 
 export class UserDataService {
   private graphqlService: GraphQLService;
@@ -9,342 +16,349 @@ export class UserDataService {
   }
 
   /**
-   * Inject live data into all of a user's groups
+   * @deprecated Use aggregateUserDataFromGroups instead
+   * Legacy method for backwards compatibility
    */
   async injectGroupData(userState: UserState): Promise<UserState> {
-    console.log(
-      `[UserDataService] 🔄 Starting live data injection for user ${userState.userId}`
+    console.warn(
+      "[UserDataService] ⚠️ injectGroupData is deprecated, use group-centric methods instead"
     );
-    console.log(
-      `[UserDataService] User has ${userState.groups.length} groups and ${userState.coins.length} cached coins`
-    );
-
-    if (userState.groups.length === 0) {
-      console.log(
-        `[UserDataService] ⚠️  No groups found, returning original state`
-      );
-      return userState;
-    }
-
-    try {
-      // Get all group addresses (IDs)
-      const groupAddresses = userState.groups.map((group) => group.id);
-      console.log(
-        `[UserDataService] 📋 Group addresses to fetch:`,
-        groupAddresses
-      );
-
-      // Fetch live data from API
-      console.log(`[UserDataService] 📡 Calling GraphQL service...`);
-      const apiGroupData = await this.graphqlService.fetchGroupData(
-        groupAddresses
-      );
-
-      console.log(
-        `[UserDataService] 📊 Received ${apiGroupData.length} groups from GraphQL`
-      );
-
-      // Create a map for quick lookup
-      const apiDataMap = new Map<string, GroupData>();
-      apiGroupData.forEach((data) => {
-        apiDataMap.set(data.id.toLowerCase(), data);
-        console.log(
-          `[UserDataService] 📁 Mapped group ${data.id} with ${data.holdings.length} coins`
-        );
-      });
-
-      // Update groups with live data
-      const updatedGroups = userState.groups.map((group) => {
-        const liveData = apiDataMap.get(group.id.toLowerCase());
-
-        if (liveData) {
-          const totalFeesUSDC = liveData.holdings
-            .reduce((total, holding) => {
-              const fees = parseFloat(
-                holding.collectionToken.pool.totalFeesUSDC || "0"
-              );
-              return total + fees;
-            }, 0)
-            .toString();
-
-          console.log(
-            `[UserDataService] ✅ Updated group ${group.id} with live data: ${liveData.holdings.length} coins, $${totalFeesUSDC} fees`
-          );
-
-          return {
-            ...group,
-            liveData: {
-              recipients: liveData.recipients,
-              totalFeesUSDC,
-              totalCoins: liveData.holdings.length,
-              lastUpdated: new Date(),
-            },
-          };
-        } else {
-          console.log(
-            `[UserDataService] ⚠️  No live data found for group ${group.id}`
-          );
-          return group;
-        }
-      });
-
-      // Update coins with live data
-      console.log(`[UserDataService] 🪙 Injecting coin data...`);
-      const updatedCoins = await this.injectCoinData(
-        userState.coins,
-        apiDataMap
-      );
-
-      // Discover new coins from blockchain that aren't in the cached state
-      console.log(
-        `[UserDataService] 🔍 Discovering new coins from blockchain...`
-      );
-      const discoveredCoins = await this.discoverCoinsFromApi(
-        userState.coins,
-        apiDataMap,
-        userState.groups
-      );
-
-      // Combine updated existing coins with newly discovered coins
-      const allCoins = [...updatedCoins, ...discoveredCoins];
-
-      console.log(
-        `[UserDataService] ✅ Injected live data for ${updatedGroups.length} groups`
-      );
-      console.log(
-        `[UserDataService] 📊 Coin summary: ${updatedCoins.length} existing + ${discoveredCoins.length} discovered = ${allCoins.length} total`
-      );
-
-      const result = {
-        ...userState,
-        groups: updatedGroups,
-        coins: allCoins,
-        updatedAt: new Date(),
-      };
-
-      console.log(
-        `[UserDataService] 📄 Final result: ${result.groups.length} groups, ${result.coins.length} coins`
-      );
-
-      return result;
-    } catch (error) {
-      console.error("[UserDataService] ❌ Failed to inject group data:", error);
-      // Return original state if API fails
-      return userState;
-    }
+    return userState; // Return unchanged for now
   }
 
   /**
-   * Inject live data into coins based on group data
+   * @deprecated Legacy helper methods - use group-centric methods instead
    */
-  private async injectCoinData(
-    coins: UserCoin[],
-    apiDataMap: Map<string, GroupData>
-  ): Promise<UserCoin[]> {
-    console.log(
-      `[UserDataService] 🔍 Injecting coin data for ${coins.length} cached coins`
-    );
-
-    // Log all available coins in the API data
-    let totalApiCoins = 0;
-    apiDataMap.forEach((groupData, groupId) => {
-      totalApiCoins += groupData.holdings.length;
-      if (groupData.holdings.length > 0) {
-        console.log(
-          `[UserDataService] 📊 Group ${groupId} has ${groupData.holdings.length} coins:`
-        );
-        groupData.holdings.forEach((holding, index) => {
-          console.log(
-            `  ${index + 1}. ${holding.collectionToken.name} (${
-              holding.collectionToken.symbol
-            })`
-          );
-          console.log(`     • Contract: ${holding.collectionToken.id}`);
-          console.log(
-            `     • Market Cap: $${holding.collectionToken.marketCapUSDC}`
-          );
-        });
-      }
-    });
-
-    console.log(
-      `[UserDataService] 📈 Total coins available in API: ${totalApiCoins}`
-    );
-
-    return coins.map((coin, index) => {
-      console.log(
-        `[UserDataService] 🔄 Processing coin ${index + 1}/${coins.length}: ${
-          coin.name
-        } (${coin.ticker})`
-      );
-      console.log(
-        `[UserDataService]   • Contract: ${coin.contractAddress || "N/A"}`
-      );
-      console.log(`[UserDataService]   • Group ID: ${coin.groupId}`);
-
-      // Find the coin in any group's holdings by matching contract address (ID)
-      for (const [groupId, groupData] of apiDataMap.entries()) {
-        const holding = groupData.holdings.find((h) => {
-          // Primary match: by contract address (most reliable)
-          if (coin.contractAddress) {
-            const contractMatch =
-              h.collectionToken.id.toLowerCase() ===
-              coin.contractAddress.toLowerCase();
-            console.log(
-              `[UserDataService]   • Checking contract match: ${h.collectionToken.id} vs ${coin.contractAddress} = ${contractMatch}`
-            );
-            return contractMatch;
-          }
-          // Fallback: by ticker symbol (for coins without contract address yet)
-          const tickerMatch =
-            h.collectionToken.symbol.toLowerCase() ===
-            coin.ticker.toLowerCase();
-          console.log(
-            `[UserDataService]   • Checking ticker match: ${h.collectionToken.symbol} vs ${coin.ticker} = ${tickerMatch}`
-          );
-          return tickerMatch;
-        });
-
-        if (holding) {
-          console.log(
-            `[UserDataService] ✅ Found live data for ${coin.name} (${coin.ticker}) in group ${groupId}`
-          );
-          console.log(
-            `[UserDataService]   • Holders: ${holding.collectionToken.totalHolders}`
-          );
-          console.log(
-            `[UserDataService]   • Market Cap: $${holding.collectionToken.marketCapUSDC}`
-          );
-          console.log(
-            `[UserDataService]   • Price Change: ${holding.collectionToken.priceChangePercentage}%`
-          );
-          console.log(
-            `[UserDataService]   • Fees: $${holding.collectionToken.pool.totalFeesUSDC}`
-          );
-
-          return {
-            ...coin,
-            liveData: {
-              totalHolders: holding.collectionToken.totalHolders,
-              marketCapUSDC: holding.collectionToken.marketCapUSDC,
-              priceChangePercentage:
-                holding.collectionToken.priceChangePercentage,
-              totalFeesUSDC: holding.collectionToken.pool.totalFeesUSDC,
-              lastUpdated: new Date(),
-            },
-          };
-        }
-      }
-
-      console.log(
-        `[UserDataService] ⚠️  No live data found for ${coin.name} (${coin.ticker})`
-      );
-      return coin;
-    });
-  }
-
-  /**
-   * Discover coins from API data that aren't in the cached state
-   */
-  private async discoverCoinsFromApi(
-    existingCoins: UserCoin[],
-    apiDataMap: Map<string, GroupData>,
-    userGroups: any[]
-  ): Promise<UserCoin[]> {
-    console.log(`[UserDataService] 🔍 Discovering coins from API data...`);
-
-    const discoveredCoins: UserCoin[] = [];
-    const existingContractAddresses = new Set(
-      existingCoins
-        .map((coin) => coin.contractAddress?.toLowerCase())
-        .filter(Boolean)
-    );
-    const existingTickerSymbols = new Set(
-      existingCoins.map((coin) => coin.ticker.toLowerCase())
-    );
-
-    // Look through all groups' holdings to find coins not in our cached state
-    for (const [groupId, groupData] of apiDataMap.entries()) {
-      console.log(
-        `[UserDataService] 🔍 Checking group ${groupId} for new coins...`
-      );
-
-      for (const holding of groupData.holdings) {
-        const contractAddress = holding.collectionToken.id.toLowerCase();
-        const ticker = holding.collectionToken.symbol.toLowerCase();
-
-        // Check if we already have this coin (by contract address or ticker)
-        const alreadyExists =
-          existingContractAddresses.has(contractAddress) ||
-          existingTickerSymbols.has(ticker);
-
-        if (!alreadyExists) {
-          console.log(
-            `[UserDataService] 🆕 Discovered new coin: ${holding.collectionToken.name} (${holding.collectionToken.symbol})`
-          );
-          console.log(
-            `[UserDataService]   • Contract: ${holding.collectionToken.id}`
-          );
-          console.log(
-            `[UserDataService]   • Holders: ${holding.collectionToken.totalHolders}`
-          );
-          console.log(
-            `[UserDataService]   • Market Cap: $${holding.collectionToken.marketCapUSDC}`
-          );
-
-          // Find the corresponding user group to get chain info
-          const userGroup = userGroups.find(
-            (g) => g.id.toLowerCase() === groupId
-          );
-
-          const newCoin: UserCoin = {
-            ticker: holding.collectionToken.symbol,
-            name: holding.collectionToken.name,
-            image: holding.collectionToken.imageId || "",
-            groupId: groupId,
-            contractAddress: holding.collectionToken.id,
-            launched: true,
-            fairLaunchDuration: 30 * 60, // Default 30 minutes
-            fairLaunchPercent: 10, // Default 10%
-            initialMarketCap:
-              parseInt(holding.collectionToken.marketCapUSDC) || 1000,
-            chainId: userGroup?.chainId || 8453, // Default to Base mainnet
-            chainName: userGroup?.chainName || "base",
-            createdAt: new Date(),
-            liveData: {
-              totalHolders: holding.collectionToken.totalHolders,
-              marketCapUSDC: holding.collectionToken.marketCapUSDC,
-              priceChangePercentage:
-                holding.collectionToken.priceChangePercentage,
-              totalFeesUSDC: holding.collectionToken.pool.totalFeesUSDC,
-              lastUpdated: new Date(),
-            },
-          };
-
-          discoveredCoins.push(newCoin);
-
-          // Add to our tracking sets to avoid duplicates
-          existingContractAddresses.add(contractAddress);
-          existingTickerSymbols.add(ticker);
-        } else {
-          console.log(
-            `[UserDataService] ⚠️  Coin ${holding.collectionToken.name} (${holding.collectionToken.symbol}) already exists in cached state`
-          );
-        }
-      }
-    }
-
-    console.log(
-      `[UserDataService] 🆕 Discovered ${discoveredCoins.length} new coins from blockchain`
-    );
-
-    return discoveredCoins;
-  }
 
   /**
    * Refresh data for a specific group
    */
   async refreshGroupData(groupId: string): Promise<GroupData | null> {
     return await this.graphqlService.fetchSingleGroupData(groupId);
+  }
+
+  // ================================
+  // NEW GROUP-CENTRIC METHODS
+  // ================================
+
+  /**
+   * Inject live data into group states
+   * Updates both managers and coins with live API data
+   */
+  async injectGroupStateData(
+    groupStates: Record<string, GroupChatState>
+  ): Promise<Record<string, GroupChatState>> {
+    console.log(
+      `[UserDataService] 🔄 Starting live data injection for ${
+        Object.keys(groupStates).length
+      } group states`
+    );
+
+    const updatedGroupStates = { ...groupStates };
+
+    for (const [groupId, groupState] of Object.entries(groupStates)) {
+      try {
+        // Get all manager addresses for this group
+        const managerAddresses = groupState.managers.map(
+          (m) => m.contractAddress
+        );
+
+        if (managerAddresses.length === 0) {
+          continue;
+        }
+
+        console.log(
+          `[UserDataService] 📡 Fetching data for group ${groupId} with ${managerAddresses.length} managers`
+        );
+
+        // Fetch live data from API
+        const apiGroupData = await this.graphqlService.fetchGroupData(
+          managerAddresses
+        );
+        const apiDataMap = new Map<string, GroupData>();
+        apiGroupData.forEach((data) => {
+          apiDataMap.set(data.id.toLowerCase(), data);
+        });
+
+        // Update managers with live data
+        const updatedManagers = groupState.managers.map((manager) => {
+          const liveData = apiDataMap.get(
+            manager.contractAddress.toLowerCase()
+          );
+          if (liveData) {
+            // Calculate total fees from all holdings
+            const totalFeesUSDC = liveData.holdings
+              .reduce((total, holding) => {
+                const fees = parseFloat(
+                  holding.collectionToken.pool.totalFeesUSDC || "0"
+                );
+                return total + fees;
+              }, 0)
+              .toString();
+
+            return {
+              ...manager,
+              liveData: {
+                recipients: liveData.recipients,
+                totalFeesUSDC,
+                totalCoins: liveData.holdings.length,
+                lastUpdated: new Date(),
+              },
+            };
+          }
+          return manager;
+        });
+
+        // Update coins with live data using the first manager's data
+        const primaryManagerData = apiDataMap.get(
+          groupState.managers[0]?.contractAddress.toLowerCase()
+        );
+        const updatedCoins = await this.updateGroupCoinsWithLiveData(
+          groupState.coins,
+          primaryManagerData
+        );
+
+        // Update the group state
+        updatedGroupStates[groupId] = {
+          ...groupState,
+          managers: updatedManagers,
+          coins: updatedCoins,
+          updatedAt: new Date(),
+        };
+
+        console.log(
+          `[UserDataService] ✅ Updated group ${groupId} with live data`
+        );
+      } catch (error) {
+        console.error(
+          `[UserDataService] ❌ Failed to update group ${groupId}:`,
+          error
+        );
+      }
+    }
+
+    return updatedGroupStates;
+  }
+
+  /**
+   * Update group coins with live data
+   * Uses the holdings data from the group's manager
+   */
+  private async updateGroupCoinsWithLiveData(
+    coins: GroupCoin[],
+    managerData?: GroupData
+  ): Promise<GroupCoin[]> {
+    if (coins.length === 0 || !managerData) return coins;
+
+    try {
+      // Create a map of coin addresses to their holdings data
+      const holdingsMap = new Map<string, any>();
+      managerData.holdings.forEach((holding) => {
+        holdingsMap.set(
+          holding.collectionToken.id.toLowerCase(),
+          holding.collectionToken
+        );
+      });
+
+      return coins.map((coin) => {
+        const holdingData = holdingsMap.get(coin.contractAddress.toLowerCase());
+        if (holdingData) {
+          return {
+            ...coin,
+            liveData: {
+              totalHolders: holdingData.totalHolders || 0,
+              marketCapUSDC: holdingData.marketCapUSDC || "0",
+              priceChangePercentage: holdingData.priceChangePercentage || "0",
+              totalFeesUSDC: holdingData.pool.totalFeesUSDC || "0",
+              lastUpdated: new Date(),
+            },
+          };
+        }
+        return coin;
+      });
+    } catch (error) {
+      console.error(
+        `[UserDataService] ❌ Failed to update coins with live data:`,
+        error
+      );
+      return coins;
+    }
+  }
+
+  /**
+   * Aggregate user data from multiple group states
+   * Creates a backwards-compatible user view from group-centric data
+   */
+  async aggregateUserDataFromGroups(
+    participantAddress: string,
+    groupStates: Record<string, GroupChatState>
+  ): Promise<AggregatedUserData> {
+    console.log(
+      `[UserDataService] 🔄 Aggregating user data for ${participantAddress}`
+    );
+
+    let overallStatus: AggregatedUserData["status"] = "new";
+    let globalPreferences = {
+      defaultMarketCap: 1000,
+      defaultFairLaunchPercent: 10,
+      defaultFairLaunchDuration: 30 * 60,
+      notificationSettings: {
+        launchUpdates: true,
+        priceAlerts: true,
+      },
+    };
+
+    const allGroups: AggregatedUserData["allGroups"] = [];
+    const allCoins: AggregatedUserData["allCoins"] = [];
+    const activeProgressStates: AggregatedUserData["activeProgressStates"] = [];
+
+    // Process each group state
+    for (const [groupId, groupState] of Object.entries(groupStates)) {
+      const participant = groupState.participants[participantAddress];
+
+      if (!participant) continue;
+
+      // Update overall status
+      if (
+        participant.status === "active" ||
+        (participant.status === "onboarding" && overallStatus !== "active") ||
+        (participant.status === "invited" &&
+          !["active", "onboarding"].includes(overallStatus))
+      ) {
+        overallStatus = participant.status;
+      }
+
+      // Use latest preferences
+      if (participant.preferences) {
+        globalPreferences = {
+          ...globalPreferences,
+          ...participant.preferences,
+        };
+      }
+
+      // Add group info
+      allGroups.push({
+        groupId,
+        groupName: groupState.metadata.name,
+        managers: groupState.managers,
+        participantStatus: participant.status,
+        joinedAt: participant.joinedAt,
+      });
+
+      // Add coins from this group
+      for (const coin of groupState.coins) {
+        allCoins.push({
+          coin,
+          groupId,
+          groupName: groupState.metadata.name,
+        });
+      }
+
+      // Add active progress states
+      if (participant.coinLaunchProgress) {
+        activeProgressStates.push({
+          groupId,
+          type: "coinLaunch",
+          state: participant.coinLaunchProgress,
+        });
+      }
+      if (participant.onboardingProgress) {
+        activeProgressStates.push({
+          groupId,
+          type: "onboarding",
+          state: participant.onboardingProgress,
+        });
+      }
+      if (participant.managementProgress) {
+        activeProgressStates.push({
+          groupId,
+          type: "management",
+          state: participant.managementProgress,
+        });
+      }
+      if (participant.pendingTransaction) {
+        activeProgressStates.push({
+          groupId,
+          type: "pendingTransaction",
+          state: participant.pendingTransaction,
+        });
+      }
+    }
+
+    console.log(
+      `[UserDataService] ✅ Aggregated data: ${allGroups.length} groups, ${allCoins.length} coins`
+    );
+
+    return {
+      userId: participantAddress,
+      status: overallStatus,
+      globalPreferences,
+      allGroups,
+      allCoins,
+      activeProgressStates,
+    };
+  }
+
+  /**
+   * Convert aggregated data to legacy UserState format for backwards compatibility
+   */
+  async convertToLegacyUserState(
+    aggregatedData: AggregatedUserData
+  ): Promise<UserState> {
+    const now = new Date();
+
+    // Convert groups
+    const userGroups: UserGroup[] = aggregatedData.allGroups.map(
+      (groupInfo) => {
+        const primaryManager = groupInfo.managers[0]; // Use first manager for legacy format
+
+        return {
+          id: primaryManager.contractAddress,
+          name:
+            groupInfo.groupName ||
+            `Group ${primaryManager.contractAddress.slice(0, 8)}...`,
+          createdBy: primaryManager.deployedBy,
+          type: "username_split" as const,
+          receivers: primaryManager.receivers,
+          coins: aggregatedData.allCoins
+            .filter((coinInfo) => coinInfo.groupId === groupInfo.groupId)
+            .map((coinInfo) => coinInfo.coin.ticker),
+          chainId: primaryManager.chainId,
+          chainName: primaryManager.chainName,
+          createdAt: primaryManager.deployedAt,
+          updatedAt: now,
+          liveData: primaryManager.liveData,
+        };
+      }
+    );
+
+    // Convert coins
+    const userCoins: UserCoin[] = aggregatedData.allCoins.map((coinInfo) => ({
+      ticker: coinInfo.coin.ticker,
+      name: coinInfo.coin.name,
+      image: coinInfo.coin.image,
+      groupId: coinInfo.coin.managerAddress,
+      contractAddress: coinInfo.coin.contractAddress,
+      txHash: coinInfo.coin.txHash,
+      launched: true, // All coins in group states are launched
+      fairLaunchDuration: coinInfo.coin.fairLaunchDuration,
+      fairLaunchPercent: coinInfo.coin.fairLaunchPercent,
+      initialMarketCap: coinInfo.coin.initialMarketCap,
+      chainId: coinInfo.coin.chainId,
+      chainName: coinInfo.coin.chainName,
+      createdAt: coinInfo.coin.launchedAt,
+      liveData: coinInfo.coin.liveData,
+    }));
+
+    return {
+      userId: aggregatedData.userId,
+      status: aggregatedData.status,
+      coins: userCoins,
+      groups: userGroups,
+      preferences: aggregatedData.globalPreferences,
+      createdAt: aggregatedData.allGroups[0]?.joinedAt || now,
+      updatedAt: now,
+      groupStates: {}, // Leave empty since we're aggregating from group states
+    };
   }
 }

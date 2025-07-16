@@ -1,4 +1,8 @@
-import { ChainConfig, SUPPORTED_CHAINS } from "../flows/utils/ChainSelection";
+import {
+  ChainConfig,
+  SUPPORTED_CHAINS,
+  getDefaultChain,
+} from "../flows/utils/ChainSelection";
 
 export interface GroupData {
   id: string;
@@ -54,6 +58,9 @@ export class GraphQLService {
       return [];
     }
 
+    // Use default chain if no chainConfig provided
+    const activeChainConfig = chainConfig || getDefaultChain();
+
     const query = `
       query {
         addressFeeSplitManagers(where:{
@@ -89,14 +96,12 @@ export class GraphQLService {
       };
 
       // Add chain header if not Base Mainnet
-      if (chainConfig && chainConfig.name !== "base") {
-        headers["x-chain-id"] = chainConfig.id.toString();
+      if (activeChainConfig.name !== "base") {
+        headers["x-chain-id"] = activeChainConfig.id.toString();
       }
 
       console.log(
-        `[GraphQL] 🔍 Fetching ${groupAddresses.length} groups on ${
-          chainConfig ? chainConfig.displayName : "Base Mainnet"
-        }`
+        `[GraphQL] 🔍 Fetching ${groupAddresses.length} groups on ${activeChainConfig.displayName}`
       );
       console.log(`[GraphQL] Group addresses:`, groupAddresses);
       console.log(`[GraphQL] API URL: ${this.apiUrl}/graphql`);

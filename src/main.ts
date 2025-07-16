@@ -7,10 +7,11 @@ import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
 import { flaunchy } from "../characters/flaunchy";
 
-// New architecture imports
-import { FileStateStorage } from "./core/storage/StateStorage";
+// New group-centric architecture imports
 import { SessionManager } from "./core/session/SessionManager";
 import { FlowRouter, FlowRegistry } from "./core/flows/FlowRouter";
+import { FileGroupStateStorage } from "./core/storage/GroupStateStorage";
+import { FilePerUserStateStorage } from "./core/storage/PerUserStateStorage";
 
 import { QAFlow } from "./flows/qa/QAFlow";
 import { ManagementFlow } from "./flows/management/ManagementFlow";
@@ -248,23 +249,33 @@ async function createApplication() {
   // Initialize new architecture components
   console.log("🏗️ Initializing new architecture...");
 
-  // 1. State storage and session management
-  const stateStorage = new FileStateStorage(
-    path.join(volumePath, "user-states.json")
-  );
-  const sessionManager = new SessionManager(stateStorage);
+  // 1. State storage setup
+  const groupStatesPath = path.join(volumePath, "group-states.json");
+  const perUserStatesPath = path.join(volumePath, "per-user-states.json");
 
-  // 2. Initialize flows
+  // 2. Initialize storage components
+  const groupStateStorage = new FileGroupStateStorage(groupStatesPath);
+  const perUserStateStorage = new FilePerUserStateStorage(perUserStatesPath);
+
+  // 3. Create session manager with both group and per-user storage
+  const sessionManager = new SessionManager(
+    groupStateStorage,
+    perUserStateStorage
+  );
+
+  console.log(`🔧 Architecture mode: Group-Centric + Per-User Tracking`);
+
+  // 4. Initialize flows
   const flows: FlowRegistry = {
     qa: new QAFlow(),
     management: new ManagementFlow(),
     coin_launch: new CoinLaunchFlow(),
   };
 
-  // 3. Create flow router
+  // 5. Create flow router
   const flowRouter = new FlowRouter(flows, openai);
 
-  // 4. Create enhanced message coordinator
+  // 6. Create enhanced message coordinator
   const messageCoordinator = new EnhancedMessageCoordinator(
     client,
     openai,
@@ -274,7 +285,7 @@ async function createApplication() {
     3000 // 3 second wait time for message coordination
   );
 
-  // 5. Create status monitor
+  // 7. Create status monitor
   const statusMonitor = new XMTPStatusMonitor(volumePath);
 
   console.log("✅ Architecture initialized successfully!");

@@ -24,25 +24,25 @@ export class TransactionReferenceHandler {
     try {
       const senderInboxId = message.senderInboxId;
 
-      // Get creator address for user state lookup
+      // Get creator address for state lookup
       const inboxState = await this.client.preferences.inboxStateFromInboxIds([
         senderInboxId,
       ]);
       const creatorAddress = inboxState[0]?.identifiers[0]?.identifier || "";
 
-      const userState = await this.sessionManager.getUserState(creatorAddress);
-      const groupState = await this.sessionManager.getGroupState(
-        creatorAddress,
-        message.conversationId
+      const groupId = message.conversationId;
+      const participantState = await this.sessionManager.getParticipantState(
+        groupId,
+        creatorAddress
       );
 
       // Check if user has a pending transaction
-      if (!groupState.pendingTransaction) {
+      if (!participantState?.pendingTransaction) {
         console.log("No pending transaction found for transaction reference");
         return false;
       }
 
-      const pendingTx = groupState.pendingTransaction;
+      const pendingTx = participantState.pendingTransaction;
       const conversation = await this.client.conversations.getConversationById(
         message.conversationId
       );
@@ -99,8 +99,7 @@ export class TransactionReferenceHandler {
           conversation,
           contractAddress!,
           pendingTx,
-          groupState,
-          userState,
+          participantState,
           creatorAddress,
           message.conversationId,
           txHash,
@@ -111,10 +110,10 @@ export class TransactionReferenceHandler {
           conversation,
           contractAddress!,
           pendingTx,
-          groupState,
-          userState,
+          participantState,
           creatorAddress,
-          message.conversationId
+          message.conversationId,
+          receipt
         );
       }
     } catch (error) {
@@ -140,6 +139,52 @@ export class TransactionReferenceHandler {
     // Handle old format
     const oldMessageContent = messageContent as unknown as { reference: Hex };
     return oldMessageContent.reference;
+  }
+
+  /**
+   * Extract manager address from transaction receipt
+   */
+  private async extractManagerAddressFromReceipt(
+    receipt: any
+  ): Promise<string | null> {
+    try {
+      if (!receipt || !receipt.logs || !Array.isArray(receipt.logs)) {
+        throw new Error("Invalid receipt or logs");
+      }
+
+      // Look for the ManagerDeployed event (topic: 0xb9eeb0ca3259038acb2879e65ccb1f2a6433df58eefa491654cc6607b01944d4)
+      const managerDeployedTopic =
+        "0xb9eeb0ca3259038acb2879e65ccb1f2a6433df58eefa491654cc6607b01944d4";
+
+      for (const log of receipt.logs) {
+        if (
+          log.topics &&
+          log.topics.length > 1 &&
+          log.topics[0] === managerDeployedTopic
+        ) {
+          // Found the ManagerDeployed event, extract manager address from topic[1]
+          const managerAddressHex = log.topics[1];
+          // Remove padding zeros to get the actual address
+          const managerAddress = `0x${managerAddressHex.slice(-40)}`;
+          console.log(
+            "✅ Found manager address from ManagerDeployed event:",
+            managerAddress
+          );
+          return managerAddress;
+        }
+      }
+
+      console.log(
+        "❌ No ManagerDeployed event found in logs for manager address extraction"
+      );
+      return null;
+    } catch (error) {
+      console.error(
+        "Failed to extract manager address from transaction logs:",
+        error
+      );
+      return null;
+    }
   }
 
   /**
@@ -173,8 +218,7 @@ export class TransactionReferenceHandler {
     conversation: Conversation<any>,
     contractAddress: string,
     pendingTx: any,
-    groupState: any,
-    userState: any,
+    participantState: any,
     creatorAddress: string,
     conversationId: string,
     txHash: Hex,
@@ -184,10 +228,14 @@ export class TransactionReferenceHandler {
     await conversation.send("✅ Group created successfully!");
 
     // Clear pending transaction
-    await this.sessionManager.updateGroupState(creatorAddress, conversationId, {
-      pendingTransaction: undefined,
-      managementProgress: undefined,
-    });
+    await this.sessionManager.updateParticipantState(
+      conversationId,
+      creatorAddress,
+      {
+        pendingTransaction: undefined,
+        managementProgress: undefined,
+      }
+    );
 
     return true;
   }
@@ -199,10 +247,10 @@ export class TransactionReferenceHandler {
     conversation: Conversation<any>,
     contractAddress: string,
     pendingTx: any,
-    groupState: any,
-    userState: any,
+    participantState: any,
     creatorAddress: string,
-    conversationId: string
+    conversationId: string,
+    receipt: any
   ): Promise<boolean> {
     const networkPath =
       pendingTx.network === "baseSepolia" ? "base-sepolia" : "base";
@@ -214,20 +262,139 @@ export class TransactionReferenceHandler {
       `https://mini.flaunch.gg/${networkPath}/coin/${contractAddress}`
     );
 
-    // Clear pending transaction and update user status
-    await this.sessionManager.updateGroupState(creatorAddress, conversationId, {
-      pendingTransaction: undefined,
-      managementProgress: undefined,
-    });
+    // Store the successfully created coin in group state
+    if (pendingTx.launchParameters?.targetGroupId && pendingTx.coinData) {
+      // Extract the actual manager address from the transaction receipt
+      const actualManagerAddress = await this.extractManagerAddressFromReceipt(
+        receipt
+      );
 
-    // Update user status to active after successful coin launch
-    if (userState.status === "new" || userState.status === "onboarding") {
-      await this.sessionManager.updateUserState(creatorAddress, {
-        status: "active",
+      // If this was the first launch, we need to also store the manager
+      if (pendingTx.launchParameters.isFirstLaunch) {
+        // Get conversation members to determine fee recipients
+        let receivers = [];
+        try {
+          const members = await conversation.members();
+          console.log(
+            `[TransactionReferenceHandler] Found ${members.length} chat members for manager`
+          );
+
+          for (const member of members) {
+            if (member.inboxId !== this.client.inboxId) {
+              const memberInboxState =
+                await this.client.preferences.inboxStateFromInboxIds([
+                  member.inboxId,
+                ]);
+              if (
+                memberInboxState.length > 0 &&
+                memberInboxState[0].identifiers.length > 0
+              ) {
+                const memberAddress =
+                  memberInboxState[0].identifiers[0].identifier;
+                receivers.push({
+                  username: `${memberAddress.slice(
+                    0,
+                    6
+                  )}...${memberAddress.slice(-4)}`,
+                  resolvedAddress: memberAddress,
+                  percentage: 100 / (members.length - 1), // Equal split excluding bot
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.warn(
+            "[TransactionReferenceHandler] Could not fetch conversation members:",
+            error
+          );
+        }
+
+        // Create manager object for the group
+        const managerToAdd = {
+          contractAddress:
+            actualManagerAddress ?? pendingTx.launchParameters.targetGroupId,
+          deployedAt: new Date(),
+          txHash: "", // Could extract from full transaction if needed
+          deployedBy: creatorAddress,
+          chainId: pendingTx.network === "baseSepolia" ? 84532 : 8453,
+          chainName: (pendingTx.network === "baseSepolia"
+            ? "baseSepolia"
+            : "base") as "base" | "baseSepolia",
+          receivers,
+        };
+
+        await this.sessionManager.addManagerToGroup(
+          conversationId,
+          managerToAdd
+        );
+        console.log(
+          `[TransactionReferenceHandler] ✅ Added manager ${
+            actualManagerAddress ?? pendingTx.launchParameters.targetGroupId
+          } to group ${conversationId} with ${receivers.length} receivers`
+        );
+      }
+
+      const coinToAdd = {
+        ticker: pendingTx.coinData.ticker,
+        name: pendingTx.coinData.name,
+        image: pendingTx.coinData.image,
+        contractAddress: contractAddress,
+        txHash: "", // Will be updated when we have access to the full transaction
+        launchedAt: new Date(),
+        launchedBy: creatorAddress,
+        chainId: pendingTx.network === "baseSepolia" ? 84532 : 8453,
+        chainName: (pendingTx.network === "baseSepolia"
+          ? "baseSepolia"
+          : "base") as "base" | "baseSepolia",
+        fairLaunchDuration: pendingTx.launchParameters.fairLaunchDuration || 30,
+        fairLaunchPercent: 10,
+        initialMarketCap: pendingTx.launchParameters.startingMarketCap || 1000,
+        managerAddress:
+          actualManagerAddress ?? pendingTx.launchParameters.targetGroupId,
+      };
+
+      await this.sessionManager.addCoinToGroup(conversationId, coinToAdd);
+
+      // Also record the coin launch in per-user state for cross-group tracking
+      await this.sessionManager.recordCoinLaunch(creatorAddress, {
+        coinAddress: contractAddress,
+        ticker: pendingTx.coinData.ticker,
+        name: pendingTx.coinData.name,
+        groupId: conversationId,
+        chainId: pendingTx.network === "baseSepolia" ? 84532 : 8453,
+        chainName: (pendingTx.network === "baseSepolia"
+          ? "baseSepolia"
+          : "base") as "base" | "baseSepolia",
+        initialMarketCap: pendingTx.launchParameters.startingMarketCap || 1000,
       });
+    }
+
+    // Clear pending transaction and coin launch progress after successful launch
+    await this.sessionManager.updateParticipantState(
+      conversationId,
+      creatorAddress,
+      {
+        pendingTransaction: undefined,
+        managementProgress: undefined,
+        coinLaunchProgress: undefined,
+      }
+    );
+
+    // Update participant status to active after successful coin launch
+    if (
+      participantState.status === "new" ||
+      participantState.status === "onboarding"
+    ) {
+      await this.sessionManager.updateParticipantState(
+        conversationId,
+        creatorAddress,
+        {
+          status: "active",
+        }
+      );
 
       const completionMessage =
-        userState.status === "new"
+        participantState.status === "new"
           ? `🎉 coin launched! you're now active and earning fees from trading.`
           : `🎉 onboarding complete! you've got groups and coins set up.`;
 
@@ -254,10 +421,14 @@ export class TransactionReferenceHandler {
     await conversation.send(errorMessage);
 
     // Clear the pending transaction
-    await this.sessionManager.updateGroupState(creatorAddress, conversationId, {
-      pendingTransaction: undefined,
-      managementProgress: undefined,
-    });
+    await this.sessionManager.updateParticipantState(
+      conversationId,
+      creatorAddress,
+      {
+        pendingTransaction: undefined,
+        managementProgress: undefined,
+      }
+    );
 
     return false;
   }

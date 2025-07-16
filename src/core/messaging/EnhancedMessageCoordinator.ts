@@ -298,25 +298,60 @@ export class EnhancedMessageCoordinator {
         return false;
       }
 
-      // Get user and group state
-      const userState = await this.sessionManager.getUserState(creatorAddress);
-      const groupState = await this.sessionManager.getGroupState(
-        creatorAddress,
-        primaryMessage.conversationId
+      // Get group state and participant state
+      const groupId = primaryMessage.conversationId;
+      const groupState = await this.sessionManager.getGroupChatState(groupId);
+      const participantState = await this.sessionManager.getParticipantState(
+        groupId,
+        creatorAddress
       );
+
+      // Ensure participant exists in group
+      if (!participantState) {
+        await this.sessionManager.addParticipantToGroup(
+          groupId,
+          creatorAddress,
+          "active"
+        );
+
+        // Also ensure user exists in per-user state system
+        await this.sessionManager.ensureUserExists(creatorAddress, groupId);
+
+        // Get the newly created participant state
+        const newParticipantState =
+          await this.sessionManager.getParticipantState(
+            groupId,
+            creatorAddress
+          );
+        if (!newParticipantState) {
+          console.error("Failed to create participant state");
+          return false;
+        }
+      } else {
+        // Participant exists, but ensure they're tracked in per-user state too
+        await this.sessionManager.ensureUserExists(creatorAddress, groupId);
+      }
+
+      // Use participant state for reply detection and processing checks
+      const stateForReplyDetection = participantState || {
+        coinLaunchProgress: undefined,
+        onboardingProgress: undefined,
+        managementProgress: undefined,
+        pendingTransaction: undefined,
+      };
 
       // Check if this is a reply to an image attachment during coin data collection
       const isReplyToImage = await this.replyDetector.isReplyToImageAttachment(
         primaryMessage,
         conversation,
-        groupState
+        stateForReplyDetection
       );
 
       // Check if we should process this message
       const shouldProcess = await this.shouldProcessMessage(
         primaryMessage,
         conversation,
-        groupState,
+        stateForReplyDetection,
         relatedMessages,
         isReplyToImage
       );
@@ -343,7 +378,30 @@ export class EnhancedMessageCoordinator {
         primaryMessage,
         relatedMessages,
         conversation,
-        userState,
+        groupState: groupState || {
+          groupId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          metadata: {},
+          participants: {},
+          managers: [],
+          coins: [],
+        },
+        participantState: participantState || {
+          address: creatorAddress,
+          joinedAt: new Date(),
+          lastActiveAt: new Date(),
+          status: "active" as const,
+          preferences: {
+            defaultMarketCap: 1000,
+            defaultFairLaunchPercent: 10,
+            defaultFairLaunchDuration: 30 * 60,
+            notificationSettings: {
+              launchUpdates: true,
+              priceAlerts: true,
+            },
+          },
+        },
         creatorAddress,
         conversationHistory: relatedMessages,
         isDirectMessage: false,
@@ -382,20 +440,46 @@ export class EnhancedMessageCoordinator {
       return false;
     }
 
-    // Get user state for intent detection
-    const userState = await this.sessionManager.getUserState(creatorAddress);
-
     // Create a minimal context for intent detection
     const messageText = MessageTextExtractor.extractCombinedMessageText(
       primaryMessage,
       relatedMessages
     );
-    const tempContext = {
-      messageText,
-      userState,
-      openai: this.openai,
-      groupState: {}, // Empty group state for intent detection
-    } as FlowContext;
+    const groupState = {
+      groupId: conversation.id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      metadata: {},
+      participants: {},
+      managers: [],
+      coins: [],
+    };
+
+    const tempContext = await this.createFlowContext({
+      primaryMessage,
+      relatedMessages,
+      conversation,
+      groupState,
+      participantState: {
+        address: creatorAddress,
+        joinedAt: new Date(),
+        lastActiveAt: new Date(),
+        status: "active" as const,
+        preferences: {
+          defaultMarketCap: 1000,
+          defaultFairLaunchPercent: 10,
+          defaultFairLaunchDuration: 30 * 60,
+          notificationSettings: {
+            launchUpdates: true,
+            priceAlerts: true,
+          },
+        },
+      },
+      creatorAddress,
+      conversationHistory: relatedMessages,
+      isDirectMessage: true,
+      isReplyToImage: false,
+    });
 
     // Detect the intent to determine which flow this would go to
     const multiIntentResult = await this.flowRouter.detectMultipleIntents(
@@ -403,7 +487,7 @@ export class EnhancedMessageCoordinator {
     );
     const wouldGoToFlow = this.flowRouter.getPrimaryFlow(
       multiIntentResult,
-      tempContext.groupState
+      tempContext
     );
 
     // Only block management and coin_launch flows in direct messages
@@ -439,7 +523,22 @@ export class EnhancedMessageCoordinator {
       primaryMessage,
       relatedMessages,
       conversation,
-      userState,
+      groupState,
+      participantState: {
+        address: creatorAddress,
+        joinedAt: new Date(),
+        lastActiveAt: new Date(),
+        status: "active" as const,
+        preferences: {
+          defaultMarketCap: 1000,
+          defaultFairLaunchPercent: 10,
+          defaultFairLaunchDuration: 30 * 60,
+          notificationSettings: {
+            launchUpdates: true,
+            priceAlerts: true,
+          },
+        },
+      },
       creatorAddress,
       conversationHistory: relatedMessages,
       isDirectMessage: true,
@@ -620,12 +719,14 @@ export class EnhancedMessageCoordinator {
 
   /**
    * Create flow context for message processing
+   * Now uses only group-centric architecture
    */
   private async createFlowContext({
     primaryMessage,
     relatedMessages,
     conversation,
-    userState,
+    groupState,
+    participantState,
     creatorAddress,
     conversationHistory,
     isDirectMessage,
@@ -634,7 +735,8 @@ export class EnhancedMessageCoordinator {
     primaryMessage: DecodedMessage;
     relatedMessages: DecodedMessage[];
     conversation: Conversation<any>;
-    userState: any;
+    groupState: any;
+    participantState: any;
     creatorAddress: string;
     conversationHistory: DecodedMessage[];
     isDirectMessage: boolean;
@@ -646,72 +748,32 @@ export class EnhancedMessageCoordinator {
     let hasAttachment = false;
     let attachment: any = undefined;
 
-    // Handle reply to image case
-    if (
-      isReplyToImage &&
-      primaryMessage.contentType?.sameAs(ContentTypeReply)
-    ) {
-      const replyContent = primaryMessage.content as Reply;
-      messageText =
-        typeof replyContent.content === "string"
-          ? replyContent.content.trim()
-          : "";
-
-      // Extract attachment from the replied-to message
-      const messages = await conversation.messages({
-        limit: 100,
-        direction: 1,
-      }); // Descending order
-      const referenceId = replyContent.reference as string;
-      const referencedMessage = messages.find(
-        (msg: any) => msg.id === referenceId
-      );
-
-      if (
-        referencedMessage &&
-        MessageTextExtractor.isAttachment(referencedMessage)
-      ) {
-        hasAttachment = true;
-        attachment = referencedMessage.content;
-        console.log(
-          "🖼️ REPLY TO IMAGE: Extracted attachment from replied-to message"
-        );
-      }
-    } else if (isAttachment) {
+    if (isAttachment) {
       hasAttachment = true;
       attachment = primaryMessage.content;
-
-      // Look for text in related messages
-      const textMessage = relatedMessages.find(
-        (msg) => !MessageTextExtractor.isAttachment(msg)
-      );
-      if (textMessage) {
-        messageText =
-          MessageTextExtractor.extractMessageText(textMessage).trim();
-      }
+      messageText = "[ATTACHMENT]";
     } else {
-      // Primary message is text (or reply with text)
-      messageText =
-        MessageTextExtractor.extractMessageText(primaryMessage).trim();
-
-      // Check for attachment in related messages
-      const attachmentMessage = relatedMessages.find((msg) =>
-        MessageTextExtractor.isAttachment(msg)
-      );
-      if (attachmentMessage) {
-        hasAttachment = true;
-        attachment = attachmentMessage.content;
-      }
+      messageText = MessageTextExtractor.extractMessageText(primaryMessage);
     }
 
-    // Get group ID from conversation
-    const groupId = conversation.id;
-
-    // Get group-specific state
-    const groupState = await this.sessionManager.getGroupState(
-      creatorAddress,
-      groupId
+    // Check for related attachment messages
+    const attachmentMessage = relatedMessages.find((msg) =>
+      MessageTextExtractor.isAttachment(msg)
     );
+    if (attachmentMessage) {
+      hasAttachment = true;
+      attachment = attachmentMessage.content;
+    }
+
+    // Extract combined message text for context
+    if (!isAttachment && relatedMessages.length > 0) {
+      messageText = MessageTextExtractor.extractCombinedMessageText(
+        primaryMessage,
+        relatedMessages
+      );
+    }
+
+    const groupId = conversation.id;
 
     return {
       // Core XMTP objects
@@ -724,14 +786,16 @@ export class EnhancedMessageCoordinator {
       openai: this.openai,
       character: this.character,
 
-      // User state and identification
-      userState,
+      // Group-centric state
+      groupState: groupState,
+      participantState: participantState,
+
+      // User identification
       senderInboxId: primaryMessage.senderInboxId,
       creatorAddress,
 
       // Group context
       groupId,
-      groupState,
 
       // Session management
       sessionManager: this.sessionManager,
@@ -775,21 +839,40 @@ export class EnhancedMessageCoordinator {
         this.threadManager.updateThreadWithAgentMessage(conversation.id);
       },
 
-      updateState: async (updates: any) => {
-        await this.sessionManager.updateUserState(creatorAddress, updates);
+      // Group-centric state management
+      updateGroupState: async (updates: any) => {
+        const currentState = await this.sessionManager.getGroupChatState(
+          groupId
+        );
+        if (currentState) {
+          await this.sessionManager
+            .getGroupStateManager()
+            .setGroupState(groupId, {
+              ...currentState,
+              ...updates,
+              updatedAt: new Date(),
+            });
+        }
       },
 
-      // Group-specific state management
-      updateGroupState: async (updates: any) => {
-        await this.sessionManager.updateGroupState(
-          creatorAddress,
+      updateParticipantState: async (updates: any) => {
+        await this.sessionManager.updateParticipantState(
           groupId,
+          creatorAddress,
           updates
         );
       },
 
-      clearGroupState: async () => {
-        await this.sessionManager.clearGroupState(creatorAddress, groupId);
+      clearParticipantProgress: async () => {
+        await this.sessionManager.clearParticipantProgress(
+          groupId,
+          creatorAddress
+        );
+      },
+
+      // User data aggregation
+      getUserAggregatedData: async () => {
+        return await this.sessionManager.getAggregatedUserData(creatorAddress);
       },
 
       // Utility functions

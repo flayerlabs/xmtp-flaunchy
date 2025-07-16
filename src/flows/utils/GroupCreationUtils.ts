@@ -879,7 +879,7 @@ IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}`
    */
   static formatGroupDisplay(
     group: any,
-    userState: any,
+    aggregatedData: any,
     options: {
       showClaimable?: boolean;
       claimableAmount?: number;
@@ -897,9 +897,9 @@ IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}`
     const addressDisplay = `${group.id.slice(0, 8)}...${group.id.slice(-6)}`;
     let display = `${emoji}"${group.name}" (${addressDisplay})\n`;
 
-    // Format coins
+    // Format coins - use aggregated data instead of userState
     const groupCoins =
-      userState.coins?.filter(
+      aggregatedData.allCoins?.filter(
         (coin: any) =>
           coin.groupId?.toLowerCase() === group.id.toLowerCase() &&
           coin.launched
@@ -961,7 +961,7 @@ IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}`
    */
   static async formatGroupDisplayWithENS(
     group: any,
-    userState: any,
+    aggregatedData: any,
     ensResolver: any,
     options: {
       showClaimable?: boolean;
@@ -979,9 +979,9 @@ IMPORTANT: After the celebration, add this exact text: ${coinPromptText.trim()}`
     const emoji = includeEmoji ? "📁 " : "• ";
     let display = `${emoji}"${group.name}" (${group.id})\n`;
 
-    // Format coins
+    // Format coins - use aggregated data instead of userState
     const groupCoins =
-      userState.coins?.filter(
+      aggregatedData.allCoins?.filter(
         (coin: any) =>
           coin.groupId?.toLowerCase() === group.id.toLowerCase() &&
           coin.launched

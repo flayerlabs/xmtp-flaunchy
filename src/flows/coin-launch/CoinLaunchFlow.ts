@@ -45,13 +45,13 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   async processMessage(context: FlowContext): Promise<void> {
-    const { groupState } = context;
+    const { participantState } = context;
 
     // Clear any cross-flow transactions first
     await this.clearCrossFlowTransactions(context);
 
     // Check if user has a pending transaction first
-    if (groupState.pendingTransaction) {
+    if (participantState.pendingTransaction) {
       const handled = await this.handlePendingTransactionUpdate(context);
       if (handled) return;
     }
@@ -83,7 +83,7 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     // Process coin launch request
-    if (groupState.coinLaunchProgress) {
+    if (participantState.coinLaunchProgress) {
       await this.continueFromProgress(context);
     } else {
       await this.startNewCoinLaunch(context);
@@ -93,51 +93,47 @@ export class CoinLaunchFlow extends BaseFlow {
   private async handlePendingTransactionUpdate(
     context: FlowContext
   ): Promise<boolean> {
-    const { groupState } = context;
+    const { participantState } = context;
     const messageText = this.extractMessageText(context);
 
-    if (
-      !groupState.pendingTransaction ||
-      groupState.pendingTransaction.type !== "coin_creation"
-    ) {
-      return false;
-    }
+    if (participantState.pendingTransaction) {
+      const txParams = participantState.pendingTransaction;
+      const coinData = txParams.coinData;
+      const launchParams = txParams.launchParameters;
 
-    // Check if this is a transaction update (success/failure)
-    const isTransactionUpdate =
-      /(?:transaction|launch|coin|create|success|fail|error|confirm|complete|done|ready|live)/i.test(
+      const isSuccess = /(?:success|complete|done|finished|confirm)/i.test(
         messageText
       );
-
-    if (isTransactionUpdate) {
-      const coinData = groupState.pendingTransaction.coinData;
-      const launchParams = groupState.pendingTransaction.launchParameters;
-
-      // Check if this is success or failure
-      const isSuccess =
-        /(?:success|confirm|complete|done|ready|live|launched|created)/i.test(
-          messageText
-        );
-      const isFailure = /(?:fail|error|failed|denied|rejected|cancelled)/i.test(
-        messageText
-      );
+      const isFailure = /(?:fail|error|problem|issue)/i.test(messageText);
 
       if (isSuccess) {
-        // Store the manager address for this chat group if it was a first launch
-        if (launchParams?.targetGroupId) {
-          const existingManager =
-            context.userState.chatRoomManagers?.[context.senderInboxId];
-          if (!existingManager) {
-            // This was the first coin launch for this chat group - store the manager address
-            await this.storeChatRoomManagerAddress(
-              context,
-              launchParams.targetGroupId
-            );
-          }
+        // Store the coin in group state if it was a successful launch
+        if (launchParams?.targetGroupId && coinData) {
+          // Add coin to group state
+          const coinToAdd = {
+            ticker: coinData.ticker,
+            name: coinData.name,
+            image: coinData.image,
+            contractAddress: launchParams.targetGroupId, // Will be updated with actual contract address
+            txHash: "", // Will be updated with actual tx hash
+            launchedAt: new Date(),
+            launchedBy: context.creatorAddress,
+            chainId: getDefaultChain().id,
+            chainName: getDefaultChain().name,
+            fairLaunchDuration: launchParams.fairLaunchDuration || 30,
+            fairLaunchPercent: 10,
+            initialMarketCap: launchParams.startingMarketCap || 1000,
+            managerAddress: launchParams.targetGroupId,
+          };
+
+          await context.sessionManager.addCoinToGroup(
+            context.groupId,
+            coinToAdd
+          );
         }
 
         // Clear pending transaction and coin launch progress
-        await context.updateGroupState({
+        await context.updateParticipantState({
           pendingTransaction: undefined,
           coinLaunchProgress: undefined,
         });
@@ -149,7 +145,7 @@ export class CoinLaunchFlow extends BaseFlow {
         );
 
         this.log("Coin launch successful", {
-          userId: context.userState.userId,
+          participantAddress: context.creatorAddress,
           coinName: coinData?.name,
           ticker: coinData?.ticker,
           managerAddress: launchParams?.targetGroupId,
@@ -170,16 +166,16 @@ export class CoinLaunchFlow extends BaseFlow {
     const wantsRetry = /(?:retry|again|resend|rebuild|try|yes|confirm)/i.test(
       messageText
     );
-    if (wantsRetry) {
-      const coinData = groupState.pendingTransaction.coinData;
-      const launchParams = groupState.pendingTransaction.launchParameters;
+    if (wantsRetry && participantState.pendingTransaction) {
+      const coinData = participantState.pendingTransaction.coinData;
+      const launchParams = participantState.pendingTransaction.launchParameters;
 
       if (!coinData || !launchParams) {
         await this.sendResponse(
           context,
           "couldn't retrieve transaction data. let me restart the coin launch process."
         );
-        await context.updateGroupState({
+        await context.updateParticipantState({
           pendingTransaction: undefined,
           coinLaunchProgress: undefined,
         });
@@ -276,9 +272,10 @@ export class CoinLaunchFlow extends BaseFlow {
       await this.sendResponse(context, confirmationMessage);
 
       // Update pending transaction timestamp
-      await context.updateGroupState({
+      const { participantState } = context;
+      await context.updateParticipantState({
         pendingTransaction: {
-          ...context.groupState.pendingTransaction!,
+          ...participantState.pendingTransaction!,
           timestamp: new Date(),
         },
       });
@@ -294,22 +291,22 @@ export class CoinLaunchFlow extends BaseFlow {
   private async clearCrossFlowTransactions(
     context: FlowContext
   ): Promise<void> {
-    const { groupState } = context;
+    const { participantState } = context;
 
     // Clear any pending transactions that aren't coin_creation
     if (
-      groupState.pendingTransaction &&
-      groupState.pendingTransaction.type !== "coin_creation"
+      participantState.pendingTransaction &&
+      participantState.pendingTransaction.type !== "coin_creation"
     ) {
-      await context.updateGroupState({
+      await context.updateParticipantState({
         pendingTransaction: undefined,
       });
     }
   }
 
   private async continueFromProgress(context: FlowContext): Promise<void> {
-    const { groupState } = context;
-    const progress = groupState.coinLaunchProgress!;
+    const { participantState } = context;
+    const progress = participantState.coinLaunchProgress!;
 
     // SPECIAL CASE: If we're in collecting_coin_data step and user sends only attachment
     // (no meaningful text), handle it as providing the missing image
@@ -329,7 +326,7 @@ export class CoinLaunchFlow extends BaseFlow {
       progress.coinData.image = "attachment_provided";
 
       // Update the progress
-      await context.updateGroupState({ coinLaunchProgress: progress });
+      await context.updateParticipantState({ coinLaunchProgress: progress });
 
       // Send acknowledgment
       await this.sendResponse(context, "got the image! 📸");
@@ -426,7 +423,7 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     if (updated) {
-      await context.updateGroupState({ coinLaunchProgress: progress });
+      await context.updateParticipantState({ coinLaunchProgress: progress });
     }
 
     // If parameter updates were made, acknowledge them naturally
@@ -493,7 +490,7 @@ export class CoinLaunchFlow extends BaseFlow {
     };
 
     // Save progress
-    await context.updateGroupState({ coinLaunchProgress: progress });
+    await context.updateParticipantState({ coinLaunchProgress: progress });
 
     // Check if we have everything
     if (coinData.name && coinData.ticker && coinData.image) {
@@ -516,56 +513,102 @@ export class CoinLaunchFlow extends BaseFlow {
   private async getChatRoomManagerAddress(
     context: FlowContext
   ): Promise<ManagerInfo> {
-    const { userState } = context;
+    // Always get current group members first to check for changes
+    const { initializeData, feeRecipients: currentFeeRecipients } =
+      await this.createInitializeDataForChatRoom(context);
 
-    // Use conversation ID as the key for chat room manager mapping
-    const chatRoomId = context.conversation.id;
+    // Check if we already have a manager for this group
+    const groupState = await context.sessionManager.getGroupChatState(
+      context.groupId
+    );
 
-    // Check if we already have a manager address for this chat group
-    const existingManager = userState.chatRoomManagers?.[chatRoomId];
-    if (existingManager) {
-      this.log("Using existing manager address for chat group", {
-        chatRoomId,
-        managerAddress: existingManager,
-      });
+    if (groupState && groupState.managers.length > 0) {
+      // Get the latest manager (most recent one)
+      const existingManager =
+        groupState.managers[groupState.managers.length - 1];
 
       // Fetch fee recipients for existing manager
-      const feeRecipients = await this.fetchExistingManagerFeeRecipients(
-        context,
-        existingManager
+      const existingFeeRecipients =
+        await this.fetchExistingManagerFeeRecipients(
+          context,
+          existingManager.contractAddress
+        );
+
+      // Compare addresses (not percentages) to check if group membership has changed
+      const currentAddresses = new Set(
+        currentFeeRecipients.map((fr) => fr.address.toLowerCase())
+      );
+      const existingAddresses = new Set(
+        existingFeeRecipients.map((fr) => fr.address.toLowerCase())
       );
 
-      return {
-        address: existingManager,
-        isFirstLaunch: false,
-        feeRecipients,
-      };
+      // Check if all addresses match
+      const addressesMatch =
+        currentAddresses.size === existingAddresses.size &&
+        [...currentAddresses].every((addr) => existingAddresses.has(addr));
+
+      if (addressesMatch) {
+        this.log(
+          "Using existing manager address for group - members unchanged",
+          {
+            groupId: context.groupId,
+            managerAddress: existingManager.contractAddress,
+            memberCount: currentAddresses.size,
+          }
+        );
+
+        return {
+          address: existingManager.contractAddress,
+          isFirstLaunch: false,
+          feeRecipients: existingFeeRecipients,
+        };
+      } else {
+        this.log("Group membership changed - creating new manager", {
+          groupId: context.groupId,
+          currentMembers: currentAddresses.size,
+          existingMembers: existingAddresses.size,
+          addedMembers: [...currentAddresses].filter(
+            (addr) => !existingAddresses.has(addr)
+          ),
+          removedMembers: [...existingAddresses].filter(
+            (addr) => !currentAddresses.has(addr)
+          ),
+        });
+
+        // Return initializeData for new manager since group membership changed
+        const selectedChain = getDefaultChain();
+        const implementationAddress =
+          AddressFeeSplitManagerAddress[selectedChain.id];
+
+        return {
+          address: implementationAddress,
+          isFirstLaunch: true,
+          initializeData,
+          feeRecipients: currentFeeRecipients,
+        };
+      }
     }
 
-    // For first coin launch in this chat group, use the AddressFeeSplitManager implementation
+    // For first coin launch in this group, use the AddressFeeSplitManager implementation
     // and create initializeData with all chat room members as fee recipients
     const selectedChain = getDefaultChain();
     const implementationAddress =
       AddressFeeSplitManagerAddress[selectedChain.id];
 
     this.log(
-      "First coin launch in chat group - creating initializeData with all chat members",
+      "First coin launch in group - creating initializeData with all chat members",
       {
-        chatRoomId,
+        groupId: context.groupId,
         implementationAddress,
         chainId: selectedChain.id,
       }
     );
 
-    // Get all chat room members as fee recipients and initialize data
-    const { initializeData, feeRecipients } =
-      await this.createInitializeDataForChatRoom(context);
-
     return {
       address: implementationAddress,
       isFirstLaunch: true,
       initializeData,
-      feeRecipients,
+      feeRecipients: currentFeeRecipients,
     };
   }
 
@@ -581,9 +624,64 @@ export class CoinLaunchFlow extends BaseFlow {
         managerAddress
       );
 
-      if (!groupData || !groupData.recipients) {
+      if (
+        !groupData ||
+        !groupData.recipients ||
+        groupData.recipients.length === 0
+      ) {
         console.log(
-          `[CoinLaunch] No recipients found for manager ${managerAddress}`
+          `[CoinLaunch] No recipients found for manager ${managerAddress} in GraphQL, trying group state fallback`
+        );
+
+        // Fallback to group state data
+        try {
+          const groupState = await context.sessionManager.getGroupChatState(
+            context.groupId
+          );
+
+          if (groupState && groupState.managers.length > 0) {
+            // Find the manager that matches the address
+            const manager = groupState.managers.find(
+              (m) =>
+                m.contractAddress.toLowerCase() === managerAddress.toLowerCase()
+            );
+
+            if (manager && manager.receivers && manager.receivers.length > 0) {
+              console.log(
+                `[CoinLaunch] Using group state data for manager ${managerAddress}`
+              );
+
+              // Resolve addresses to display names
+              const addresses = manager.receivers.map(
+                (receiver) => receiver.resolvedAddress
+              );
+              const resolvedNames = await context.ensResolver.resolveAddresses(
+                addresses
+              );
+
+              // Return fee recipients from group state
+              return manager.receivers.map((receiver) => ({
+                address: receiver.resolvedAddress,
+                displayName:
+                  resolvedNames.get(receiver.resolvedAddress.toLowerCase()) ||
+                  receiver.username ||
+                  `${receiver.resolvedAddress.slice(
+                    0,
+                    6
+                  )}...${receiver.resolvedAddress.slice(-4)}`,
+                percentage: receiver.percentage,
+              }));
+            }
+          }
+        } catch (error) {
+          console.error(
+            `[CoinLaunch] Error accessing group state for manager ${managerAddress}:`,
+            error
+          );
+        }
+
+        console.log(
+          `[CoinLaunch] No fee recipients found in either GraphQL or group state for manager ${managerAddress}`
         );
         return [];
       }
@@ -665,12 +763,12 @@ export class CoinLaunchFlow extends BaseFlow {
       const members = await context.conversation.members();
       const feeReceivers: Address[] = [];
 
-      console.log(`Found ${members.length} total members in the chat room`);
-      console.log(`Chat room members analysis:`);
-      console.log(`- Bot InboxId: ${context.client.inboxId}`);
+      // console.log(`Found ${members.length} total members in the chat room`);
+      // console.log(`Chat room members analysis:`);
+      // console.log(`- Bot InboxId: ${context.client.inboxId}`);
 
       for (const member of members) {
-        console.log(`Processing member: ${member.inboxId}`);
+        // console.log(`Processing member: ${member.inboxId}`);
 
         // Skip the sender (coin creator) and the bot
         if (
@@ -689,23 +787,23 @@ export class CoinLaunchFlow extends BaseFlow {
             const memberAddress = memberInboxState[0].identifiers[0]
               .identifier as Address;
             feeReceivers.push(memberAddress);
-            console.log(`  → Added fee receiver: ${memberAddress}`);
+            // console.log(`  → Added fee receiver: ${memberAddress}`);
           } else {
-            console.log(
-              `  → Could not get address for member ${member.inboxId}`
-            );
+            // console.log(
+            //   `  → Could not get address for member ${member.inboxId}`
+            // );
           }
         } else {
           const reason =
             member.inboxId === context.client.inboxId ? "bot" : "creator";
-          console.log(`  → Skipping member ${member.inboxId} (${reason})`);
+          // console.log(`  → Skipping member ${member.inboxId} (${reason})`);
         }
       }
 
-      console.log(
-        `Total fee receivers before deduplication: ${feeReceivers.length}`
-      );
-      console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
+      // console.log(
+      //   `Total fee receivers before deduplication: ${feeReceivers.length}`
+      // );
+      // console.log(`Fee receiver addresses before deduplication:`, feeReceivers);
 
       // Deduplicate fee receivers - get unique addresses (case-insensitive)
       const uniqueFeeReceivers = [
@@ -727,16 +825,16 @@ export class CoinLaunchFlow extends BaseFlow {
       const sharePerRecipient = VALID_SHARE_TOTAL / totalRecipients;
       const remainder = VALID_SHARE_TOTAL % totalRecipients;
 
-      console.log(
-        `Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`
-      );
-      console.log(
-        `Equal distribution: each participant gets ${(
-          (Number(VALID_SHARE_TOTAL / totalParticipants) /
-            Number(VALID_SHARE_TOTAL)) *
-          100
-        ).toFixed(5)}%`
-      );
+      // console.log(
+      //   `Total fee receivers after deduplication: ${uniqueFeeReceivers.length}`
+      // );
+      // console.log(
+      //   `Equal distribution: each participant gets ${(
+      //     (Number(VALID_SHARE_TOTAL / totalParticipants) /
+      //       Number(VALID_SHARE_TOTAL)) *
+      //     100
+      //   ).toFixed(5)}%`
+      // );
 
       // Generate initialize data for the fee split manager using deduplicated addresses
       const recipientShares = uniqueFeeReceivers.map((receiver, index) => ({
@@ -755,22 +853,22 @@ export class CoinLaunchFlow extends BaseFlow {
         );
       }
 
-      console.log(
-        `Creator share: ${adjustedCreatorShare.toString()} (${(
-          (Number(adjustedCreatorShare) / Number(VALID_SHARE_TOTAL)) *
-          100
-        ).toFixed(5)}%)`
-      );
-      console.log(
-        `Deduplicated fee receiver shares:`,
-        recipientShares.map((rs) => ({
-          address: rs.recipient,
-          share: rs.share.toString(),
-          percentage:
-            ((Number(rs.share) / Number(VALID_SHARE_TOTAL)) * 100).toFixed(5) +
-            "%",
-        }))
-      );
+      // console.log(
+      //   `Creator share: ${adjustedCreatorShare.toString()} (${(
+      //     (Number(adjustedCreatorShare) / Number(VALID_SHARE_TOTAL)) *
+      //     100
+      //   ).toFixed(5)}%)`
+      // );
+      // console.log(
+      //   `Deduplicated fee receiver shares:`,
+      //   recipientShares.map((rs) => ({
+      //     address: rs.recipient,
+      //     share: rs.share.toString(),
+      //     percentage:
+      //       ((Number(rs.share) / Number(VALID_SHARE_TOTAL)) * 100).toFixed(5) +
+      //       "%",
+      //   }))
+      // );
 
       // Verify equal distribution math
       const creatorEffective = adjustedCreatorShare;
@@ -873,31 +971,8 @@ export class CoinLaunchFlow extends BaseFlow {
     }
   }
 
-  private async storeChatRoomManagerAddress(
-    context: FlowContext,
-    managerAddress: string
-  ): Promise<void> {
-    const { userState } = context;
-
-    // Use conversation ID as the key for chat room manager mapping
-    const chatRoomId = context.conversation.id;
-
-    // Update the chat room managers mapping
-    const updatedManagers = {
-      ...userState.chatRoomManagers,
-      [chatRoomId]: managerAddress,
-    };
-
-    await context.updateState({
-      chatRoomManagers: updatedManagers,
-    });
-
-    this.log("Stored manager address for chat room", {
-      chatRoomId,
-      managerAddress,
-      totalChatRooms: Object.keys(updatedManagers).length,
-    });
-  }
+  // Chat room manager address storage is now handled through group state
+  // This method has been removed as it depended on user-states.json
 
   private async extractCoinData(context: FlowContext): Promise<CoinLaunchData> {
     const messageText = this.extractMessageText(context);
@@ -1001,11 +1076,11 @@ export class CoinLaunchFlow extends BaseFlow {
    * Get existing coin data from various sources in the context
    */
   private getExistingCoinData(context: FlowContext): CoinLaunchData | null {
-    const { groupState } = context;
+    const { participantState } = context;
 
     // Check coin launch progress first
-    if (groupState.coinLaunchProgress?.coinData) {
-      const progress = groupState.coinLaunchProgress;
+    if (participantState.coinLaunchProgress?.coinData) {
+      const progress = participantState.coinLaunchProgress;
       const coinData = progress.coinData;
       return {
         name: coinData?.name,
@@ -1020,9 +1095,9 @@ export class CoinLaunchFlow extends BaseFlow {
     }
 
     // Check pending transaction
-    if (groupState.pendingTransaction?.type === "coin_creation") {
-      const coinData = groupState.pendingTransaction.coinData;
-      const launchParams = groupState.pendingTransaction.launchParameters;
+    if (participantState.pendingTransaction?.type === "coin_creation") {
+      const coinData = participantState.pendingTransaction.coinData;
+      const launchParams = participantState.pendingTransaction.launchParameters;
       if (coinData && launchParams) {
         return {
           name: coinData.name,
@@ -1059,10 +1134,9 @@ export class CoinLaunchFlow extends BaseFlow {
       coinIdentifier = `for $${coinData.ticker} `;
     }
 
-    // Check if user is in onboarding (first coin) vs existing user
-    const isFirstCoin =
-      context.userState.status === "onboarding" ||
-      context.userState.coins.length === 0;
+    // Check if user is launching their first coin by checking aggregated data
+    const aggregatedData = await context.getUserAggregatedData();
+    const isFirstCoin = aggregatedData.allCoins.length === 0;
 
     let message;
     if (isFirstCoin) {
@@ -1070,7 +1144,7 @@ export class CoinLaunchFlow extends BaseFlow {
       if (missing.length === 3) {
         // They haven't provided anything yet
         message =
-          'let\'s launch your first coin!\n\ni need three things to get started:\n• coin name (e.g., "Flaunchy")\n• ticker (e.g., "FLNCHY")\n• image (upload or link an image)\n\njust send them all in one message and let\'s make this happen!';
+          'let\'s launch your first coin!\n\ni need three things to get started:\n• coin name (e.g., "Flaunchy")\n• ticker (e.g., "FLNCHY")\n• image (upload an image)\n\njust send them all in one message and let\'s make this happen!';
       } else {
         // They've provided some info
         message = `awesome progress on your first coin! ${coinIdentifier}just need: ${missing.join(
@@ -1098,7 +1172,7 @@ export class CoinLaunchFlow extends BaseFlow {
     coinData: Required<CoinLaunchData>
   ): Promise<void> {
     this.log("Launching coin", {
-      userId: context.userState.userId,
+      participantAddress: context.creatorAddress,
       coinData,
       managerAddress: coinData.targetGroup,
     });
@@ -1154,7 +1228,7 @@ export class CoinLaunchFlow extends BaseFlow {
       });
 
       // Set pending transaction
-      await context.updateGroupState({
+      await context.updateParticipantState({
         pendingTransaction: {
           type: "coin_creation",
           coinData: {
@@ -1183,10 +1257,10 @@ export class CoinLaunchFlow extends BaseFlow {
 
       // Confirmation with prebuy suggestion and fee split info
       const currentPrebuy = coinData.premineAmount || 0;
-      let confirmationMessage = `ready to launch $${coinData.ticker}! sign the transaction to make it happen.`;
+      let confirmationMessage = `ready to launch $${coinData.ticker} (Name: ${coinData.name}) 🚀 sign the transaction to make it happen.`;
 
       if (currentPrebuy === 0) {
-        confirmationMessage += `\n\n💡 tip: try "5% prebuy" to get tokens when your coin launches.`;
+        confirmationMessage += `\n\n💡 tip: reply like: "5% prebuy" before confirming this tx to buy & launch the coin in the same tx.`;
       } else {
         confirmationMessage += `\n\nPrebuy of ${currentPrebuy}% added to the transaction.`;
       }
@@ -1204,15 +1278,16 @@ export class CoinLaunchFlow extends BaseFlow {
 
       await this.sendResponse(context, confirmationMessage);
 
-      // Clear progress since we've sent the transaction
-      await context.updateGroupState({
-        coinLaunchProgress: undefined,
+      this.log("Transaction sent for coin launch", {
+        participantAddress: context.creatorAddress,
+        coinData,
+        callsLength: walletSendCalls.calls?.length || 0,
       });
     } catch (error) {
-      console.error("[CoinLaunch] ❌ Error launching coin:", error);
+      this.logError("Failed to launch coin", error);
       await this.sendResponse(
         context,
-        `error launching ${coinData.name} (${coinData.ticker}). try again.`
+        `failed to launch ${coinData.name}. please try again.`
       );
     }
   }
@@ -1388,10 +1463,10 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async handleStatusInquiry(context: FlowContext): Promise<void> {
-    const { groupState } = context;
+    const { participantState } = context;
 
-    if (groupState.pendingTransaction?.type === "coin_creation") {
-      const coinData = groupState.pendingTransaction.coinData;
+    if (participantState.pendingTransaction?.type === "coin_creation") {
+      const coinData = participantState.pendingTransaction.coinData;
       if (coinData) {
         await this.sendResponse(
           context,
@@ -1406,8 +1481,8 @@ export class CoinLaunchFlow extends BaseFlow {
       return;
     }
 
-    if (groupState.coinLaunchProgress) {
-      const progress = groupState.coinLaunchProgress;
+    if (participantState.coinLaunchProgress) {
+      const progress = participantState.coinLaunchProgress;
       const coinData = progress.coinData || {};
 
       const missing = [];
@@ -1464,11 +1539,11 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async handleLaunchCommand(context: FlowContext): Promise<void> {
-    const { userState, groupState } = context;
+    const { participantState } = context;
 
     // Check if they have coin launch progress
-    if (groupState.coinLaunchProgress) {
-      const progress = groupState.coinLaunchProgress;
+    if (participantState.coinLaunchProgress) {
+      const progress = participantState.coinLaunchProgress;
       const coinData = progress.coinData || {};
 
       const missing = [];

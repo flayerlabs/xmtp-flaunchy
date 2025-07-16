@@ -136,11 +136,12 @@ export class ContractExtractor {
       }
     };
 
-    console.log("🔍 EXTRACTING CONTRACT ADDRESS FROM RECEIPT", {
-      contentType: typeof receipt,
-      transactionType,
-      content: safeStringify(receipt),
-    });
+    console.log("🔍 EXTRACTING CONTRACT ADDRESS FROM RECEIPT");
+    // console.log("🔍 EXTRACTING CONTRACT ADDRESS FROM RECEIPT", {
+    //   contentType: typeof receipt,
+    //   transactionType,
+    //   content: safeStringify(receipt),
+    // });
 
     try {
       // Parse transaction receipt logs based on transaction type

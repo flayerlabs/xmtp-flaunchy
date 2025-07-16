@@ -5,6 +5,11 @@ export interface StateStorage {
   set(userId: string, state: UserState): Promise<void>;
   delete(userId: string): Promise<void>;
   exists(userId: string): Promise<boolean>;
+
+  // Migration support methods
+  getAllStates(): Promise<Map<string, UserState>>;
+  backup(backupPath: string): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export class MemoryStateStorage implements StateStorage {
@@ -27,6 +32,24 @@ export class MemoryStateStorage implements StateStorage {
 
   async exists(userId: string): Promise<boolean> {
     return this.storage.has(userId);
+  }
+
+  async getAllStates(): Promise<Map<string, UserState>> {
+    return new Map(this.storage);
+  }
+
+  async backup(backupPath: string): Promise<void> {
+    // For memory storage, backup to file
+    const fs = await import("fs/promises");
+    const path = await import("path");
+
+    await fs.mkdir(path.dirname(backupPath), { recursive: true });
+    const data = Object.fromEntries(this.storage.entries());
+    await fs.writeFile(backupPath, JSON.stringify(data, null, 2));
+  }
+
+  async clear(): Promise<void> {
+    this.storage.clear();
   }
 }
 
@@ -170,5 +193,38 @@ export class FileStateStorage implements StateStorage {
   async exists(userId: string): Promise<boolean> {
     const states = await this.loadData();
     return states.has(userId);
+  }
+
+  async getAllStates(): Promise<Map<string, UserState>> {
+    return await this.loadData();
+  }
+
+  async backup(backupPath: string): Promise<void> {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+
+    try {
+      await fs.mkdir(path.dirname(backupPath), { recursive: true });
+      await fs.copyFile(this.filePath, backupPath);
+    } catch (error) {
+      if ((error as any).code !== "ENOENT") {
+        throw error;
+      }
+      // Source file doesn't exist, create empty backup
+      await fs.writeFile(backupPath, "{}");
+    }
+  }
+
+  async clear(): Promise<void> {
+    const fs = await import("fs/promises");
+
+    try {
+      await fs.unlink(this.filePath);
+    } catch (error) {
+      // File might not exist, which is fine
+      if ((error as any).code !== "ENOENT") {
+        throw error;
+      }
+    }
   }
 }

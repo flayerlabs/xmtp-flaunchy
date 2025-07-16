@@ -1,4 +1,5 @@
 import { UserState, GroupState } from "../types/UserState";
+import { GroupChatState, GroupParticipant } from "../types/GroupState";
 import { FlowContext } from "../types/FlowContext";
 import { BaseFlow } from "./BaseFlow";
 
@@ -88,7 +89,7 @@ export class FlowRouter {
     // Skip transaction receipt messages that come as '...'
     if (context.messageText.trim() === "...") {
       console.log(
-        `[FlowRouter] Skipping transaction receipt message for user ${context.userState.userId}`
+        `[FlowRouter] Skipping transaction receipt message for user ${context.creatorAddress}`
       );
       return;
     }
@@ -97,11 +98,8 @@ export class FlowRouter {
       // 1. Detect ALL intents in the message
       const multiIntentResult = await this.detectMultipleIntents(context);
 
-      // 2. Determine primary flow based on primary intent
-      const primaryFlow = this.getPrimaryFlow(
-        multiIntentResult,
-        context.groupState
-      );
+      // 2. Determine primary flow based on primary intent (supports both architectures)
+      const primaryFlow = this.getPrimaryFlow(multiIntentResult, context);
 
       // 3. Add multi-intent result to context so flows can handle secondary intents
       context.multiIntentResult = multiIntentResult;
@@ -138,11 +136,12 @@ export class FlowRouter {
 
   /**
    * Detect all intents in a message using a single API call
+   * Now supports both old and new architecture
    */
   async detectMultipleIntents(
     context: FlowContext
   ): Promise<MultiIntentResult> {
-    const { messageText, userState } = context;
+    const { messageText, participantState } = context;
 
     if (!messageText.trim()) {
       return {
@@ -162,12 +161,14 @@ export class FlowRouter {
       };
     }
 
+    // Use new group-centric architecture
+    const status = participantState?.status || "new";
+    const groupCount = 1; // Participant is in this group, so at least 1
+    const coinCount = context.groupState?.coins?.length || 0;
+    const pendingTxType = participantState?.pendingTransaction?.type || "none";
+
     console.log(
-      `[FlowRouter] 🔍 Analyzing: "${messageText}" | Status: ${
-        userState.status
-      } | Groups: ${userState.groups.length} | Coins: ${
-        userState.coins.length
-      } | PendingTx: ${context.groupState.pendingTransaction?.type || "none"}`
+      `[FlowRouter] 🔍 Analyzing: "${messageText}" | Status: ${status} | Groups: ${groupCount} | Coins: ${coinCount} | PendingTx: ${pendingTxType}`
     );
 
     try {
@@ -181,10 +182,10 @@ export class FlowRouter {
 MESSAGE: "${messageText}"
 
 USER CONTEXT:
-- Status: ${userState.status}
-- Groups: ${userState.groups.length}
-- Coins: ${userState.coins.length}  
-- Pending Transaction: ${context.groupState.pendingTransaction?.type || "none"}
+- Status: ${status}
+- Groups: ${groupCount}
+- Coins: ${coinCount}  
+- Pending Transaction: ${pendingTxType}
 
 DETECT ALL INTENTS in order of importance:
 
@@ -356,18 +357,33 @@ Return JSON:
   }
 
   /**
-   * Determine primary flow based on primary intent and group state
+   * Determine primary flow based on primary intent and context
    * SIMPLIFIED: Agent is now just a coin launcher with automatic group creation
+   * Now supports both old and new architecture
    */
   getPrimaryFlow(
     multiIntentResult: MultiIntentResult,
-    groupState: GroupState
+    context: FlowContext
   ): FlowType {
     const { primaryIntent, flags } = multiIntentResult;
 
+    // Extract state information from new group-centric architecture
+    const hasCoinLaunchProgress = context.participantState?.coinLaunchProgress;
+    const hasPendingTransaction = context.participantState?.pendingTransaction;
+
     // SIMPLIFIED PRIORITY LOGIC
 
-    // Priority 0: HIGHEST PRIORITY - Status inquiries always go to QA
+    // Priority 0: HIGHEST PRIORITY - Continue existing coin launch progress
+    // This ensures attachment-only messages during coin launch go to the right flow
+    // Takes precedence over status inquiries to handle coin data collection properly
+    if (hasCoinLaunchProgress) {
+      console.log(
+        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
+      );
+      return "coin_launch";
+    }
+
+    // Priority 1: Status inquiries go to QA (but only if no coin launch in progress)
     // User wants to know about their current state, not continue a process
     if (
       primaryIntent.action === "inquiry" &&
@@ -376,15 +392,6 @@ Return JSON:
     ) {
       console.log(`[FlowRouter] ✅ Status inquiry → qa`);
       return "qa";
-    }
-
-    // Priority 1: Continue existing coin launch progress ONLY if not a status inquiry
-    // This ensures attachment-only messages during coin launch go to the right flow
-    if (groupState.coinLaunchProgress) {
-      console.log(
-        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
-      );
-      return "coin_launch";
     }
 
     // Priority 2: Action intents (what user wants to DO)
@@ -399,11 +406,13 @@ Return JSON:
 
         case "modify_existing":
           // Handle modifications in the appropriate context
-          if (groupState.pendingTransaction) {
-            if (groupState.pendingTransaction.type === "group_creation") {
+          if (hasPendingTransaction) {
+            const pendingTxType =
+              context.participantState?.pendingTransaction?.type;
+            if (pendingTxType === "group_creation") {
               console.log(`[FlowRouter] ✅ Modify pending group → management`);
               return "management";
-            } else if (groupState.pendingTransaction.type === "coin_creation") {
+            } else if (pendingTxType === "coin_creation") {
               console.log(`[FlowRouter] ✅ Modify pending coin → coin_launch`);
               return "coin_launch";
             }

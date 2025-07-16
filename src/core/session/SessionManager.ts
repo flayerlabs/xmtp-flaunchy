@@ -1,260 +1,379 @@
-import { UserState, GroupState } from "../types/UserState";
-import { StateStorage } from "../storage/StateStorage";
-import { UserDataService } from "../../services/UserDataService";
+import {
+  GroupChatState,
+  GroupParticipant,
+  AggregatedUserData,
+} from "../types/GroupState";
+import {
+  GroupStateStorage,
+  FileGroupStateStorage,
+} from "../storage/GroupStateStorage";
+import { GroupStateManager } from "./GroupStateManager";
+import {
+  PerUserState,
+  UserCoinLaunch,
+  UserGroupParticipation,
+} from "../types/PerUserState";
+import {
+  PerUserStateStorage,
+  FilePerUserStateStorage,
+} from "../storage/PerUserStateStorage";
 
 export class SessionManager {
-  private userDataService: UserDataService;
+  private groupStateManager: GroupStateManager;
+  private perUserStateStorage: PerUserStateStorage;
 
-  constructor(private stateStore: StateStorage) {
-    this.userDataService = new UserDataService();
+  constructor(
+    groupStateStorage: GroupStateStorage,
+    perUserStateStorage?: PerUserStateStorage
+  ) {
+    this.groupStateManager = new GroupStateManager(groupStateStorage);
+    this.perUserStateStorage =
+      perUserStateStorage || new FilePerUserStateStorage();
   }
 
-  async getUserState(userId: string): Promise<UserState> {
-    let state = await this.stateStore.get(userId);
-
-    if (!state) {
-      // New user - initialize with onboarding state
-      state = this.createNewUserState(userId);
-      await this.stateStore.set(userId, state);
-    }
-
-    return state;
-  }
+  // ================================
+  // GROUP-CENTRIC METHODS
+  // ================================
 
   /**
-   * Get group-specific state for a user in a specific group
+   * Get group state for new architecture
    */
-  async getGroupState(userId: string, groupId: string): Promise<GroupState> {
-    const userState = await this.getUserState(userId);
-    return userState.groupStates?.[groupId] || {};
+  async getGroupChatState(groupId: string): Promise<GroupChatState | null> {
+    return await this.groupStateManager.getGroupState(groupId);
   }
 
   /**
-   * Update group-specific state for a user in a specific group
+   * Get participant state within a group for new architecture
+   */
+  async getParticipantState(
+    groupId: string,
+    participantAddress: string
+  ): Promise<GroupParticipant | null> {
+    return await this.groupStateManager.getParticipantState(
+      groupId,
+      participantAddress
+    );
+  }
+
+  /**
+   * Update participant state in new architecture
+   */
+  async updateParticipantState(
+    groupId: string,
+    participantAddress: string,
+    updates: Partial<Omit<GroupParticipant, "address" | "joinedAt">>
+  ): Promise<GroupParticipant | null> {
+    return await this.groupStateManager.updateParticipantState(
+      groupId,
+      participantAddress,
+      updates
+    );
+  }
+
+  /**
+   * Clear participant progress states in new architecture
+   */
+  async clearParticipantProgress(
+    groupId: string,
+    participantAddress: string
+  ): Promise<void> {
+    await this.groupStateManager.clearParticipantProgress(
+      groupId,
+      participantAddress
+    );
+  }
+
+  /**
+   * Add participant to group in new architecture
+   */
+  async addParticipantToGroup(
+    groupId: string,
+    participantAddress: string,
+    status: GroupParticipant["status"] = "active"
+  ): Promise<void> {
+    await this.groupStateManager.addParticipant(
+      groupId,
+      participantAddress,
+      status
+    );
+  }
+
+  /**
+   * Get aggregated user data from all groups (backwards compatibility)
+   */
+  async getAggregatedUserData(
+    participantAddress: string
+  ): Promise<AggregatedUserData> {
+    return await this.groupStateManager.getAggregatedUserData(
+      participantAddress
+    );
+  }
+
+  /**
+   * Check if participant exists in any group
+   */
+  async participantExistsInAnyGroup(
+    participantAddress: string
+  ): Promise<boolean> {
+    return await this.groupStateManager.participantExistsInAnyGroup(
+      participantAddress
+    );
+  }
+
+  /**
+   * Get group states where participant is involved
+   */
+  async getGroupsForParticipant(participantAddress: string): Promise<
+    Array<{
+      groupId: string;
+      state: GroupChatState;
+    }>
+  > {
+    return await this.groupStateManager.getGroupsForParticipant(
+      participantAddress
+    );
+  }
+
+  /**
+   * Initialize a new group with a participant
+   */
+  async initializeGroup(
+    groupId: string,
+    participantAddress: string,
+    metadata: { name?: string; description?: string } = {}
+  ): Promise<GroupChatState> {
+    return await this.groupStateManager.initializeGroup(
+      groupId,
+      participantAddress,
+      metadata
+    );
+  }
+
+  /**
+   * Update group state
    */
   async updateGroupState(
-    userId: string,
     groupId: string,
-    updates: Partial<GroupState>
-  ): Promise<UserState> {
-    const userState = await this.getUserState(userId);
-
-    // Initialize groupStates if it doesn't exist
-    if (!userState.groupStates) {
-      userState.groupStates = {};
+    updates: Partial<GroupChatState>
+  ): Promise<void> {
+    const currentState = await this.getGroupChatState(groupId);
+    if (currentState) {
+      await this.groupStateManager.setGroupState(groupId, {
+        ...currentState,
+        ...updates,
+        updatedAt: new Date(),
+      });
     }
-
-    // Initialize this group's state if it doesn't exist
-    if (!userState.groupStates[groupId]) {
-      userState.groupStates[groupId] = {};
-    }
-
-    // Update the group-specific state
-    userState.groupStates[groupId] = {
-      ...userState.groupStates[groupId],
-      ...updates,
-    };
-
-    // Update the overall user state
-    const newState = {
-      ...userState,
-      updatedAt: new Date(),
-    };
-
-    await this.stateStore.set(userId, newState);
-    return newState;
   }
 
   /**
-   * Clear group-specific state for a user in a specific group
+   * Add manager to group
    */
-  async clearGroupState(userId: string, groupId: string): Promise<UserState> {
-    const userState = await this.getUserState(userId);
-
-    if (userState.groupStates?.[groupId]) {
-      delete userState.groupStates[groupId];
-    }
-
-    const newState = {
-      ...userState,
-      updatedAt: new Date(),
-    };
-
-    await this.stateStore.set(userId, newState);
-    return newState;
+  async addManagerToGroup(
+    groupId: string,
+    manager: GroupChatState["managers"][0]
+  ): Promise<void> {
+    await this.groupStateManager.addManager(groupId, manager);
   }
 
   /**
-   * Get user state with live data injected from API
+   * Add coin to group
    */
-  async getUserStateWithLiveData(userId: string): Promise<UserState> {
-    const state = await this.getUserState(userId);
+  async addCoinToGroup(
+    groupId: string,
+    coin: GroupChatState["coins"][0]
+  ): Promise<void> {
+    await this.groupStateManager.addCoin(groupId, coin);
+  }
 
-    // Inject live data for users who have groups/coins, regardless of status
-    // This ensures that users who have launched coins but are still "new" get live data
-    if (state.groups.length > 0 || state.coins.length > 0) {
-      try {
-        console.log("💉 INJECTING LIVE DATA", {
-          userId,
-          status: state.status,
-          groupCount: state.groups.length,
-          coinCount: state.coins.length,
-        });
+  /**
+   * Provide access to group state manager for advanced operations
+   */
+  getGroupStateManager(): GroupStateManager {
+    return this.groupStateManager;
+  }
 
-        const enrichedState = await this.userDataService.injectGroupData(state);
+  // ================================
+  // BACKWARDS COMPATIBILITY HELPERS
+  // ================================
 
-        // Save the enriched state back to storage
-        await this.stateStore.set(userId, enrichedState);
+  /**
+   * Check if user is new (backwards compatibility)
+   */
+  async isNewUser(userId: string): Promise<boolean> {
+    const aggregatedData = await this.getAggregatedUserData(userId);
+    return aggregatedData.status === "new";
+  }
 
-        return enrichedState;
-      } catch (error) {
-        console.error(
-          "Failed to inject live data, returning cached state:",
-          error
+  /**
+   * Check if user exists (backwards compatibility)
+   */
+  async userExists(userId: string): Promise<boolean> {
+    return await this.participantExistsInAnyGroup(userId);
+  }
+
+  /**
+   * Check if user is onboarding (backwards compatibility)
+   */
+  async isOnboarding(userId: string): Promise<boolean> {
+    const aggregatedData = await this.getAggregatedUserData(userId);
+    return aggregatedData.status === "onboarding";
+  }
+
+  // ================================
+  // PER-USER STATE METHODS
+  // ================================
+
+  /**
+   * Get per-user state for cross-group tracking
+   */
+  async getPerUserState(userAddress: string): Promise<PerUserState | null> {
+    return await this.perUserStateStorage.getUserState(userAddress);
+  }
+
+  /**
+   * Ensure a user exists in per-user state system
+   */
+  async ensureUserExists(
+    userAddress: string,
+    groupId?: string
+  ): Promise<PerUserState> {
+    let userState = await this.perUserStateStorage.getUserState(userAddress);
+
+    if (!userState) {
+      // Create new per-user state
+      userState = {
+        userAddress,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        status: "new",
+        preferences: {
+          defaultMarketCap: 1000,
+          defaultFairLaunchPercent: 10,
+          defaultFairLaunchDuration: 30 * 60,
+          notificationSettings: {
+            launchUpdates: true,
+            priceAlerts: true,
+          },
+        },
+        coinsLaunchedHistory: [],
+        groupParticipations: [],
+      };
+
+      await this.perUserStateStorage.setUserState(userAddress, userState);
+    }
+
+    // If groupId is provided, ensure user participation is tracked
+    if (groupId) {
+      await this.ensureGroupParticipationTracked(userAddress, groupId);
+    }
+
+    return userState;
+  }
+
+  /**
+   * Ensure group participation is tracked in per-user state
+   */
+  async ensureGroupParticipationTracked(
+    userAddress: string,
+    groupId: string
+  ): Promise<void> {
+    const userState = await this.ensureUserExists(userAddress);
+
+    // Check if participation already exists
+    const existingParticipation = userState.groupParticipations.find(
+      (p) => p.groupId === groupId
+    );
+
+    if (!existingParticipation) {
+      const participation: UserGroupParticipation = {
+        groupId,
+        joinedAt: new Date(),
+        status: "active",
+        coinsLaunchedInGroup: 0,
+        lastActiveAt: new Date(),
+      };
+
+      await this.perUserStateStorage.addGroupParticipation(
+        userAddress,
+        participation
+      );
+    }
+  }
+
+  /**
+   * Record a successful coin launch in per-user history
+   */
+  async recordCoinLaunch(
+    userAddress: string,
+    coinData: {
+      coinAddress: string;
+      ticker: string;
+      name: string;
+      groupId: string;
+      chainId: number;
+      chainName: "base" | "baseSepolia";
+      txHash?: string;
+      initialMarketCap?: number;
+    }
+  ): Promise<void> {
+    // Ensure user exists
+    await this.ensureUserExists(userAddress, coinData.groupId);
+
+    // Create coin launch record
+    const coinLaunch: UserCoinLaunch = {
+      ...coinData,
+      launchedAt: new Date(),
+    };
+
+    // Add to user's coin launch history
+    await this.perUserStateStorage.addCoinLaunch(userAddress, coinLaunch);
+
+    // Update group participation to increment coins launched in this group
+    const userState = await this.perUserStateStorage.getUserState(userAddress);
+    if (userState) {
+      const participation = userState.groupParticipations.find(
+        (p) => p.groupId === coinData.groupId
+      );
+      if (participation) {
+        await this.perUserStateStorage.updateGroupParticipation(
+          userAddress,
+          coinData.groupId,
+          {
+            coinsLaunchedInGroup: participation.coinsLaunchedInGroup + 1,
+            lastActiveAt: new Date(),
+          }
         );
-        return state;
       }
     }
-
-    return state;
   }
 
-  async updateUserState(
-    userId: string,
-    updates: Partial<UserState>
-  ): Promise<UserState> {
-    const currentState = await this.getUserState(userId);
-    const newState = {
-      ...currentState,
-      ...updates,
-      updatedAt: new Date(),
-    };
-
-    await this.stateStore.set(userId, newState);
-    return newState;
+  /**
+   * Update per-user state status
+   */
+  async updatePerUserStatus(
+    userAddress: string,
+    status: PerUserState["status"]
+  ): Promise<void> {
+    const userState = await this.ensureUserExists(userAddress);
+    userState.status = status;
+    userState.updatedAt = new Date();
+    await this.perUserStateStorage.setUserState(userAddress, userState);
   }
 
-  async isNewUser(userId: string): Promise<boolean> {
-    const state = await this.stateStore.get(userId);
-    return !state || state.status === "new";
+  /**
+   * Get user's coin launch history across all groups
+   */
+  async getUserCoinHistory(userAddress: string): Promise<UserCoinLaunch[]> {
+    return await this.perUserStateStorage.getCoinLaunches(userAddress);
   }
 
-  async userExists(userId: string): Promise<boolean> {
-    const state = await this.stateStore.get(userId);
-    return !!state;
-  }
-
-  async isOnboarding(userId: string): Promise<boolean> {
-    const state = await this.stateStore.get(userId);
-    return state?.status === "onboarding";
-  }
-
-  async completeOnboarding(userId: string): Promise<UserState> {
-    return this.updateUserState(userId, {
-      status: "active",
-    });
-  }
-
-  async resetUserState(userId: string): Promise<void> {
-    await this.stateStore.delete(userId);
-  }
-
-  private createNewUserState(userId: string): UserState {
-    const now = new Date();
-
-    return {
-      userId,
-      status: "new",
-      coins: [],
-      groups: [],
-      groupStates: {},
-      preferences: {
-        defaultMarketCap: 1000,
-        defaultFairLaunchPercent: 10,
-        defaultFairLaunchDuration: 30 * 60, // 30 minutes
-        notificationSettings: {
-          launchUpdates: true,
-          priceAlerts: true,
-        },
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-  }
-
-  // Helper methods for onboarding flow
-  async updateOnboardingStep(
-    userId: string,
-    step: "coin_creation" | "username_collection" | "completed"
-  ): Promise<UserState> {
-    const isCompleted = step === "completed";
-
-    return this.updateUserState(userId, {
-      status: isCompleted ? "active" : "onboarding",
-    });
-  }
-
-  async updateCoinData(
-    userId: string,
-    coinData: Partial<{ name: string; ticker: string; image: string }>
-  ): Promise<UserState> {
-    // This method is deprecated - coin data should be updated per-group using updateGroupState
-    console.warn("updateCoinData is deprecated - use updateGroupState instead");
-    return this.getUserState(userId);
-  }
-
-  async updateSplitData(
-    userId: string,
-    splitData: {
-      receivers: Array<{
-        username: string;
-        resolvedAddress?: string;
-        percentage?: number;
-      }>;
-      equalSplit: boolean;
-      creatorPercent?: number;
-    }
-  ): Promise<UserState> {
-    // This method is deprecated - split data should be updated per-group using updateGroupState
-    console.warn(
-      "updateSplitData is deprecated - use updateGroupState instead"
-    );
-    return this.getUserState(userId);
-  }
-
-  async addCoin(
-    userId: string,
-    coin: Omit<UserState["coins"][0], "createdAt">
-  ): Promise<UserState> {
-    const state = await this.getUserState(userId);
-
-    return this.updateUserState(userId, {
-      coins: [
-        ...state.coins,
-        {
-          ...coin,
-          createdAt: new Date(),
-        },
-      ],
-    });
-  }
-
-  async addGroup(
-    userId: string,
-    group: Omit<UserState["groups"][0], "createdAt" | "updatedAt">
-  ): Promise<UserState> {
-    const state = await this.getUserState(userId);
-    const now = new Date();
-
-    return this.updateUserState(userId, {
-      groups: [
-        ...state.groups,
-        {
-          ...group,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ],
-    });
+  /**
+   * Get user's group participation history
+   */
+  async getUserGroupHistory(
+    userAddress: string
+  ): Promise<UserGroupParticipation[]> {
+    return await this.perUserStateStorage.getGroupParticipations(userAddress);
   }
 }

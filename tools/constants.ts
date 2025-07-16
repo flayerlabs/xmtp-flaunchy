@@ -1,5 +1,5 @@
-import { base, baseSepolia } from "viem/chains";
+import { getDefaultChain } from "../src/flows/utils/ChainSelection";
 
-// TODO: update for prod
-export const chain = base;
+// Use environment-aware chain selection for production
+export const chain = getDefaultChain().viemChain;
 export const TOTAL_SUPPLY = 100n * 10n ** 27n; // 100 Billion tokens in wei

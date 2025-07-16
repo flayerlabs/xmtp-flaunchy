@@ -1,6 +1,5 @@
 import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
-import { UserState } from "../../core/types/UserState";
 import { getCharacterResponse } from "../../../utils/character";
 // Note: createLaunchExtractionPrompt import removed - was used for onboarding flow which has been removed
 import {
@@ -20,7 +19,7 @@ export class QAFlow extends BaseFlow {
     const messageText = this.extractMessageText(context);
 
     this.log("Processing Q&A message", {
-      userId: context.userState.userId,
+      participantAddress: context.creatorAddress,
       message: messageText.substring(0, 100) + "...",
     });
 
@@ -35,7 +34,8 @@ export class QAFlow extends BaseFlow {
     }
 
     // Check if user with existing groups is trying to launch a coin
-    if (context.userState.groups.length > 0) {
+    const aggregatedUserData = await context.getUserAggregatedData();
+    if (aggregatedUserData.allGroups.length > 0) {
       const extraction = await this.extractCoinLaunchDetails(context);
       if (
         extraction &&
@@ -45,16 +45,17 @@ export class QAFlow extends BaseFlow {
           context.hasAttachment)
       ) {
         // GUARD: Don't override existing coin launch progress
-        if (context.groupState.coinLaunchProgress) {
+        if (context.participantState.coinLaunchProgress) {
           console.log(
             "🚨 QAFlow detected coin launch but existing progress exists - not overriding"
           );
           this.log(
             "Existing coin launch progress detected, not overriding in QA flow",
             {
-              userId: context.userState.userId,
-              existingStep: context.groupState.coinLaunchProgress.step,
-              existingCoinData: context.groupState.coinLaunchProgress.coinData,
+              participantAddress: context.creatorAddress,
+              existingStep: context.participantState.coinLaunchProgress.step,
+              existingCoinData:
+                context.participantState.coinLaunchProgress.coinData,
             }
           );
 
@@ -69,7 +70,7 @@ export class QAFlow extends BaseFlow {
         this.log(
           "Coin launch detected in QA flow, redirecting to coin launch",
           {
-            userId: context.userState.userId,
+            participantAddress: context.creatorAddress,
             tokenDetails: extraction.tokenDetails,
             launchParameters: extraction.launchParameters,
             hasAttachment: context.hasAttachment,
@@ -95,7 +96,7 @@ export class QAFlow extends BaseFlow {
             extraction.launchParameters.buybackPercentage || undefined,
         };
 
-        await context.updateGroupState({
+        await context.updateParticipantState({
           coinLaunchProgress: {
             step: "collecting_coin_data",
             coinData,
@@ -105,10 +106,10 @@ export class QAFlow extends BaseFlow {
         });
 
         // Show groups for selection if user has multiple groups
-        if (context.userState.groups.length === 1) {
-          const group = context.userState.groups[0];
+        if (aggregatedUserData.allGroups.length === 1) {
+          const group = aggregatedUserData.allGroups[0];
           const groupDisplay = await GroupCreationUtils.formatAddress(
-            group.id,
+            group.groupId,
             context.ensResolver
           );
           await this.sendResponse(
@@ -123,19 +124,36 @@ export class QAFlow extends BaseFlow {
           }! choose a group:\n\n`;
 
           // Resolve all group addresses at once
-          const groupAddresses = context.userState.groups.map((g) => g.id);
+          const groupAddresses = aggregatedUserData.allGroups.map(
+            (g) => g.groupId
+          );
           const addressMap = await GroupCreationUtils.formatAddresses(
             groupAddresses,
             context.ensResolver
           );
 
-          for (const group of context.userState.groups) {
+          for (const group of aggregatedUserData.allGroups) {
             const groupDisplay =
-              addressMap.get(group.id.toLowerCase()) || group.id;
+              addressMap.get(group.groupId.toLowerCase()) || group.groupId;
             message += `${groupDisplay}\n`;
-            message += `- coins: ${
-              group.coins.length > 0 ? group.coins.join(", ") : "none yet"
-            }\n\n`;
+
+            // Get coins for this group by matching manager addresses
+            const groupManagerAddresses = group.managers.map((m) =>
+              m.contractAddress.toLowerCase()
+            );
+            const groupCoins = aggregatedUserData.allCoins.filter((coinData) =>
+              groupManagerAddresses.includes(
+                coinData.coin.managerAddress.toLowerCase()
+              )
+            );
+
+            if (groupCoins.length > 0) {
+              message += `- coins: ${groupCoins
+                .map((coinData) => coinData.coin.ticker)
+                .join(", ")}\n\n`;
+            } else {
+              message += `- coins: none yet\n\n`;
+            }
           }
           message +=
             "specify the contract address (group ID) you want to launch into.";
@@ -158,11 +176,16 @@ export class QAFlow extends BaseFlow {
 
     if (isStatusInquiry) {
       await this.handleStatusInquiry(context, messageText);
-    } else if (isCapabilityQuestion) {
-      await this.handleCapabilityQuestion(context, messageText);
-    } else {
-      await this.handleGeneralQuestion(context, messageText);
+      return;
     }
+
+    if (isCapabilityQuestion) {
+      await this.handleCapabilityQuestion(context, messageText);
+      return;
+    }
+
+    // Default to general question handling
+    await this.handleGeneralQuestion(context, messageText);
   }
 
   private async extractCoinLaunchDetails(
@@ -344,21 +367,7 @@ export class QAFlow extends BaseFlow {
     context: FlowContext,
     messageText: string
   ): Promise<void> {
-    // Check if this is a direct message
-    if (context.isDirectMessage) {
-      // For direct messages, provide structured guidance to group chats
-      const directMessageResponse =
-        "gmeow! i work in group chats where i can launch coins with fee splitting for all members.\n\n" +
-        "to get started:\n" +
-        "1. create a group chat with your friends\n" +
-        "2. add me to the group\n" +
-        "3. then i can help you launch coins with automatic fee splitting!\n\n" +
-        "4. tag me @flaunchy or reply to my messages in the group to interact.\n\n" +
-        "the magic happens when everyone's together in a group. stay based!";
-
-      await this.sendResponse(context, directMessageResponse);
-      return;
-    }
+    const aggregatedUserData = await context.getUserAggregatedData();
 
     // Handle general guidance questions about using the system in group chats
     const response = await getCharacterResponse({
@@ -368,9 +377,9 @@ export class QAFlow extends BaseFlow {
         User asked: "${messageText}"
         
         User context:
-        - Status: ${context.userState.status}
-        - Has ${context.userState.coins.length} coins
-        - Has ${context.userState.groups.length} groups
+        - Status: ${aggregatedUserData.status}
+        - Has ${aggregatedUserData.allCoins.length} coins
+        - Has ${aggregatedUserData.allGroups.length} groups
         - This is a GROUP CHAT (not a direct message)
         
         This is a GENERAL question about using the system (not about your capabilities).
@@ -455,8 +464,10 @@ export class QAFlow extends BaseFlow {
   ): Promise<void> {
     console.log(`[QAFlow] 📊 Handling status inquiry: "${messageText}"`);
     console.log(`[QAFlow] Is direct message: ${context.isDirectMessage}`);
+
+    const aggregatedUserData = await context.getUserAggregatedData();
     console.log(
-      `[QAFlow] User ${context.userState.userId} - Groups: ${context.userState.groups.length}, Coins: ${context.userState.coins.length}`
+      `[QAFlow] Participant ${context.creatorAddress} - Groups: ${aggregatedUserData.allGroups.length}, Coins: ${aggregatedUserData.allCoins.length}`
     );
 
     // Check if user is specifically asking about groups or coins (both DMs and group chats)
@@ -471,21 +482,13 @@ export class QAFlow extends BaseFlow {
     );
 
     if (isGroupsOrCoinsQuery) {
-      // Fetch actual groups/coins data from API
-      console.log(`[QAFlow] 📡 Fetching live data from blockchain...`);
-      const userStateWithLiveData =
-        await context.sessionManager.getUserStateWithLiveData(
-          context.userState.userId
-        );
-
-      console.log(
-        `[QAFlow] ✅ Got live data - Groups: ${userStateWithLiveData.groups.length}, Coins: ${userStateWithLiveData.coins.length}`
-      );
+      // Get live data - we'll use the aggregated data approach instead of getUserStateWithLiveData
+      console.log(`[QAFlow] 📡 Using aggregated user data...`);
 
       await this.handleGroupsOrCoinsQuery(
         context,
         messageText,
-        userStateWithLiveData
+        aggregatedUserData
       );
       return;
     }
@@ -507,50 +510,45 @@ export class QAFlow extends BaseFlow {
       return;
     }
 
-    const { userState } = context;
+    const { participantState } = context;
 
     // Build status information
     let statusInfo = [];
 
     // Current status
-    statusInfo.push(`Status: ${userState.status}`);
+    statusInfo.push(`Status: ${aggregatedUserData.status}`);
 
     // Groups
-    if (userState.groups.length > 0) {
-      statusInfo.push(`Groups: ${userState.groups.length} active`);
+    if (aggregatedUserData.allGroups.length > 0) {
+      statusInfo.push(`Groups: ${aggregatedUserData.allGroups.length} active`);
     } else {
       statusInfo.push(`Groups: none created yet`);
     }
 
     // Coins
-    if (userState.coins.length > 0) {
-      statusInfo.push(`Coins: ${userState.coins.length} launched`);
+    if (aggregatedUserData.allCoins.length > 0) {
+      statusInfo.push(`Coins: ${aggregatedUserData.allCoins.length} launched`);
     } else {
       statusInfo.push(`Coins: none launched yet`);
     }
 
-    // Pending transaction (group-specific)
-    if (context.groupState.pendingTransaction) {
-      const txType = context.groupState.pendingTransaction.type.replace(
-        "_",
-        " "
-      );
+    // Pending transaction (participant-specific)
+    if (participantState.pendingTransaction) {
+      const txType = participantState.pendingTransaction.type.replace("_", " ");
       statusInfo.push(`Pending: ${txType} transaction ready to sign`);
     } else {
       statusInfo.push(`Pending: no transactions`);
     }
 
-    // Note: Onboarding progress removed - onboarding flow has been removed
-
-    // Coin launch progress (group-specific)
-    if (context.groupState.coinLaunchProgress) {
-      const step = context.groupState.coinLaunchProgress.step || "unknown";
+    // Coin launch progress (participant-specific)
+    if (participantState.coinLaunchProgress) {
+      const step = participantState.coinLaunchProgress.step || "unknown";
       statusInfo.push(`Coin launch: ${step} step`);
     }
 
-    // Management progress (group-specific)
-    if (context.groupState.managementProgress) {
-      const action = context.groupState.managementProgress.action || "unknown";
+    // Management progress (participant-specific)
+    if (participantState.managementProgress) {
+      const action = participantState.managementProgress.action || "unknown";
       statusInfo.push(`Management: ${action} in progress`);
     }
 
@@ -597,7 +595,7 @@ export class QAFlow extends BaseFlow {
             role: "user",
             content: `Is this message specifically asking about groups or coins/tokens? "${messageText}"
           
-          Look for patterns like:
+          Look for patterns like but not limited to:
           - "list my groups"
           - "show my groups"
           - "what groups do I have"
@@ -612,6 +610,21 @@ export class QAFlow extends BaseFlow {
           - "what are my tokens"
           - "my tokens"
           - "show my holdings"
+          - "what coins are in this group"
+          - "what coins are in the group"
+          - "what's in this group"
+          - "what's in the group"
+          - "coins in this group"
+          - "coins in the group"
+          - "show coins in this group"
+          - "list coins in this group"
+          - "what coins does this group have"
+          - "what tokens are in this group"
+          - "what tokens are in the group"
+          - "group coins"
+          - "group tokens"
+          - "this group's coins"
+          - "this group's tokens"
           
           Answer only "yes" or "no".`,
           },
@@ -637,94 +650,139 @@ export class QAFlow extends BaseFlow {
   private async handleGroupsOrCoinsQuery(
     context: FlowContext,
     messageText: string,
-    userState: UserState
+    aggregatedUserData: any // Using AggregatedUserData interface
   ): Promise<void> {
     console.log(`[QAFlow] 🔍 Handling groups/coins query: "${messageText}"`);
     console.log(
-      `[QAFlow] UserState - Groups: ${userState.groups.length}, Coins: ${userState.coins.length}`
+      `[QAFlow] AggregatedUserData - Groups: ${aggregatedUserData.allGroups.length}, Coins: ${aggregatedUserData.allCoins.length}`
     );
 
-    // Check if asking about groups specifically
+    // Check if asking about groups specifically vs coins specifically
     const isGroupsQuery = messageText.toLowerCase().includes("group");
     const isCoinsQuery =
       messageText.toLowerCase().includes("coin") ||
       messageText.toLowerCase().includes("token");
 
+    // Check if asking about coins IN a group (should prioritize coins over groups)
+    const isCoinsInGroupQuery =
+      (isCoinsQuery && isGroupsQuery) ||
+      messageText.toLowerCase().includes("coins in") ||
+      messageText.toLowerCase().includes("tokens in") ||
+      messageText.toLowerCase().includes("what's in");
+
     console.log(
-      `[QAFlow] Query type - Groups: ${isGroupsQuery}, Coins: ${isCoinsQuery}`
+      `[QAFlow] Query type - Groups: ${isGroupsQuery}, Coins: ${isCoinsQuery}, CoinsInGroup: ${isCoinsInGroupQuery}`
     );
 
     let response = "";
 
-    if (isGroupsQuery || (!isCoinsQuery && userState.groups.length > 0)) {
-      // Handle groups query
-      if (userState.groups.length === 0) {
-        response =
-          "you don't have any groups yet! when you launch coins, i'll automatically create groups for fee splitting.";
-      } else {
-        response = `you have ${userState.groups.length} group${
-          userState.groups.length > 1 ? "s" : ""
-        }:\n\n`;
-
-        const currentChain = getDefaultChain();
-
-        for (const group of userState.groups) {
-          const groupDisplay = await this.formatGroupDisplay(group, context);
-          response += `${groupDisplay}\n`;
-          response += `  ${currentChain.viemChain.blockExplorers.default.url}/address/${group.id}\n`;
-        }
-      }
-    } else if (isCoinsQuery || (!isGroupsQuery && userState.coins.length > 0)) {
-      // Handle coins query
+    if (
+      isCoinsInGroupQuery ||
+      (isCoinsQuery && !isGroupsQuery) ||
+      (!isGroupsQuery &&
+        !isCoinsQuery &&
+        aggregatedUserData.allCoins.length > 0)
+    ) {
+      // Handle coins query (including coins in group)
       console.log(
-        `[QAFlow] 🪙 Processing coins query - found ${userState.coins.length} total coins`
+        `[QAFlow] 🪙 Processing coins query - found ${aggregatedUserData.allCoins.length} total coins`
       );
 
       const currentChain = getDefaultChain();
 
       // Filter coins for current chain only
-      const currentNetworkCoins = userState.coins.filter(
-        (coin) => coin.launched && coin.chainName === currentChain.name
+      let currentNetworkCoins = aggregatedUserData.allCoins.filter(
+        (coinWrapper: any) => coinWrapper.coin.chainName === currentChain.name
       );
 
+      // If asking about coins in "this group", filter to only coins in the current group
+      if (isCoinsInGroupQuery) {
+        currentNetworkCoins = currentNetworkCoins.filter(
+          (coinWrapper: any) => coinWrapper.groupId === context.groupId
+        );
+      }
+
       console.log(`[QAFlow] 🌐 Current chain: ${currentChain.displayName}`);
+      if (isCoinsInGroupQuery) {
+        console.log(
+          `[QAFlow] 🏠 Filtering to current group: ${context.groupId}`
+        );
+      }
       console.log(
-        `[QAFlow] 📊 Coins filtered for current chain: ${currentNetworkCoins.length}`
+        `[QAFlow] 📊 Coins after filtering: ${currentNetworkCoins.length}`
       );
 
       if (currentNetworkCoins.length === 0) {
         console.log(
-          `[QAFlow] ⚠️  No coins found on current chain ${currentChain.displayName}`
+          `[QAFlow] ⚠️  No coins found ${
+            isCoinsInGroupQuery ? "in this group" : "on current chain"
+          } ${currentChain.displayName}`
         );
-        response = `you haven't launched any coins on ${currentChain.displayName} yet! launch your first coin and i'll handle the fee splitting automatically.`;
+        if (isCoinsInGroupQuery) {
+          response = `no coins launched in this group yet! launch your first coin and i'll handle the fee splitting automatically for everyone in this chat.`;
+        } else {
+          response = `you haven't launched any coins on ${currentChain.displayName} yet! launch your first coin and i'll handle the fee splitting automatically.`;
+        }
       } else {
         console.log(
           `[QAFlow] 📊 Coins found on ${currentChain.displayName}:`,
-          currentNetworkCoins.map((coin) => ({
-            name: coin.name,
-            ticker: coin.ticker,
-            contractAddress: coin.contractAddress,
-            hasLiveData: !!coin.liveData,
-            chainName: coin.chainName,
+          currentNetworkCoins.map((coinWrapper: any) => ({
+            name: coinWrapper.coin.name,
+            ticker: coinWrapper.coin.ticker,
+            contractAddress: coinWrapper.coin.contractAddress,
+            hasLiveData: !!coinWrapper.coin.liveData,
+            chainName: coinWrapper.coin.chainName,
           }))
         );
 
-        response = `you have ${currentNetworkCoins.length} coin${
-          currentNetworkCoins.length > 1 ? "s" : ""
-        } on ${currentChain.displayName}:\n\n`;
+        // Customize response based on query type
+        if (isCoinsInGroupQuery) {
+          response = `coins in this group (${currentNetworkCoins.length}):\n\n`;
+        } else {
+          response = `you have ${currentNetworkCoins.length} coin${
+            currentNetworkCoins.length > 1 ? "s" : ""
+          } on ${currentChain.displayName}:\n\n`;
+        }
 
-        for (const coin of currentNetworkCoins) {
-          const coinDisplay = await this.formatCoinDisplay(coin, currentChain);
+        for (const coinWrapper of currentNetworkCoins) {
+          const coinDisplay = await this.formatCoinDisplay(
+            coinWrapper.coin,
+            currentChain
+          );
           response += `${coinDisplay}\n`;
+        }
+      }
+    } else if (
+      isGroupsQuery ||
+      (!isCoinsQuery && aggregatedUserData.allGroups.length > 0)
+    ) {
+      // Handle groups query
+      if (aggregatedUserData.allGroups.length === 0) {
+        response =
+          "you don't have any groups yet! when you launch coins, i'll automatically create groups for fee splitting.";
+      } else {
+        response = `you have ${aggregatedUserData.allGroups.length} group${
+          aggregatedUserData.allGroups.length > 1 ? "s" : ""
+        }:\n\n`;
+
+        const currentChain = getDefaultChain();
+
+        for (const group of aggregatedUserData.allGroups) {
+          const groupDisplay = await this.formatGroupDisplay(group, context);
+          response += `${groupDisplay}\n`;
+          response += `  ${currentChain.viemChain.blockExplorers.default.url}/address/${group.groupId}\n`;
         }
       }
     } else {
       // General status if neither groups nor coins specified
       response = `status summary:\n`;
-      response += `• groups: ${userState.groups.length}\n`;
-      response += `• coins: ${userState.coins.length}\n`;
+      response += `• groups: ${aggregatedUserData.allGroups.length}\n`;
+      response += `• coins: ${aggregatedUserData.allCoins.length}\n`;
 
-      if (userState.groups.length === 0 && userState.coins.length === 0) {
+      if (
+        aggregatedUserData.allGroups.length === 0 &&
+        aggregatedUserData.allCoins.length === 0
+      ) {
         response +=
           "\nlaunch your first coin and i'll automatically set up fee splitting!";
       }
@@ -742,14 +800,16 @@ export class QAFlow extends BaseFlow {
     context: FlowContext
   ): Promise<string> {
     const groupDisplay = await GroupCreationUtils.formatAddress(
-      group.id,
+      group.groupId,
       context.ensResolver
     );
 
     let display = `• ${groupDisplay}`;
 
-    if (group.liveData) {
-      display += ` (${group.liveData.totalCoins} coins, $${group.liveData.totalFeesUSDC} fees)`;
+    // Note: Live data access would need to be implemented based on group structure
+    // For now, just show basic info
+    if (group.groupName) {
+      display += ` (${group.groupName})`;
     }
 
     return display;

@@ -6,7 +6,11 @@ import type {
 } from "@xmtp/node-sdk";
 import type OpenAI from "openai";
 import type { Character } from "../../../types";
-import type { UserState, GroupState } from "./UserState";
+import type {
+  GroupChatState,
+  GroupParticipant,
+  AggregatedUserData,
+} from "./GroupState";
 import type { SessionManager } from "../session/SessionManager";
 import type { ENSResolverService } from "../../services/ENSResolverService";
 import type {
@@ -25,14 +29,16 @@ export interface FlowContext {
   openai: OpenAI;
   character: Character;
 
-  // User state and identification
-  userState: UserState;
+  // Group-centric state
+  groupState: GroupChatState;
+  participantState: GroupParticipant;
+
+  // User identification
   senderInboxId: string;
   creatorAddress: string;
 
   // Group context
   groupId: string;
-  groupState: GroupState;
 
   // Session management
   sessionManager: SessionManager;
@@ -56,11 +62,18 @@ export interface FlowContext {
 
   // Helper functions
   sendResponse: (message: string) => Promise<void>;
-  updateState: (updates: Partial<UserState>) => Promise<void>;
 
-  // Group-specific state management
-  updateGroupState: (updates: Partial<GroupState>) => Promise<void>;
-  clearGroupState: () => Promise<void>;
+  // Group-centric state management
+  updateGroupState: (
+    updates: Partial<Omit<GroupChatState, "groupId" | "createdAt">>
+  ) => Promise<void>;
+  updateParticipantState: (
+    updates: Partial<Omit<GroupParticipant, "address" | "joinedAt">>
+  ) => Promise<void>;
+  clearParticipantProgress: () => Promise<void>;
+
+  // User data aggregation (backwards compatibility)
+  getUserAggregatedData: () => Promise<AggregatedUserData>;
 
   // Utility functions
   resolveUsername: (username: string) => Promise<string | undefined>;
