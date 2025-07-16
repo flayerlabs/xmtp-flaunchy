@@ -43,6 +43,7 @@ export interface GroupStateStorage {
 
   // Bulk operations
   getAllGroupStates(): Promise<GroupStatesStorage>;
+  setAllGroupStates(states: GroupStatesStorage): Promise<void>;
   getGroupsForParticipant(
     participantAddress: string
   ): Promise<Array<{ groupId: string; state: GroupChatState }>>;
@@ -156,6 +157,13 @@ export class MemoryGroupStateStorage implements GroupStateStorage {
 
   async getAllGroupStates(): Promise<GroupStatesStorage> {
     return Object.fromEntries(this.storage.entries());
+  }
+
+  async setAllGroupStates(states: GroupStatesStorage): Promise<void> {
+    this.storage.clear();
+    for (const [groupId, state] of Object.entries(states)) {
+      this.storage.set(groupId, state);
+    }
   }
 
   async getGroupsForParticipant(
@@ -410,6 +418,14 @@ export class FileGroupStateStorage implements GroupStateStorage {
   async getAllGroupStates(): Promise<GroupStatesStorage> {
     const states = await this.loadData();
     return Object.fromEntries(states.entries());
+  }
+
+  async setAllGroupStates(states: GroupStatesStorage): Promise<void> {
+    const statesMap = new Map<string, GroupChatState>();
+    for (const [groupId, state] of Object.entries(states)) {
+      statesMap.set(groupId, state);
+    }
+    await this.saveData(statesMap);
   }
 
   async getGroupsForParticipant(

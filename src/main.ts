@@ -20,6 +20,7 @@ import { CoinLaunchFlow } from "./flows/coin-launch/CoinLaunchFlow";
 import { EnhancedMessageCoordinator } from "./core/messaging/EnhancedMessageCoordinator";
 import { InstallationManager } from "./core/installation/InstallationManager";
 import { XMTPStatusMonitor } from "./services/XMTPStatusMonitor";
+import { NewGroupDetectionService } from "./services/NewGroupDetectionService";
 
 // Storage configuration
 let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
@@ -288,7 +289,19 @@ async function createApplication() {
   // 7. Create status monitor
   const statusMonitor = new XMTPStatusMonitor(volumePath);
 
+  // 8. Create and start new group detection service
+  const newGroupDetectionService = new NewGroupDetectionService(
+    client,
+    sessionManager,
+    openai,
+    flaunchy,
+    10000 // 10 seconds interval
+  );
+
   console.log("✅ Architecture initialized successfully!");
+
+  // Start the new group detection service
+  await newGroupDetectionService.start();
 
   // Start the message stream with failure handling
   const streamPromise = handleMessageStream(client, messageCoordinator);
@@ -298,6 +311,9 @@ async function createApplication() {
     console.log("🧹 Cleaning up application resources...");
 
     try {
+      // Stop new group detection service
+      newGroupDetectionService.stop();
+
       // Stop message stream
       isStreamActive = false;
       streamRetries = 0; // Prevent retries during cleanup
@@ -314,6 +330,7 @@ async function createApplication() {
   return {
     client,
     statusMonitor,
+    newGroupDetectionService,
     streamPromise,
     cleanup,
   };

@@ -104,6 +104,47 @@ export class GroupStateManager {
   }
 
   /**
+   * Batch initialize multiple empty groups with a single write operation
+   * Optimized for the new group detection service
+   */
+  async batchInitializeEmptyGroups(groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+
+    // Get current state to avoid overwriting existing groups
+    const currentStates = await this.groupStateStorage.getAllGroupStates();
+    const now = new Date();
+
+    // Add only new groups that don't already exist
+    let newGroupsAdded = 0;
+    for (const groupId of groupIds) {
+      if (!currentStates[groupId]) {
+        currentStates[groupId] = {
+          groupId,
+          createdAt: now,
+          updatedAt: now,
+          metadata: {},
+          participants: {},
+          managers: [],
+          coins: [],
+        };
+        newGroupsAdded++;
+      }
+    }
+
+    if (newGroupsAdded > 0) {
+      // Single write operation for all new groups
+      await this.groupStateStorage.setAllGroupStates(currentStates);
+      console.log(
+        `📝 Batch initialized ${newGroupsAdded} new groups with single write`
+      );
+    } else {
+      console.log(
+        `⚠️ All ${groupIds.length} groups already exist, no initialization needed`
+      );
+    }
+  }
+
+  /**
    * Add a participant to an existing group
    */
   async addParticipant(
