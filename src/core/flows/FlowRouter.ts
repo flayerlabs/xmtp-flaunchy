@@ -380,13 +380,13 @@ Return JSON:
     if (hasCoinLaunchProgress) {
       // Only continue coin launch if:
       // 1. It's an attachment-only message (image upload), OR
-      // 2. It's NOT a clear status inquiry (let status inquiries go to QA)
+      // 2. It's NOT a clear inquiry (let inquiries go to QA)
       const isAttachmentOnly =
         context.hasAttachment && !context.messageText.trim();
-      const isStatusInquiry =
-        flags.isStatusInquiry && primaryIntent.confidence >= 0.7;
+      const isInquiry =
+        primaryIntent.action === "inquiry" && primaryIntent.confidence >= 0.7;
 
-      if (isAttachmentOnly || !isStatusInquiry) {
+      if (isAttachmentOnly || !isInquiry) {
         console.log(
           `[FlowRouter] ✅ Existing coin launch progress → coin_launch ${
             isAttachmentOnly ? "(attachment-only)" : "(continuing launch)"
@@ -395,7 +395,7 @@ Return JSON:
         return "coin_launch";
       } else {
         console.log(
-          `[FlowRouter] 🔄 Coin launch progress exists but status inquiry detected → routing to qa`
+          `[FlowRouter] 🔄 Coin launch progress exists but inquiry detected → routing to qa`
         );
       }
     }

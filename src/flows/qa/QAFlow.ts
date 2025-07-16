@@ -385,13 +385,7 @@ export class QAFlow extends BaseFlow {
       openai: context.openai,
       character: context.character,
       prompt: `
-        User asked: "${messageText}"
-        
-        User context:
-        - Status: ${aggregatedUserData.status}
-        - Has ${aggregatedUserData.allCoins.length} coins
-        - Has ${aggregatedUserData.allGroups.length} groups
-        - This is a GROUP CHAT (not a direct message)
+        User asked: <message>"${messageText}"</message>
         
         This is a GENERAL question about using the system (not about your capabilities).
         
@@ -405,7 +399,13 @@ export class QAFlow extends BaseFlow {
         - No complex setup needed - just launch coins
         
         IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.
-        
+
+        If the user has some question about THEIR coins or groups, only then refer to this user information:
+        <user-info>
+        - Has ${aggregatedUserData.allCoins.length} coins
+        - Has ${aggregatedUserData.allGroups.length} groups
+        </user-info>
+
         FORMATTING REQUIREMENTS:
         - Use \n to separate different concepts and create line breaks
         - Break up long explanations into multiple paragraphs
@@ -620,14 +620,16 @@ export class QAFlow extends BaseFlow {
       openai: context.openai,
       character: context.character,
       prompt: `
-        User asked: "${messageText}"
-        
-        Current status information:
-        ${statusInfo.join("\n")}
+        User asked: <message>"${messageText}"</message>
         
         Answer their question about their current status/progress using this information.
         Be direct and informative. If they have a pending transaction, mention they need to sign it.
         If they're in onboarding, briefly explain what step they're on.
+
+        If the user has some question about THEIR coins or groups, only then refer to this user information:
+        <user-info>
+        ${statusInfo.join("\n")}
+        </user-info>
         
         FORMATTING REQUIREMENTS:
         - Use \n to separate different status items and create line breaks
