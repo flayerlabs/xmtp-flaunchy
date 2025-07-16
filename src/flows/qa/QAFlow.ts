@@ -7,7 +7,7 @@ import {
   CoinLaunchExtractionResult,
 } from "../coin-launch/coinLaunchExtractionTemplate";
 import { GroupCreationUtils } from "../utils/GroupCreationUtils";
-import { safeParseJSON } from "../../core/utils/jsonUtils";
+import { safeParseJSON, cleanTickerSymbol } from "../../core/utils/jsonUtils";
 import { ChainConfig, getDefaultChain } from "../utils/ChainSelection";
 
 export class QAFlow extends BaseFlow {
@@ -80,7 +80,8 @@ export class QAFlow extends BaseFlow {
         // Start coin launch flow by initializing progress
         const coinData = {
           name: extraction.tokenDetails.name || undefined,
-          ticker: extraction.tokenDetails.ticker || undefined,
+          ticker:
+            cleanTickerSymbol(extraction.tokenDetails.ticker) || undefined,
           image:
             extraction.tokenDetails.image ||
             (context.hasAttachment ? "attachment_provided" : undefined),

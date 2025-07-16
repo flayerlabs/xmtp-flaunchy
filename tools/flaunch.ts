@@ -8,6 +8,7 @@ import { getTool, invalidArgsResponse } from "../utils/tool";
 import { getDisplayName, resolveEns } from "../utils/ens";
 import { chain } from "./constants";
 import { createFlaunchTransaction } from "../src/flows/utils/FlaunchTransactionUtils";
+import { cleanTickerSymbol } from "../src/core/utils/jsonUtils";
 
 export const flaunchSchema = z.object({
   ticker: z.string().describe("The ticker of the coin to flaunch"),
@@ -90,10 +91,13 @@ const createFlaunchCalls = async ({
       creatorFeeAllocationPercent = 100 - args.buybackPercentage;
     }
 
+    // Clean ticker symbol to remove "$" prefix if present
+    const cleanedTicker = cleanTickerSymbol(args.ticker) || args.ticker;
+
     // Use centralized transaction creation function
     return await createFlaunchTransaction({
-      name: args.ticker,
-      ticker: args.ticker,
+      name: cleanedTicker,
+      ticker: cleanedTicker,
       image: args.image,
       creatorAddress,
       senderInboxId,

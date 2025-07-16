@@ -63,3 +63,20 @@ export function safeParseJSON<T = any>(content: string): T {
     );
   }
 }
+
+/**
+ * Clean ticker symbol by removing "$" prefix if present
+ * @param ticker - The ticker symbol to clean
+ * @returns The cleaned ticker symbol without "$" prefix
+ */
+export function cleanTickerSymbol(ticker?: string | null): string | undefined {
+  if (!ticker || typeof ticker !== "string") {
+    return undefined;
+  }
+
+  // Remove leading "$" character if present
+  const cleaned = ticker.startsWith("$") ? ticker.slice(1) : ticker;
+
+  // Return undefined if the result is empty (was just "$")
+  return cleaned.length > 0 ? cleaned : undefined;
+}

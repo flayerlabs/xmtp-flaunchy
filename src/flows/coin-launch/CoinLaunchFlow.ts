@@ -5,7 +5,7 @@ import { ContentTypeWalletSendCalls } from "@xmtp/content-type-wallet-send-calls
 import { createFlaunchTransaction } from "../utils/FlaunchTransactionUtils";
 import { getCharacterResponse } from "../../../utils/character";
 import { getDefaultChain } from "../utils/ChainSelection";
-import { safeParseJSON } from "../../core/utils/jsonUtils";
+import { safeParseJSON, cleanTickerSymbol } from "../../core/utils/jsonUtils";
 import { createCoinLaunchExtractionPrompt } from "./coinLaunchExtractionTemplate";
 import { CoinLaunchExtractionResult } from "./coinLaunchExtractionTemplate";
 import { GraphQLService } from "../../services/GraphQLService";
@@ -370,7 +370,8 @@ export class CoinLaunchFlow extends BaseFlow {
       updated = true;
     }
     if (currentData.ticker && currentData.ticker !== progress.coinData.ticker) {
-      progress.coinData.ticker = currentData.ticker;
+      progress.coinData.ticker =
+        cleanTickerSymbol(currentData.ticker) || currentData.ticker;
       updated = true;
     }
     if (currentData.image && currentData.image !== progress.coinData.image) {
@@ -1008,8 +1009,8 @@ export class CoinLaunchFlow extends BaseFlow {
           existingCoinData?.name ||
           undefined,
         ticker:
-          extractedData.tokenDetails.ticker ||
-          existingCoinData?.ticker ||
+          cleanTickerSymbol(extractedData.tokenDetails.ticker) ||
+          cleanTickerSymbol(existingCoinData?.ticker) ||
           undefined,
         image:
           extractedData.tokenDetails.image ||
