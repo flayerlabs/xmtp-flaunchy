@@ -170,6 +170,16 @@ export class QAFlow extends BaseFlow {
     const isCapabilityQuestion =
       context.detectionResult?.questionType === "capability";
 
+    // Check if this is a mini app share request
+    const isMiniAppRequest = await this.detectMiniAppRequest(
+      context,
+      messageText
+    );
+    if (isMiniAppRequest) {
+      await this.handleMiniAppRequest(context);
+      return;
+    }
+
     // Check if this is a status/transaction inquiry (use FlowRouter's detection result first)
     const isStatusInquiry =
       context.multiIntentResult?.flags?.isStatusInquiry ||
@@ -408,6 +418,59 @@ export class QAFlow extends BaseFlow {
     });
 
     await this.sendResponse(context, response);
+  }
+
+  /**
+   * Detect if user is asking to share mini app
+   */
+  private async detectMiniAppRequest(
+    context: FlowContext,
+    messageText: string
+  ): Promise<boolean> {
+    if (!messageText) return false;
+
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `Is this message asking to share the mini app? <message>"${messageText}"</message>
+          
+          Look for patterns like:
+          - "share mini app"
+          - "share the mini app"
+          - "what's the mini-app link?"
+          - "share app"
+          - "share the app"
+          - "give me the mini app"
+          - "where is the mini app"
+          - "mini app url"
+          - "share mini"
+          - "mini app"
+          
+          Answer only "yes" or "no".`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 5,
+      });
+
+      const result = response.choices[0]?.message?.content
+        ?.trim()
+        .toLowerCase();
+      return result?.startsWith("yes") || false;
+    } catch (error) {
+      this.logError("Failed to detect mini app request", error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle mini app share requests
+   */
+  private async handleMiniAppRequest(context: FlowContext): Promise<void> {
+    await this.sendResponse(context, "https://mini.flaunch.gg");
   }
 
   /**

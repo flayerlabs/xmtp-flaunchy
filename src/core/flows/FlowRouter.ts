@@ -198,6 +198,7 @@ These are STATUS INQUIRIES (→ inquiry), NOT coin launches:
 - "what's my group", "show my group", "group info"
 - "what's my status", "how many coins", "portfolio"
 - "show me", "list", "display", "view" + [coins/groups/status]
+- "share mini app", "share the mini app", "mini app link", "mini app url"
 
 COIN LAUNCH PATTERNS (→ coin_launch):
 These patterns indicate NEW coin creation:
@@ -232,7 +233,7 @@ FLAGS (detect these patterns):
 - isGreeting: Contains greeting words
 - isTransactionInquiry: Asking about pending transactions/status
 - isCancellation: Wants to cancel something  
-- isStatusInquiry: "what are my", "list my", "show my", "do I have", "what's my status", "what coins", "what's our group", "my portfolio", "view", "display"
+- isStatusInquiry: "what are my", "list my", "show my", "do I have", "what's my status", "what coins", "what's our group", "my portfolio", "view", "display", "share mini app", "mini app"
 
 Return JSON:
 \`\`\`json
@@ -377,10 +378,26 @@ Return JSON:
     // This ensures attachment-only messages during coin launch go to the right flow
     // Takes precedence over status inquiries to handle coin data collection properly
     if (hasCoinLaunchProgress) {
-      console.log(
-        `[FlowRouter] ✅ Existing coin launch progress → coin_launch`
-      );
-      return "coin_launch";
+      // Only continue coin launch if:
+      // 1. It's an attachment-only message (image upload), OR
+      // 2. It's NOT a clear status inquiry (let status inquiries go to QA)
+      const isAttachmentOnly =
+        context.hasAttachment && !context.messageText.trim();
+      const isStatusInquiry =
+        flags.isStatusInquiry && primaryIntent.confidence >= 0.7;
+
+      if (isAttachmentOnly || !isStatusInquiry) {
+        console.log(
+          `[FlowRouter] ✅ Existing coin launch progress → coin_launch ${
+            isAttachmentOnly ? "(attachment-only)" : "(continuing launch)"
+          }`
+        );
+        return "coin_launch";
+      } else {
+        console.log(
+          `[FlowRouter] 🔄 Coin launch progress exists but status inquiry detected → routing to qa`
+        );
+      }
     }
 
     // Priority 1: Status inquiries go to QA (but only if no coin launch in progress)
