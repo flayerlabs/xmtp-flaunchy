@@ -856,6 +856,70 @@ export class QAFlow extends BaseFlow {
 
     console.log(`[QAFlow] 📤 Sending response: ${response.length} chars`);
     await this.sendResponse(context, response);
+
+    // Check if we should send the mini app link as a separate message
+    const shouldSendMiniApp = await this.shouldSendMiniAppForGroupsCoins(
+      context,
+      messageText,
+      aggregatedUserData
+    );
+
+    if (shouldSendMiniApp) {
+      console.log(`[QAFlow] 📱 Sending mini app link as separate message`);
+      await this.sendResponse(
+        context,
+        "View more detailed info in the mini app:"
+      );
+      await this.sendResponse(context, "https://mini.flaunch.gg");
+    }
+  }
+
+  /**
+   * Determine if we should send the mini app link for groups/coins queries
+   */
+  private async shouldSendMiniAppForGroupsCoins(
+    context: FlowContext,
+    messageText: string,
+    aggregatedUserData: any
+  ): Promise<boolean> {
+    try {
+      const response = await context.openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "user",
+            content: `The user asked: <message>"${messageText}"</message>
+
+User has:
+- ${aggregatedUserData.allGroups.length} groups
+- ${aggregatedUserData.allCoins.length} coins
+
+Should I send the mini app link (https://mini.flaunch.gg) as a separate message? The mini app allows users to see detailed information about their coins, groups, and earned and more detailed views.
+
+Send the mini app link if:
+- User is asking anything about their groups or coins
+- User has groups or coins and wants to see more details
+- User is asking about earned fees, stats, or analytics
+- User wants to see visual information about their holdings
+
+Don't send the mini app link if:
+- User has no groups or coins (nothing to view in mini app)
+
+Answer only "yes" or "no".`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 5,
+      });
+
+      const result = response.choices[0]?.message?.content
+        ?.trim()
+        .toLowerCase();
+      return result?.startsWith("yes") || false;
+    } catch (error) {
+      this.logError("Failed to determine if mini app should be sent", error);
+      return false;
+    }
   }
 
   /**
