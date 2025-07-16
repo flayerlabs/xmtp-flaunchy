@@ -127,9 +127,9 @@ async function handleMessageStream(
 
       if (message) {
         try {
-          console.log(
-            `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
-          );
+          // console.log(
+          //   `📨 New message from ${message.senderInboxId.slice(0, 8)}...`
+          // );
 
           // Process message through the enhanced coordinator
           await messageCoordinator.processMessage(message);
@@ -271,7 +271,7 @@ async function createApplication() {
     flaunchy,
     flowRouter,
     sessionManager,
-    1000 // 1 second wait time for message coordination
+    3000 // 3 second wait time for message coordination
   );
 
   // 5. Create status monitor

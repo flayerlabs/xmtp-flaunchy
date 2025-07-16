@@ -1187,6 +1187,8 @@ export class CoinLaunchFlow extends BaseFlow {
 
       if (currentPrebuy === 0) {
         confirmationMessage += `\n\n💡 tip: try "5% prebuy" to get tokens when your coin launches.`;
+      } else {
+        confirmationMessage += `\n\nPrebuy of ${currentPrebuy}% added to the transaction.`;
       }
 
       // Add fee split information

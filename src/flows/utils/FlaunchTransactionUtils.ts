@@ -282,7 +282,7 @@ export async function createFlaunchTransaction(
   });
 
   // Log out the raw encoded calldata for debugging
-  console.log("📝 Raw encoded calldata:", functionData);
+  // console.log("📝 Raw encoded calldata:", functionData);
 
   // Create wallet send calls
   const walletSendCalls: WalletSendCalls = {

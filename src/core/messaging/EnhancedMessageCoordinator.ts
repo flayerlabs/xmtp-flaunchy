@@ -42,7 +42,6 @@ export class EnhancedMessageCoordinator {
   private waitTimeMs: number;
 
   // Extracted services
-  private messageTextExtractor: MessageTextExtractor;
   private imageProcessor: ImageProcessor;
   private usernameResolver: UsernameResolver;
   private replyDetector: ReplyDetector;
@@ -59,13 +58,12 @@ export class EnhancedMessageCoordinator {
     private character: Character,
     private flowRouter: FlowRouter,
     private sessionManager: SessionManager,
-    waitTimeMs = 1000
+    waitTimeMs = 3000
   ) {
     this.messageQueue = new Map();
     this.waitTimeMs = waitTimeMs;
 
     // Initialize all services
-    this.messageTextExtractor = new MessageTextExtractor();
     this.imageProcessor = new ImageProcessor(this.client);
     this.usernameResolver = new UsernameResolver();
     this.replyDetector = new ReplyDetector(this.client);
@@ -189,8 +187,11 @@ export class EnhancedMessageCoordinator {
 
       // Set timer to process attachment alone if no text arrives
       entry.timer = setTimeout(async () => {
-        if (entry?.attachmentMessage) {
-          await this.processCoordinatedMessages([entry.attachmentMessage]);
+        const currentEntry = this.messageQueue.get(conversationId);
+        if (currentEntry?.attachmentMessage) {
+          await this.processCoordinatedMessages([
+            currentEntry.attachmentMessage,
+          ]);
           this.messageQueue.delete(conversationId);
         }
       }, this.waitTimeMs);
@@ -209,15 +210,30 @@ export class EnhancedMessageCoordinator {
         return result;
       }
 
-      // Set timer to process text alone if no attachment arrives
-      entry.timer = setTimeout(async () => {
-        if (entry?.textMessage) {
-          await this.processCoordinatedMessages([entry.textMessage]);
-          this.messageQueue.delete(conversationId);
-        }
-      }, this.waitTimeMs);
+      // Check if text message has obvious agent mention
+      const messageText = MessageTextExtractor.extractMessageText(message);
+      const hasObviousMention =
+        this.engagementDetector.detectObviousAgentMention(messageText);
 
-      return false;
+      if (hasObviousMention) {
+        // Process immediately for text messages with agent mentions
+        const result = await this.processCoordinatedMessages([
+          entry.textMessage,
+        ]);
+        this.messageQueue.delete(conversationId);
+        return result;
+      } else {
+        // Wait briefly for potential attachment only if no agent mention
+        entry.timer = setTimeout(async () => {
+          const currentEntry = this.messageQueue.get(conversationId);
+          if (currentEntry?.textMessage) {
+            await this.processCoordinatedMessages([currentEntry.textMessage]);
+            this.messageQueue.delete(conversationId);
+          }
+        }, this.waitTimeMs);
+
+        return false;
+      }
     }
   }
 
@@ -228,9 +244,15 @@ export class EnhancedMessageCoordinator {
     messages: DecodedMessage[]
   ): Promise<boolean> {
     try {
-      // Get the primary message (most recent)
-      const primaryMessage = messages[messages.length - 1];
-      const relatedMessages = messages.slice(0, -1);
+      // For engagement detection, prioritize text message as primary
+      // This ensures proper engagement detection when attachment + text are sent together
+      const textMessage = messages.find(
+        (msg) => !MessageTextExtractor.isAttachment(msg)
+      );
+
+      // Use text message as primary if available, otherwise most recent
+      const primaryMessage = textMessage || messages[messages.length - 1];
+      const relatedMessages = messages.filter((msg) => msg !== primaryMessage);
 
       const hasAttachment = messages.some((msg) =>
         MessageTextExtractor.isAttachment(msg)
@@ -547,9 +569,53 @@ export class EnhancedMessageCoordinator {
         primaryMessage
       );
       return true;
-    } else {
-      return false;
     }
+
+    // Special case: If this is an attachment-only message and there are related messages
+    // with agent mentions, or if user has active engagement, process it
+    if (
+      MessageTextExtractor.isAttachment(primaryMessage) &&
+      (!messageText || messageText.trim() === "")
+    ) {
+      // Check if any related messages mention the agent
+      const relatedMessageTexts = relatedMessages.map((msg) =>
+        MessageTextExtractor.extractMessageText(msg)
+      );
+      const relatedHasMention = relatedMessageTexts.some((text) =>
+        this.engagementDetector.detectObviousAgentMention(text)
+      );
+
+      if (relatedHasMention) {
+        console.log("🖼️ ATTACHMENT with related agent mention - processing");
+        await this.threadManager.updateActiveThread(
+          primaryMessage.conversationId,
+          primaryMessage.senderInboxId,
+          primaryMessage
+        );
+        return true;
+      }
+
+      // Check if user has recent engagement in this conversation
+      const isInActiveThread = await this.threadManager.isInActiveThread(
+        primaryMessage.conversationId,
+        primaryMessage.senderInboxId,
+        primaryMessage,
+        this.sessionManager,
+        this.client
+      );
+
+      if (isInActiveThread) {
+        console.log("🖼️ ATTACHMENT from active user thread - processing");
+        await this.threadManager.updateActiveThread(
+          primaryMessage.conversationId,
+          primaryMessage.senderInboxId,
+          primaryMessage
+        );
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
