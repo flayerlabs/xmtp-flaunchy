@@ -212,11 +212,11 @@ export class ThreadManager {
     // Add the mentioning user to participating users
     thread.participatingUsers.add(mentioningUserId);
 
-    console.log("🧵 THREAD UPDATED", {
-      conversationId: conversationId.slice(0, 8) + "...",
-      participatingUsers: thread.participatingUsers.size,
-      mentioningUser: mentioningUserId.slice(0, 8) + "...",
-    });
+    // console.log("🧵 THREAD UPDATED", {
+    //   conversationId: conversationId.slice(0, 8) + "...",
+    //   participatingUsers: thread.participatingUsers.size,
+    //   mentioningUser: mentioningUserId.slice(0, 8) + "...",
+    // });
   }
 
   /**

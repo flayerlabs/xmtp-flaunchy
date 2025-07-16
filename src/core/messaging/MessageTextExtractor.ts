@@ -26,7 +26,7 @@ export class MessageTextExtractor {
       if (replyContent.content && typeof replyContent.content === "string") {
         console.log("📝 Extracted text from reply message", {
           originalContent: replyContent.content.substring(0, 50) + "...",
-          referenceId: (replyContent.reference as string)?.slice(0, 16) + "...",
+          // referenceId: (replyContent.reference as string)?.slice(0, 16) + "...",
         });
         return replyContent.content;
       }
@@ -85,7 +85,7 @@ export class MessageTextExtractor {
    */
   static getContentPreview(
     message: DecodedMessage,
-    maxLength: number = 50
+    maxLength: number = 100
   ): string {
     if (this.isAttachment(message)) {
       return "[ATTACHMENT]";

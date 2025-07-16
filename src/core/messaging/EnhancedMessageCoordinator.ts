@@ -136,17 +136,24 @@ export class EnhancedMessageCoordinator {
     const conversationId = message.conversationId;
 
     // Log incoming message
-    console.log("📨 INCOMING MESSAGE", {
-      conversationId: conversationId,
-      senderInboxId: message.senderInboxId,
-      contentType: message.contentType?.typeId || "text",
-      isAttachment: isAttachment,
-      content: MessageTextExtractor.getContentPreview(message),
-      timestamp: new Date().toISOString(),
-      messageId: message.id,
-      contentLength:
-        typeof message.content === "string" ? message.content.length : 0,
-    });
+    // console.log("📨 INCOMING MESSAGE", {
+    //   conversationId: conversationId,
+    //   senderInboxId: message.senderInboxId,
+    //   contentType: message.contentType?.typeId || "text",
+    //   isAttachment: isAttachment,
+    //   content: MessageTextExtractor.getContentPreview(message),
+    //   timestamp: new Date().toISOString(),
+    //   messageId: message.id,
+    //   contentLength:
+    //     typeof message.content === "string" ? message.content.length : 0,
+    // });
+    console.log(
+      `📨 INCOMING MESSAGE: ${
+        isAttachment
+          ? "[attachment]"
+          : MessageTextExtractor.getContentPreview(message)
+      }`
+    );
 
     // Handle message coordination (text + attachment timing)
     return await this.coordinateMessage(message, isAttachment, conversationId);

@@ -248,11 +248,11 @@ export class ReplyDetector {
       const members = await conversation.members();
       const memberCount = members ? members.length : 0;
 
-      console.log("📊 Conversation type check", {
-        conversationId: conversation.id?.slice(0, 16) + "...",
-        memberCount,
-        isDirectMessage: memberCount === 2,
-      });
+      // console.log("📊 Conversation type check", {
+      //   conversationId: conversation.id?.slice(0, 16) + "...",
+      //   memberCount,
+      //   isDirectMessage: memberCount === 2,
+      // });
 
       return memberCount === 2;
     } catch (error) {
