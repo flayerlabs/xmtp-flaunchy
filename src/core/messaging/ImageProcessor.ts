@@ -17,20 +17,21 @@ export class ImageProcessor {
    * Process an XMTP remote attachment and upload to IPFS
    */
   async processImageAttachment(attachment: RemoteAttachment): Promise<string> {
-    console.log("🖼️ Processing XMTP remote attachment:", {
-      filename: attachment.filename,
-      url:
-        typeof attachment.url === "string"
-          ? attachment.url.substring(0, 100) + "..."
-          : attachment.url,
-      scheme: attachment.scheme,
-      hasContentDigest: !!(attachment as any).contentDigest,
-      hasSalt: !!(attachment as any).salt,
-      hasNonce: !!(attachment as any).nonce,
-      hasSecret: !!(attachment as any).secret,
-      hasDecryptedData: !!(attachment as any).decryptedData,
-      hasDecryptedMimeType: !!(attachment as any).decryptedMimeType,
-    });
+    console.log("🖼️ Processing XMTP remote attachment:");
+    // console.log("🖼️ Processing XMTP remote attachment:", {
+    //   filename: attachment.filename,
+    //   url:
+    //     typeof attachment.url === "string"
+    //       ? attachment.url.substring(0, 100) + "..."
+    //       : attachment.url,
+    //   scheme: attachment.scheme,
+    //   hasContentDigest: !!(attachment as any).contentDigest,
+    //   hasSalt: !!(attachment as any).salt,
+    //   hasNonce: !!(attachment as any).nonce,
+    //   hasSecret: !!(attachment as any).secret,
+    //   hasDecryptedData: !!(attachment as any).decryptedData,
+    //   hasDecryptedMimeType: !!(attachment as any).decryptedMimeType,
+    // });
 
     try {
       let decryptedAttachment: Attachment;
@@ -55,12 +56,13 @@ export class ImageProcessor {
         )) as Attachment;
       }
 
-      console.log("✅ XMTP decryption successful:", {
-        filename: decryptedAttachment.filename,
-        mimeType: decryptedAttachment.mimeType,
-        dataSize: decryptedAttachment.data.length,
-        estimatedFileSizeKB: Math.round(decryptedAttachment.data.length / 1024),
-      });
+      console.log("✅ XMTP decryption successful:");
+      // console.log("✅ XMTP decryption successful:", {
+      //   filename: decryptedAttachment.filename,
+      //   mimeType: decryptedAttachment.mimeType,
+      //   dataSize: decryptedAttachment.data.length,
+      //   estimatedFileSizeKB: Math.round(decryptedAttachment.data.length / 1024),
+      // });
 
       // Validate the decrypted data
       this.validateImageData(decryptedAttachment);

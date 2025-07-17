@@ -17,6 +17,7 @@ import type {
   UnifiedRoutingResult,
   MultiIntentResult,
 } from "../flows/FlowRouter";
+import { Address } from "viem";
 
 export interface FlowContext {
   // Core XMTP objects
@@ -35,7 +36,7 @@ export interface FlowContext {
 
   // User identification
   senderInboxId: string;
-  creatorAddress: string;
+  creatorAddress: Address;
 
   // Group context
   groupId: string;

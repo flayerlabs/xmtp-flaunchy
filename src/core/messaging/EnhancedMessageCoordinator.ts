@@ -4,7 +4,6 @@ import { FlowRouter } from "../flows/FlowRouter";
 import { SessionManager } from "../session/SessionManager";
 import { FlowContext } from "../types/FlowContext";
 import { Character } from "../../../types";
-import { ContentTypeRemoteAttachment } from "@xmtp/content-type-remote-attachment";
 import { ContentTypeTransactionReference } from "@xmtp/content-type-transaction-reference";
 import {
   ContentTypeReaction,
@@ -21,9 +20,8 @@ import { ReplyDetector } from "./ReplyDetector";
 import { EngagementDetector } from "./EngagementDetector";
 import { ThreadManager } from "./ThreadManager";
 import { TransactionReferenceHandler } from "./TransactionReferenceHandler";
-import { GroupEnsurer } from "./GroupEnsurer";
-import { GroupStorageService } from "../../services/GroupStorageService";
 import { ENSResolverService } from "../../services/ENSResolverService";
+import { Address } from "viem";
 
 /**
  * Enhanced Message Coordinator - Refactored to use extracted services
@@ -48,8 +46,6 @@ export class EnhancedMessageCoordinator {
   private engagementDetector: EngagementDetector;
   private threadManager: ThreadManager;
   private transactionReferenceHandler: TransactionReferenceHandler;
-  private groupEnsurer: GroupEnsurer;
-  private groupStorageService: GroupStorageService;
   private ensResolverService: ENSResolverService;
 
   constructor(
@@ -67,27 +63,16 @@ export class EnhancedMessageCoordinator {
     this.imageProcessor = new ImageProcessor(this.client);
     this.usernameResolver = new UsernameResolver();
     this.replyDetector = new ReplyDetector(this.client);
-    this.engagementDetector = new EngagementDetector(
-      this.openai,
-      this.character
-    );
+    this.engagementDetector = new EngagementDetector(this.character.name);
     this.threadManager = new ThreadManager(
       this.engagementDetector,
       this.usernameResolver,
       this.openai
     );
-    this.groupStorageService = new GroupStorageService(this.sessionManager);
     this.ensResolverService = new ENSResolverService();
-    this.groupEnsurer = new GroupEnsurer(
-      this.client,
-      this.sessionManager,
-      this.groupStorageService,
-      this.ensResolverService
-    );
     this.transactionReferenceHandler = new TransactionReferenceHandler(
       this.client,
-      this.sessionManager,
-      this.groupStorageService
+      this.sessionManager
     );
   }
 
@@ -317,8 +302,7 @@ export class EnhancedMessageCoordinator {
       if (!participantState) {
         await this.sessionManager.addParticipantToGroup(
           groupId,
-          creatorAddress,
-          "active"
+          creatorAddress
         );
 
         // Also ensure user exists in per-user state system
@@ -387,8 +371,6 @@ export class EnhancedMessageCoordinator {
         conversation,
         groupState: groupState || {
           groupId,
-          createdAt: new Date(),
-          updatedAt: new Date(),
           metadata: {},
           participants: {},
           managers: [],
@@ -396,18 +378,6 @@ export class EnhancedMessageCoordinator {
         },
         participantState: participantState || {
           address: creatorAddress,
-          joinedAt: new Date(),
-          lastActiveAt: new Date(),
-          status: "active" as const,
-          preferences: {
-            defaultMarketCap: 1000,
-            defaultFairLaunchPercent: 10,
-            defaultFairLaunchDuration: 30 * 60,
-            notificationSettings: {
-              launchUpdates: true,
-              priceAlerts: true,
-            },
-          },
         },
         creatorAddress,
         conversationHistory: relatedMessages,
@@ -448,14 +418,8 @@ export class EnhancedMessageCoordinator {
     }
 
     // Create a minimal context for intent detection
-    const messageText = MessageTextExtractor.extractCombinedMessageText(
-      primaryMessage,
-      relatedMessages
-    );
     const groupState = {
       groupId: conversation.id,
-      createdAt: new Date(),
-      updatedAt: new Date(),
       metadata: {},
       participants: {},
       managers: [],
@@ -469,18 +433,6 @@ export class EnhancedMessageCoordinator {
       groupState,
       participantState: {
         address: creatorAddress,
-        joinedAt: new Date(),
-        lastActiveAt: new Date(),
-        status: "active" as const,
-        preferences: {
-          defaultMarketCap: 1000,
-          defaultFairLaunchPercent: 10,
-          defaultFairLaunchDuration: 30 * 60,
-          notificationSettings: {
-            launchUpdates: true,
-            priceAlerts: true,
-          },
-        },
       },
       creatorAddress,
       conversationHistory: relatedMessages,
@@ -533,18 +485,6 @@ export class EnhancedMessageCoordinator {
       groupState,
       participantState: {
         address: creatorAddress,
-        joinedAt: new Date(),
-        lastActiveAt: new Date(),
-        status: "active" as const,
-        preferences: {
-          defaultMarketCap: 1000,
-          defaultFairLaunchPercent: 10,
-          defaultFairLaunchDuration: 30 * 60,
-          notificationSettings: {
-            launchUpdates: true,
-            priceAlerts: true,
-          },
-        },
       },
       creatorAddress,
       conversationHistory: relatedMessages,
@@ -744,7 +684,7 @@ export class EnhancedMessageCoordinator {
     conversation: Conversation<any>;
     groupState: any;
     participantState: any;
-    creatorAddress: string;
+    creatorAddress: Address;
     conversationHistory: DecodedMessage[];
     isDirectMessage: boolean;
     isReplyToImage?: boolean;
@@ -857,7 +797,6 @@ export class EnhancedMessageCoordinator {
             .setGroupState(groupId, {
               ...currentState,
               ...updates,
-              updatedAt: new Date(),
             });
         }
       },

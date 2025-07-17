@@ -1,14 +1,24 @@
 import { BaseFlow } from "../../core/flows/BaseFlow";
 import { FlowContext } from "../../core/types/FlowContext";
 import { getCharacterResponse } from "../../../utils/character";
-// Note: createLaunchExtractionPrompt import removed - was used for onboarding flow which has been removed
 import {
   createCoinLaunchExtractionPrompt,
   CoinLaunchExtractionResult,
 } from "../coin-launch/coinLaunchExtractionTemplate";
-import { GroupCreationUtils } from "../utils/GroupCreationUtils";
 import { safeParseJSON, cleanTickerSymbol } from "../../core/utils/jsonUtils";
 import { ChainConfig, getDefaultChain } from "../utils/ChainSelection";
+import { LLMResponse } from "../../core/messaging/LLMResponse";
+import {
+  QAFlow_detectMultipleCoinRequestPrompt,
+  QAFlow_detectMiniAppRequestPrompt,
+  QAFlow_detectStatusInquiryPrompt,
+  QAFlow_detectGroupsOrCoinsQueryPrompt,
+  QAFlow_shouldSendMiniAppForGroupsCoinsPrompt,
+  QAFlow_handleCapabilityQuestionPrompt,
+  QAFlow_handleGeneralQuestionPrompt,
+  QAFlow_handleStatusInquiryPrompt,
+} from "../../data/prompts";
+import { AddressUtils } from "../utils/AddressUtils";
 
 export class QAFlow extends BaseFlow {
   constructor() {
@@ -16,7 +26,7 @@ export class QAFlow extends BaseFlow {
   }
 
   async processMessage(context: FlowContext): Promise<void> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     this.log("Processing Q&A message", {
       participantAddress: context.creatorAddress,
@@ -109,7 +119,7 @@ export class QAFlow extends BaseFlow {
         // Show groups for selection if user has multiple groups
         if (aggregatedUserData.allGroups.length === 1) {
           const group = aggregatedUserData.allGroups[0];
-          const groupDisplay = await GroupCreationUtils.formatAddress(
+          const groupDisplay = await AddressUtils.formatAddress(
             group.groupId,
             context.ensResolver
           );
@@ -128,7 +138,7 @@ export class QAFlow extends BaseFlow {
           const groupAddresses = aggregatedUserData.allGroups.map(
             (g) => g.groupId
           );
-          const addressMap = await GroupCreationUtils.formatAddresses(
+          const addressMap = await AddressUtils.formatAddresses(
             groupAddresses,
             context.ensResolver
           );
@@ -202,7 +212,7 @@ export class QAFlow extends BaseFlow {
   private async extractCoinLaunchDetails(
     context: FlowContext
   ): Promise<CoinLaunchExtractionResult | null> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     // Allow extraction even with empty message if there's an attachment
     if (!messageText && !context.hasAttachment) {
@@ -217,14 +227,11 @@ export class QAFlow extends BaseFlow {
         imageUrl: undefined,
       });
 
-      const completion = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: extractionPrompt }],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: extractionPrompt,
         max_tokens: 500,
       });
-
-      const response = completion.choices[0]?.message?.content;
       if (!response) {
         return null;
       }
@@ -258,33 +265,13 @@ export class QAFlow extends BaseFlow {
     if (!messageText) return false;
 
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Does this message request launching multiple coins/tokens? "${messageText}"
-          
-          Look for patterns like:
-          - "launch 3 coins"
-          - "create multiple tokens"
-          - "launch COIN1 and COIN2"
-          - "create tokens called X, Y, and Z"
-          - "launch several coins"
-          - "create a few tokens"
-          - Multiple coin names or tickers in one request
-          - Asking about batch/bulk coin creation
-          
-          Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: QAFlow_detectMultipleCoinRequestPrompt({ messageText }),
         max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content
-        ?.trim()
-        .toLowerCase();
+      const result = response?.toLowerCase();
       return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to detect multiple coin request", error);
@@ -331,41 +318,7 @@ export class QAFlow extends BaseFlow {
     const response = await getCharacterResponse({
       openai: context.openai,
       character: context.character,
-      prompt: `
-        User is asking a CAPABILITY question about how you (the agent) or the system works: "${messageText}"
-        
-        This is a GROUP CHAT (not a direct message).
-        
-        SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
-        
-        Key points about the new system:
-        - You automatically create groups for everyone in the chat when they launch coins
-        - No manual group creation needed - it's all handled automatically
-        - Users just need to launch coins and the fee splitting happens automatically
-        - Everyone in the chat group becomes part of the group and splits trading fees
-        
-        Common capability questions and how to answer them:
-        - "How do you make money?" → Explain that you're a bot that helps launch coins, you don't make money yourself
-        - "What do you do?" → Explain your role as a simplified coin launcher that automatically handles groups
-        - "How does this work?" → Explain the simplified workflow: just launch coins and automatic group creation
-        - "What can you do?" → Explain coin launching with automatic fee splitting
-        
-        IMPORTANT:
-        - Answer about YOU (the agent) and the SYSTEM, not about how users make money
-        - Be clear you're an AI assistant that launches coins and automatically creates groups
-        - Emphasize the simplicity - no complex setup needed
-        - Keep it concise but informative
-        
-        FORMATTING REQUIREMENTS:
-        - Use \n to separate different concepts and create line breaks
-        - Break up long explanations into multiple paragraphs
-        - Use bullet points or numbered lists when appropriate
-        - Make the response easy to read and scan, but keep it short and concise
-        - DON'T use markdown (like **bold** or *italic*)
-        
-        Use your character's voice but focus on explaining your role and the simplified workflow.
-      `,
+      prompt: QAFlow_handleCapabilityQuestionPrompt({ messageText }),
     });
 
     await this.sendResponse(context, response);
@@ -384,37 +337,11 @@ export class QAFlow extends BaseFlow {
     const response = await getCharacterResponse({
       openai: context.openai,
       character: context.character,
-      prompt: `
-        User asked: <message>"${messageText}"</message>
-        
-        This is a GENERAL question about using the system (not about your capabilities).
-        
-        SIMPLIFIED WORKFLOW TO EXPLAIN:
-        "Launch coins with me and you'll split the trading fees with everyone in this chat group. Tag me @flaunchy or reply to my messages to interact."
-        
-        Provide helpful guidance about:
-        - Coin launching with automatic group creation
-        - Fee splitting mechanisms (automatic for everyone in chat)
-        - Trading and fair launches
-        - No complex setup needed - just launch coins
-        
-        IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.
-
-        If the user has some question about THEIR coins or groups, only then refer to this user information:
-        <user-info>
-        - Has ${aggregatedUserData.allCoins.length} coins
-        - Has ${aggregatedUserData.allGroups.length} groups
-        </user-info>
-
-        FORMATTING REQUIREMENTS:
-        - Use \n to separate different concepts and create line breaks
-        - Break up long explanations into multiple paragraphs
-        - Use bullet points or numbered lists when appropriate
-        - Make the response easy to read and scan, but keep it short and concise
-        - DON'T use markdown (like **bold** or *italic*)
-        
-        Use your character's voice but prioritize brevity and helpfulness.
-      `,
+      prompt: QAFlow_handleGeneralQuestionPrompt({
+        messageText,
+        coinsCount: aggregatedUserData.allCoins.length,
+        groupsCount: aggregatedUserData.allGroups.length,
+      }),
     });
 
     await this.sendResponse(context, response);
@@ -430,35 +357,13 @@ export class QAFlow extends BaseFlow {
     if (!messageText) return false;
 
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Is this message asking to share the mini app? <message>"${messageText}"</message>
-          
-          Look for patterns like:
-          - "share mini app"
-          - "share the mini app"
-          - "what's the mini-app link?"
-          - "share app"
-          - "share the app"
-          - "give me the mini app"
-          - "where is the mini app"
-          - "mini app url"
-          - "share mini"
-          - "mini app"
-          
-          Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: QAFlow_detectMiniAppRequestPrompt({ messageText }),
         max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content
-        ?.trim()
-        .toLowerCase();
+      const result = response?.toLowerCase();
       return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to detect mini app request", error);
@@ -483,35 +388,13 @@ export class QAFlow extends BaseFlow {
     if (!messageText) return false;
 
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Is this message asking about the user's current status, progress, or pending transactions? "${messageText}"
-          
-          Look for questions like:
-          - "do I have a group being created?"
-          - "what's my status?"
-          - "do I have any pending transactions?"
-          - "what groups do I have?"
-          - "what coins have I launched?"
-          - "am I in onboarding?"
-          - "what's happening with my transaction?"
-          - "where am I in the process?"
-          - "what's my current state?"
-          - "do I have anything pending?"
-          
-          Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: QAFlow_detectStatusInquiryPrompt({ messageText }),
         max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content
-        ?.trim()
-        .toLowerCase();
+      const result = response?.toLowerCase();
       return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to detect status inquiry", error);
@@ -579,9 +462,6 @@ export class QAFlow extends BaseFlow {
     // Build status information
     let statusInfo = [];
 
-    // Current status
-    statusInfo.push(`Status: ${aggregatedUserData.status}`);
-
     // Groups
     if (aggregatedUserData.allGroups.length > 0) {
       statusInfo.push(`Groups: ${aggregatedUserData.allGroups.length} active`);
@@ -610,35 +490,13 @@ export class QAFlow extends BaseFlow {
       statusInfo.push(`Coin launch: ${step} step`);
     }
 
-    // Management progress (participant-specific)
-    if (participantState.managementProgress) {
-      const action = participantState.managementProgress.action || "unknown";
-      statusInfo.push(`Management: ${action} in progress`);
-    }
-
     const response = await getCharacterResponse({
       openai: context.openai,
       character: context.character,
-      prompt: `
-        User asked: <message>"${messageText}"</message>
-        
-        Answer their question about their current status/progress using this information.
-        Be direct and informative. If they have a pending transaction, mention they need to sign it.
-        If they're in onboarding, briefly explain what step they're on.
-
-        If the user has some question about THEIR coins or groups, only then refer to this user information:
-        <user-info>
-        ${statusInfo.join("\n")}
-        </user-info>
-        
-        FORMATTING REQUIREMENTS:
-        - Use \n to separate different status items and create line breaks
-        - Make the response easy to read and scan, but keep it short and concise
-        - Use bullet points or numbered lists when appropriate
-        - DON'T use markdown (like **bold** or *italic*)
-        
-        Use your character's voice but prioritize clarity and helpfulness.
-      `,
+      prompt: QAFlow_handleStatusInquiryPrompt({
+        messageText,
+        statusInfo,
+      }),
     });
 
     await this.sendResponse(context, response);
@@ -654,54 +512,13 @@ export class QAFlow extends BaseFlow {
     if (!messageText) return false;
 
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Is this message specifically asking about groups or coins/tokens? "${messageText}"
-          
-          Look for patterns like but not limited to:
-          - "list my groups"
-          - "show my groups"
-          - "what groups do I have"
-          - "what are my groups"
-          - "my groups"
-          - "list my coins"
-          - "show my coins"
-          - "what coins do I have"
-          - "what are my coins"
-          - "my coins"
-          - "what tokens do I have"
-          - "what are my tokens"
-          - "my tokens"
-          - "show my holdings"
-          - "what coins are in this group"
-          - "what coins are in the group"
-          - "what's in this group"
-          - "what's in the group"
-          - "coins in this group"
-          - "coins in the group"
-          - "show coins in this group"
-          - "list coins in this group"
-          - "what coins does this group have"
-          - "what tokens are in this group"
-          - "what tokens are in the group"
-          - "group coins"
-          - "group tokens"
-          - "this group's coins"
-          - "this group's tokens"
-          
-          Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: QAFlow_detectGroupsOrCoinsQueryPrompt({ messageText }),
         max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content
-        ?.trim()
-        .toLowerCase();
+      const result = response?.toLowerCase();
 
       return result?.startsWith("yes") || false;
     } catch (error) {
@@ -912,38 +729,17 @@ export class QAFlow extends BaseFlow {
     aggregatedUserData: any
   ): Promise<boolean> {
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `The user asked: <message>"${messageText}"</message>
-
-User has:
-- ${aggregatedUserData.allGroups.length} groups
-- ${aggregatedUserData.allCoins.length} coins
-
-Should I send the mini app link (https://mini.flaunch.gg) as a separate message? The mini app allows users to see detailed information about their coins, groups, and earned and more detailed views.
-
-Send the mini app link if:
-- User is asking anything about their groups or coins
-- User has groups or coins and wants to see more details
-- User is asking about earned fees, stats, or analytics
-- User wants to see visual information about their holdings
-
-Don't send the mini app link if:
-- User has no groups or coins (nothing to view in mini app)
-
-Answer only "yes" or "no".`,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: QAFlow_shouldSendMiniAppForGroupsCoinsPrompt({
+          messageText,
+          groupsCount: aggregatedUserData.allGroups.length,
+          coinsCount: aggregatedUserData.allCoins.length,
+        }),
         max_tokens: 5,
       });
 
-      const result = response.choices[0]?.message?.content
-        ?.trim()
-        .toLowerCase();
+      const result = response?.toLowerCase();
       return result?.startsWith("yes") || false;
     } catch (error) {
       this.logError("Failed to determine if mini app should be sent", error);
@@ -1000,7 +796,7 @@ Answer only "yes" or "no".`,
     // }
 
     // Fallback to formatAddress as before
-    const groupDisplay = await GroupCreationUtils.formatAddress(
+    const groupDisplay = await AddressUtils.formatAddress(
       group.groupId,
       context.ensResolver
     );

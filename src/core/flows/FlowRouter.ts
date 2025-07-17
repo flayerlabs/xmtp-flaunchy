@@ -1,10 +1,7 @@
-import { UserState, GroupState } from "../types/UserState";
-import { GroupChatState, GroupParticipant } from "../types/GroupState";
+import { FlowRouter_detectMultipleIntentsPrompt } from "../../data/prompts/FlowRouter_detectMultipleIntentsPrompt";
+import { LLMResponse } from "../messaging/LLMResponse";
 import { FlowContext } from "../types/FlowContext";
 import { BaseFlow } from "./BaseFlow";
-
-import { safeParseJSON } from "../utils/jsonUtils";
-import OpenAI from "openai";
 
 export type FlowType = "qa" | "management" | "coin_launch";
 
@@ -15,22 +12,13 @@ export interface FlowRegistry {
 }
 
 export interface UnifiedRoutingResult {
-  // Greeting detection
-  isGreeting: boolean;
-
   // Transaction-related
   isTransactionInquiry: boolean;
-  isCancellation: boolean;
 
   // Question classification
   questionType: "capability" | "informational" | null;
 
-  // Fee/percentage modifications
-  isFeeSplitModification: boolean;
-  isPercentageUpdate: boolean;
-
   // Coin launch related
-  isContinuingCoinLaunch: boolean;
   isMultipleCoinRequest: boolean;
 
   // Action classification
@@ -71,9 +59,7 @@ export interface MultiIntentResult {
     confidence: number;
   }>;
   flags: {
-    isGreeting: boolean;
     isTransactionInquiry: boolean;
-    isCancellation: boolean;
     isStatusInquiry: boolean;
   };
 }
@@ -81,7 +67,7 @@ export interface MultiIntentResult {
 export class FlowRouter {
   private flows: FlowRegistry;
 
-  constructor(flows: FlowRegistry, openai: OpenAI) {
+  constructor(flows: FlowRegistry) {
     this.flows = flows;
   }
 
@@ -153,16 +139,12 @@ export class FlowRouter {
         },
         secondaryIntents: [],
         flags: {
-          isGreeting: false,
           isTransactionInquiry: false,
-          isCancellation: false,
           isStatusInquiry: false,
         },
       };
     }
 
-    // Use new group-centric architecture
-    const status = participantState?.status || "new";
     const groupCount = 1; // Participant is in this group, so at least 1
     const coinCount = context.groupState?.coins?.length || 0;
     const pendingTxType = participantState?.pendingTransaction?.type || "none";
@@ -172,107 +154,23 @@ export class FlowRouter {
     );
 
     try {
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: `Analyze this message for ALL intents (not just one):
-
-MESSAGE: "${messageText}"
-
-USER CONTEXT:
-- Status: ${status}
-- Groups: ${groupCount}
-- Coins: ${coinCount}  
-- Pending Transaction: ${pendingTxType}
-
-DETECT ALL INTENTS in order of importance:
-
-PRIMARY INTENT (most important):
-
-CRITICAL: VIEW/STATUS REQUESTS vs LAUNCH REQUESTS
-These are STATUS INQUIRIES (→ inquiry), NOT coin launches:
-- "what are my coins", "list my coins", "show my coins"
-- "what coins do I have", "do I have any coins", "my coin portfolio"
-- "what's my group", "show my group", "group info"
-- "what's my status", "how many coins", "portfolio"
-- "show me", "list", "display", "view" + [coins/groups/status]
-- "share mini app", "share the mini app", "mini app link", "mini app url"
-
-COIN LAUNCH PATTERNS (→ coin_launch):
-These patterns indicate NEW coin creation:
-- "Name (TICKER)" format: "Test (TEST)", "Dogecoin (DOGE)", "MyCoin (MCN)"
-- "Token/Coin name ticker" format: "Token TEST", "Coin DOGE", "Launch MyCoin"  
-- "Create/Launch token/coin" with name/ticker: "create token Test", "launch coin DOGE"
-- Single words that could be coin names: "Ethereum", "Bitcoin", "Solana"
-- Ticker symbols: "TEST", "DOGE", "BTC"
-- "launch", "create", "flaunch" + coin details
-- Image uploads with minimal text (likely coin images)
-
-ACTIONS (classify based on patterns above):
-1. inquiry: Status questions, viewing existing data, "what/show/list/display" requests
-2. coin_launch: Token/coin creation patterns (creates chat group automatically if needed)
-3. modify_existing: Modifying coin parameters or pending transactions
-
-MANAGEMENT:
-4. cancel, management: Managing existing coins or viewing chat group
-
-SOCIAL:
-5. greeting: Social interactions
-
-CONTEXT-AWARE CLASSIFICATION:
-- Chat group model: each chat group has exactly ONE group shared by everyone
-- Coin launch patterns always → coin_launch (creates group automatically if first coin in chat)
-- Questions about existing coins or chat group group → inquiry
-
-SECONDARY INTENTS (also in the message):
-- Any other intents that should be handled after the primary
-
-FLAGS (detect these patterns):
-- isGreeting: Contains greeting words
-- isTransactionInquiry: Asking about pending transactions/status
-- isCancellation: Wants to cancel something  
-- isStatusInquiry: "what are my", "list my", "show my", "do I have", "what's my status", "what coins", "what's our group", "my portfolio", "view", "display", "share mini app", "mini app"
-
-Return JSON:
-\`\`\`json
-{
-  "primaryIntent": {
-    "type": "action|question|management|social",
-    "action": "coin_launch|modify_existing|inquiry|greeting|cancel|management|other",
-    "confidence": 0.0-1.0,
-    "reasoning": "why this is primary"
-  },
-  "secondaryIntents": [
-    {
-      "type": "action|question|management|social", 
-      "action": "...",
-      "confidence": 0.0-1.0
-    }
-  ],
-  "flags": {
-    "isGreeting": boolean,
-    "isTransactionInquiry": boolean,
-    "isCancellation": boolean,
-    "isStatusInquiry": boolean
-  }
-}
-\`\`\`
-        `,
-          },
-        ],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt: FlowRouter_detectMultipleIntentsPrompt({
+          messageText,
+          status,
+          groupCount,
+          coinCount,
+          pendingTxType,
+        }),
         max_tokens: 800,
       });
-
-      const content = response.choices[0]?.message?.content?.trim();
-      if (!content) {
+      if (!response) {
         throw new Error("No response from LLM");
       }
 
       // Extract JSON from response
-      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/);
+      const jsonMatch = response.match(/```json\n([\s\S]*?)\n```/);
       if (!jsonMatch) {
         throw new Error("No JSON found in response");
       }
@@ -294,13 +192,9 @@ Return JSON:
         },
         secondaryIntents: [],
         flags: {
-          isGreeting:
-            messageText.toLowerCase().includes("hey") ||
-            messageText.toLowerCase().includes("hello"),
           isTransactionInquiry:
             messageText.toLowerCase().includes("transaction") ||
             messageText.toLowerCase().includes("pending"),
-          isCancellation: messageText.toLowerCase().includes("cancel"),
           isStatusInquiry:
             messageText.toLowerCase().includes("do i have") ||
             messageText.toLowerCase().includes("status"),
@@ -349,9 +243,7 @@ Return JSON:
         ),
       })),
       flags: {
-        isGreeting: Boolean(result.flags?.isGreeting),
         isTransactionInquiry: Boolean(result.flags?.isTransactionInquiry),
-        isCancellation: Boolean(result.flags?.isCancellation),
         isStatusInquiry: Boolean(result.flags?.isStatusInquiry),
       },
     };
@@ -400,8 +292,8 @@ Return JSON:
       }
     }
 
-    // Priority 1: Status inquiries go to QA (but only if no coin launch in progress)
-    // User wants to know about their current state, not continue a process
+    // Priority 1: Status inquiries go to QA
+    // User wants to know about their current state
     if (
       primaryIntent.action === "inquiry" &&
       (flags.isStatusInquiry || flags.isTransactionInquiry) &&
@@ -414,8 +306,6 @@ Return JSON:
     // Priority 2: Action intents (what user wants to DO)
     if (primaryIntent.type === "action") {
       switch (primaryIntent.action) {
-        // Note: create_group is no longer a valid action since groups are auto-created
-
         case "coin_launch":
           // All coin launches go to coin_launch flow (handles auto group creation)
           console.log(`[FlowRouter] ✅ Launch coin → coin_launch`);
@@ -426,16 +316,13 @@ Return JSON:
           if (hasPendingTransaction) {
             const pendingTxType =
               context.participantState?.pendingTransaction?.type;
-            if (pendingTxType === "group_creation") {
-              console.log(`[FlowRouter] ✅ Modify pending group → management`);
-              return "management";
-            } else if (pendingTxType === "coin_creation") {
+            if (pendingTxType === "coin_creation") {
               console.log(`[FlowRouter] ✅ Modify pending coin → coin_launch`);
               return "coin_launch";
             }
           }
-          console.log(`[FlowRouter] ✅ Modify existing → management`);
-          return "management";
+          console.log(`[FlowRouter] ✅ Modify existing → coin_launch`);
+          return "coin_launch";
       }
     }
 

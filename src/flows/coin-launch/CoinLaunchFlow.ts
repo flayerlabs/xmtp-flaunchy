@@ -10,8 +10,10 @@ import { createCoinLaunchExtractionPrompt } from "./coinLaunchExtractionTemplate
 import { CoinLaunchExtractionResult } from "./coinLaunchExtractionTemplate";
 import { GraphQLService } from "../../services/GraphQLService";
 import { AddressFeeSplitManagerAddress } from "../../../addresses";
-import { encodeAbiParameters } from "viem";
+import { encodeAbiParameters, zeroAddress, zeroHash } from "viem";
 import { Address } from "viem";
+import { blacklistedReceivers } from "../../data/blacklistedReceivers";
+import { LLMResponse } from "../../core/messaging/LLMResponse";
 
 interface CoinLaunchData {
   name?: string;
@@ -93,8 +95,7 @@ export class CoinLaunchFlow extends BaseFlow {
   private async handlePendingTransactionUpdate(
     context: FlowContext
   ): Promise<boolean> {
-    const { participantState } = context;
-    const messageText = this.extractMessageText(context);
+    const { participantState, messageText } = context;
 
     if (participantState.pendingTransaction) {
       const txParams = participantState.pendingTransaction;
@@ -114,16 +115,15 @@ export class CoinLaunchFlow extends BaseFlow {
             ticker: coinData.ticker,
             name: coinData.name,
             image: coinData.image,
-            contractAddress: launchParams.targetGroupId, // Will be updated with actual contract address
-            txHash: "", // Will be updated with actual tx hash
+            contractAddress: zeroAddress, // Will be updated with actual contract address
+            txHash: zeroHash, // Will be updated with actual tx hash
             launchedAt: new Date(),
             launchedBy: context.creatorAddress,
             chainId: getDefaultChain().id,
-            chainName: getDefaultChain().name,
             fairLaunchDuration: launchParams.fairLaunchDuration || 30,
             fairLaunchPercent: 10,
             initialMarketCap: launchParams.startingMarketCap || 1000,
-            managerAddress: launchParams.targetGroupId,
+            managerAddress: zeroAddress,
           };
 
           await context.sessionManager.addCoinToGroup(
@@ -772,7 +772,7 @@ export class CoinLaunchFlow extends BaseFlow {
       for (const member of members) {
         // console.log(`Processing member: ${member.inboxId}`);
 
-        // Skip the sender (coin creator) and the bot
+        // Skip the sender (coin creator), this flaunchy bot and blacklisted addresses
         if (
           member.inboxId !== context.client.inboxId &&
           member.inboxId !== context.senderInboxId
@@ -788,8 +788,12 @@ export class CoinLaunchFlow extends BaseFlow {
           ) {
             const memberAddress = memberInboxState[0].identifiers[0]
               .identifier as Address;
-            feeReceivers.push(memberAddress);
-            // console.log(`  → Added fee receiver: ${memberAddress}`);
+
+            // skip blacklisted receivers
+            if (!blacklistedReceivers.includes(memberAddress)) {
+              feeReceivers.push(memberAddress);
+              // console.log(`  → Added fee receiver: ${memberAddress}`);
+            }
           } else {
             // console.log(
             //   `  → Could not get address for member ${member.inboxId}`
@@ -977,7 +981,7 @@ export class CoinLaunchFlow extends BaseFlow {
   // This method has been removed as it depended on user-states.json
 
   private async extractCoinData(context: FlowContext): Promise<CoinLaunchData> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     // Get existing coin data from context to preserve it
     const existingCoinData = this.getExistingCoinData(context);
@@ -991,14 +995,13 @@ export class CoinLaunchFlow extends BaseFlow {
         imageUrl: undefined, // We'll handle image URLs separately if needed
       });
 
-      const response = await context.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
+      const response = await LLMResponse.getResponse({
+        context,
+        prompt,
         max_tokens: 500,
       });
 
-      const rawResponse = response.choices[0]?.message?.content || "{}";
+      const rawResponse = response || "{}";
       const extractedData =
         safeParseJSON<CoinLaunchExtractionResult>(rawResponse);
 
@@ -1296,7 +1299,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isLaunchOptionsInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -1343,7 +1346,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isFutureFeatureInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -1393,7 +1396,7 @@ export class CoinLaunchFlow extends BaseFlow {
   private async isLaunchDefaultsInquiry(
     context: FlowContext
   ): Promise<boolean> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -1440,7 +1443,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isStatusInquiry(context: FlowContext): Promise<boolean> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     const response = await getCharacterResponse({
       openai: context.openai,
@@ -1522,7 +1525,7 @@ export class CoinLaunchFlow extends BaseFlow {
   }
 
   private async isLaunchCommand(context: FlowContext): Promise<boolean> {
-    const messageText = this.extractMessageText(context);
+    const { messageText } = context;
 
     // Check for explicit launch commands
     const launchCommands = [

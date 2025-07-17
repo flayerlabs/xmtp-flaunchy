@@ -2,8 +2,6 @@ import { GraphQLService, GroupData } from "./GraphQLService";
 import { UserState, UserGroup, UserCoin } from "../core/types/UserState";
 import {
   GroupChatState,
-  GroupParticipant,
-  GroupManager,
   GroupCoin,
   AggregatedUserData,
 } from "../core/types/GroupState";
@@ -123,7 +121,6 @@ export class UserDataService {
           ...groupState,
           managers: updatedManagers,
           coins: updatedCoins,
-          updatedAt: new Date(),
         };
 
         console.log(
@@ -197,7 +194,6 @@ export class UserDataService {
       `[UserDataService] 🔄 Aggregating user data for ${participantAddress}`
     );
 
-    let overallStatus: AggregatedUserData["status"] = "new";
     let globalPreferences = {
       defaultMarketCap: 1000,
       defaultFairLaunchPercent: 10,
@@ -218,16 +214,6 @@ export class UserDataService {
 
       if (!participant) continue;
 
-      // Update overall status
-      if (
-        participant.status === "active" ||
-        (participant.status === "onboarding" && overallStatus !== "active") ||
-        (participant.status === "invited" &&
-          !["active", "onboarding"].includes(overallStatus))
-      ) {
-        overallStatus = participant.status;
-      }
-
       // Use latest preferences
       if (participant.preferences) {
         globalPreferences = {
@@ -241,7 +227,6 @@ export class UserDataService {
         groupId,
         groupName: groupState.metadata.name,
         managers: groupState.managers,
-        participantStatus: participant.status,
         joinedAt: participant.joinedAt,
       });
 
@@ -291,7 +276,6 @@ export class UserDataService {
 
     return {
       userId: participantAddress,
-      status: overallStatus,
       globalPreferences,
       allGroups,
       allCoins,
@@ -352,7 +336,6 @@ export class UserDataService {
 
     return {
       userId: aggregatedData.userId,
-      status: aggregatedData.status,
       coins: userCoins,
       groups: userGroups,
       preferences: aggregatedData.globalPreferences,

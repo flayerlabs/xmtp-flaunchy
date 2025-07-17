@@ -109,30 +109,6 @@ export class ThreadManager {
       }
     }
 
-    // Use improved LLM to check if user is still engaging with the bot
-    const messageText = message.content as string;
-    const engagementResult =
-      await this.engagementDetector.checkConversationEngagement(
-        messageText,
-        conversationId,
-        senderInboxId,
-        "active_thread",
-        message,
-        client
-      );
-
-    if (!engagementResult.isEngaged) {
-      // Remove this user from the thread - they've moved on
-      thread.participatingUsers.delete(senderInboxId);
-      console.log("👋 USER DISENGAGED - removing from thread", {
-        conversationId: conversationId.slice(0, 8) + "...",
-        userId: senderInboxId.slice(0, 8) + "...",
-        messageText: messageText?.substring(0, 50) + "...",
-        reason: engagementResult.reason,
-      });
-      return false;
-    }
-
     // Also check if this message is a direct response to recent agent activity
     const isRecentResponse = await this.isRecentResponseToAgent(
       message,

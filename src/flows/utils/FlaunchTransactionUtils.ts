@@ -7,8 +7,8 @@ import {
   http,
 } from "viem";
 import { numToHex } from "../../../utils/hex";
-import { FlaunchZapAbi } from "../../../abi/FlaunchZap";
-import { FlaunchPositionManagerAbi } from "../../../abi/FlaunchPositionManager";
+import { FlaunchZapAbi } from "../../data/abi/FlaunchZap";
+import { FlaunchPositionManagerAbi } from "../../data/abi/FlaunchPositionManager";
 import {
   FlaunchZapAddress,
   FlaunchPositionManagerAddress,

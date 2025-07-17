@@ -6,7 +6,6 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx --watch src/main.ts",
-    "dev:old": "tsx --watch index.ts",
     "cleanup": "tsx ./scripts/cleanup.ts",
     "full-cleanup": "tsx ./scripts/full-cleanup.ts",
     "gen:keys": "tsx ./scripts/generateKeys.ts",
@@ -15,8 +14,7 @@
     "test:timing": "tsx ./scripts/test-timing.ts",
     "fetch:message-history": "tsx ./scripts/fetch-message-history.ts",
     "lint": "yarn eslint examples/xmtp-flaunch",
-    "start": "tsx src/main.ts",
-    "start:old": "tsx index.ts"
+    "start": "tsx src/main.ts"
   },
   "dependencies": {
     "@xmtp/content-type-reaction": "^2.0.2",

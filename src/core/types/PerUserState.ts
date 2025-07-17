@@ -4,18 +4,6 @@
  */
 export interface PerUserState {
   userAddress: string;
-  createdAt: Date;
-  updatedAt: Date;
-  status: "new" | "onboarding" | "active" | "invited" | "inactive";
-  preferences: {
-    defaultMarketCap: number;
-    defaultFairLaunchPercent: number;
-    defaultFairLaunchDuration: number;
-    notificationSettings: {
-      launchUpdates: boolean;
-      priceAlerts: boolean;
-    };
-  };
   coinsLaunchedHistory: UserCoinLaunch[];
   groupParticipations: UserGroupParticipation[];
 }
@@ -30,9 +18,7 @@ export interface UserCoinLaunch {
   launchedAt: Date;
   groupId: string;
   chainId: number;
-  chainName: "base" | "baseSepolia";
   txHash?: string;
-  initialMarketCap?: number;
 }
 
 /**
@@ -40,10 +26,7 @@ export interface UserCoinLaunch {
  */
 export interface UserGroupParticipation {
   groupId: string;
-  joinedAt: Date;
-  status: "active" | "invited" | "inactive" | "left";
   coinsLaunchedInGroup: number;
-  lastActiveAt?: Date;
 }
 
 /**

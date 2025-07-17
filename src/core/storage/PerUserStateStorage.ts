@@ -51,7 +51,6 @@ export class MemoryPerUserStateStorage implements PerUserStateStorage {
   async setUserState(userAddress: string, state: PerUserState): Promise<void> {
     this.storage.set(userAddress, {
       ...state,
-      updatedAt: new Date(),
     });
   }
 
@@ -141,8 +140,6 @@ export class FilePerUserStateStorage implements PerUserStateStorage {
       for (const [userAddress, userState] of Object.entries(parsed)) {
         const convertedState: PerUserState = {
           ...userState,
-          createdAt: new Date(userState.createdAt),
-          updatedAt: new Date(userState.updatedAt),
 
           // Convert coin launch dates
           coinsLaunchedHistory: userState.coinsLaunchedHistory.map((coin) => ({
@@ -151,13 +148,7 @@ export class FilePerUserStateStorage implements PerUserStateStorage {
           })),
 
           // Convert group participation dates
-          groupParticipations: userState.groupParticipations.map((group) => ({
-            ...group,
-            joinedAt: new Date(group.joinedAt),
-            lastActiveAt: group.lastActiveAt
-              ? new Date(group.lastActiveAt)
-              : undefined,
-          })),
+          groupParticipations: userState.groupParticipations,
         };
 
         states.set(userAddress, convertedState);
@@ -194,10 +185,7 @@ export class FilePerUserStateStorage implements PerUserStateStorage {
 
   async setUserState(userAddress: string, state: PerUserState): Promise<void> {
     const states = await this.loadData();
-    states.set(userAddress, {
-      ...state,
-      updatedAt: new Date(),
-    });
+    states.set(userAddress, state);
     await this.saveData(states);
   }
 

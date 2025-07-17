@@ -30,6 +30,18 @@ export interface ClientCreateOptions {
 export class InstallationManager {
   private static readonly MAX_INSTALLATIONS = 5;
   private static readonly DEFAULT_RETRY_ATTEMPTS = 3;
+  private static readonly FIRST_ATTEMPT_TIMEOUT = 30_000;
+  private static readonly RETRY_TIMEOUT = 60_000;
+  private static readonly BASE_RETRY_DELAY = 2_000;
+
+  private static readonly CODECS = [
+    new WalletSendCallsCodec(),
+    new RemoteAttachmentCodec(),
+    new AttachmentCodec(),
+    new TransactionReferenceCodec(),
+    new ReplyCodec(),
+    new ReactionCodec(),
+  ];
 
   /**
    * Creates an XMTP client with proper installation limit error handling
@@ -37,6 +49,32 @@ export class InstallationManager {
   static async createClient(
     signer: Signer,
     options: ClientCreateOptions
+  ): Promise<Client<any>> {
+    return this.createClientInternal(signer, options, "Creating");
+  }
+
+  /**
+   * Builds a client from an existing installation instead of creating a new one
+   * Use this when you know an installation already exists and want to avoid the 5-installation limit
+   */
+  static async buildExistingClient(
+    signer: Signer,
+    options: Omit<ClientCreateOptions, "onInstallationLimitExceeded">
+  ): Promise<Client<any>> {
+    return this.createClientInternal(
+      signer,
+      { ...options, onInstallationLimitExceeded: undefined },
+      "Building"
+    );
+  }
+
+  /**
+   * Internal method that handles client creation with retry logic
+   */
+  private static async createClientInternal(
+    signer: Signer,
+    options: ClientCreateOptions,
+    actionVerb: string
   ): Promise<Client<any>> {
     const {
       env,
@@ -46,125 +84,142 @@ export class InstallationManager {
       onInstallationLimitExceeded,
     } = options;
 
-    const codecs = [
-      new WalletSendCallsCodec(),
-      new RemoteAttachmentCodec(),
-      new AttachmentCodec(),
-      new TransactionReferenceCodec(),
-      new ReplyCodec(),
-      new ReactionCodec(),
-    ];
-
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= retryAttempts; attempt++) {
       try {
         console.log(
-          `📦 Creating XMTP client (attempt ${attempt}/${retryAttempts})...`
+          `📦 ${actionVerb} XMTP client (attempt ${attempt}/${retryAttempts})...`
         );
 
-        // Add timeout wrapper for client creation to prevent hanging
-        const clientCreationPromise = Client.create(signer, {
-          env,
-          codecs,
-          dbPath,
-          dbEncryptionKey,
-        });
-
-        // Race against timeout (30 seconds for first attempt, 60 seconds for retries)
-        const timeoutMs = attempt === 1 ? 30000 : 60000;
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(`XMTP client creation timeout after ${timeoutMs}ms`)
-              ),
-            timeoutMs
-          )
+        const client = await this.createClientWithTimeout(
+          signer,
+          {
+            env,
+            dbPath,
+            dbEncryptionKey,
+          },
+          attempt
         );
 
-        const client = (await Promise.race([
-          clientCreationPromise,
-          timeoutPromise,
-        ])) as Client<any>;
-
-        console.log("✅ XMTP client created successfully!");
-
-        // Validate client connection immediately
-        try {
-          console.log("🔍 Validating client connection...");
-          const validationStart = Date.now();
-          await client.conversations.list({ limit: 1 });
-          const validationDuration = Date.now() - validationStart;
-          console.log(
-            `✅ Client connection validated in ${validationDuration}ms`
-          );
-        } catch (validationError) {
-          console.warn(
-            "⚠️ Client connection validation failed, but proceeding:",
-            validationError
-          );
-        }
-
+        console.log(`✅ XMTP client ${actionVerb.toLowerCase()} successfully!`);
+        await this.validateClientConnection(client);
         return client;
       } catch (error: any) {
         lastError = error;
-        console.error(`❌ Client creation attempt ${attempt} failed:`, error);
+        console.error(
+          `❌ Client ${actionVerb.toLowerCase()} attempt ${attempt} failed:`,
+          error
+        );
 
-        // Check if this is an installation limit error
         const installationError = this.parseInstallationError(error);
-
         if (installationError.type === "INSTALLATION_LIMIT_EXCEEDED") {
-          console.warn(
-            `🚫 Installation limit exceeded (${this.MAX_INSTALLATIONS} max)`
+          await this.handleInstallationLimitError(
+            installationError,
+            onInstallationLimitExceeded
           );
-
-          // If user provided a callback, let them handle it
-          if (onInstallationLimitExceeded) {
-            const shouldRetry = await onInstallationLimitExceeded(
-              installationError
-            );
-            if (!shouldRetry) {
-              throw new Error(
-                `Installation limit exceeded: ${installationError.message}\n\n` +
-                  `Suggested actions:\n${
-                    installationError.suggestedActions?.join("\n") ||
-                    "No suggestions available"
-                  }`
-              );
-            }
-          } else {
-            // Default handling - throw descriptive error
-            throw new Error(
-              this.formatInstallationLimitError(installationError)
-            );
-          }
         }
 
-        // For other errors, wait before retrying (if not last attempt)
         if (attempt < retryAttempts) {
-          const waitTime = attempt * 2000; // Exponential backoff: 2s, 4s, 6s
-          console.log(`⏳ Waiting ${waitTime}ms before retry...`);
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
+          await this.waitBeforeRetry(attempt);
         }
       }
     }
 
-    // All attempts failed
     throw new Error(
-      `Failed to create XMTP client after ${retryAttempts} attempts. ` +
+      `Failed to ${actionVerb.toLowerCase()} XMTP client after ${retryAttempts} attempts. ` +
         `Last error: ${lastError?.message || "Unknown error"}`
     );
+  }
+
+  /**
+   * Creates client with timeout protection
+   */
+  private static async createClientWithTimeout(
+    signer: Signer,
+    config: { env: XmtpEnv; dbPath: string; dbEncryptionKey: Uint8Array },
+    attempt: number
+  ): Promise<Client<any>> {
+    const clientCreationPromise = Client.create(signer, {
+      ...config,
+      codecs: this.CODECS,
+    });
+
+    const timeoutMs =
+      attempt === 1 ? this.FIRST_ATTEMPT_TIMEOUT : this.RETRY_TIMEOUT;
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(`XMTP client creation timeout after ${timeoutMs}ms`)
+          ),
+        timeoutMs
+      )
+    );
+
+    return Promise.race([clientCreationPromise, timeoutPromise]) as Promise<
+      Client<any>
+    >;
+  }
+
+  /**
+   * Validates client connection
+   */
+  private static async validateClientConnection(
+    client: Client<any>
+  ): Promise<void> {
+    try {
+      console.log("🔍 Validating client connection...");
+      const validationStart = Date.now();
+      await client.conversations.list({ limit: 1 });
+      const validationDuration = Date.now() - validationStart;
+      console.log(`✅ Client connection validated in ${validationDuration}ms`);
+    } catch (validationError) {
+      console.warn(
+        "⚠️ Client connection validation failed, but proceeding:",
+        validationError
+      );
+    }
+  }
+
+  /**
+   * Handles installation limit exceeded errors
+   */
+  private static async handleInstallationLimitError(
+    installationError: InstallationError,
+    onInstallationLimitExceeded?: (error: InstallationError) => Promise<boolean>
+  ): Promise<void> {
+    console.warn(
+      `🚫 Installation limit exceeded (${this.MAX_INSTALLATIONS} max)`
+    );
+
+    if (onInstallationLimitExceeded) {
+      const shouldRetry = await onInstallationLimitExceeded(installationError);
+      if (!shouldRetry) {
+        throw new Error(this.formatInstallationLimitError(installationError));
+      }
+    } else {
+      throw new Error(this.formatInstallationLimitError(installationError));
+    }
+  }
+
+  /**
+   * Waits before retrying with exponential backoff
+   */
+  private static async waitBeforeRetry(attempt: number): Promise<void> {
+    const waitTime = attempt * this.BASE_RETRY_DELAY;
+    console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
   }
 
   /**
    * Checks if an error is related to installation limits
    */
   private static parseInstallationError(error: any): InstallationError {
-    const errorMessage = error?.message?.toLowerCase() || "";
-    const errorString = error?.toString?.()?.toLowerCase() || "";
+    const errorText = `${error?.message || ""} ${
+      error?.toString?.() || ""
+    }`.toLowerCase();
 
-    // Common patterns for installation limit errors
     const limitPatterns = [
       "installation limit",
       "max installations",
@@ -176,16 +231,15 @@ export class InstallationManager {
       "installation capacity",
     ];
 
-    const isInstallationLimit = limitPatterns.some(
-      (pattern) =>
-        errorMessage.includes(pattern) || errorString.includes(pattern)
+    const isInstallationLimit = limitPatterns.some((pattern) =>
+      errorText.includes(pattern)
     );
 
     if (isInstallationLimit) {
       return {
         type: "INSTALLATION_LIMIT_EXCEEDED",
         message: error?.message || "Installation limit exceeded",
-        maxInstallations: InstallationManager.MAX_INSTALLATIONS,
+        maxInstallations: this.MAX_INSTALLATIONS,
         suggestedActions: [
           "• Remove unused installations from other devices/apps",
           "• Use the same database and encryption key across deployments",
@@ -207,12 +261,12 @@ export class InstallationManager {
   private static formatInstallationLimitError(
     error: InstallationError
   ): string {
+    const maxInstallations = error.maxInstallations || this.MAX_INSTALLATIONS;
+
     return [
       `🚫 XMTP Installation Limit Exceeded`,
       ``,
-      `XMTP enforces a limit of ${
-        error.maxInstallations || InstallationManager.MAX_INSTALLATIONS
-      } active installations per inbox.`,
+      `XMTP enforces a limit of ${maxInstallations} active installations per inbox.`,
       ``,
       `What this means:`,
       `• Each time your app creates a new XMTP client, it counts as an installation`,
@@ -268,118 +322,5 @@ export class InstallationManager {
       console.warn("Failed to revoke installations:", error);
       return false;
     }
-  }
-
-  /**
-   * Builds a client from an existing installation instead of creating a new one
-   * Use this when you know an installation already exists and want to avoid the 5-installation limit
-   */
-  static async buildExistingClient(
-    signer: Signer,
-    options: Omit<ClientCreateOptions, "onInstallationLimitExceeded">
-  ): Promise<Client<any>> {
-    const {
-      env,
-      dbPath,
-      dbEncryptionKey,
-      retryAttempts = this.DEFAULT_RETRY_ATTEMPTS,
-    } = options;
-
-    const codecs = [
-      new WalletSendCallsCodec(),
-      new RemoteAttachmentCodec(),
-      new AttachmentCodec(),
-      new TransactionReferenceCodec(),
-      new ReplyCodec(),
-      new ReactionCodec(),
-    ];
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= retryAttempts; attempt++) {
-      try {
-        console.log(
-          `📦 Building XMTP client from existing installation (attempt ${attempt}/${retryAttempts})...`
-        );
-
-        // Add timeout wrapper for client creation to prevent hanging
-        const clientCreationPromise = Client.create(signer, {
-          env,
-          codecs,
-          dbPath,
-          dbEncryptionKey,
-        });
-
-        // Race against timeout (30 seconds for first attempt, 60 seconds for retries)
-        const timeoutMs = attempt === 1 ? 30000 : 60000;
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(`XMTP client creation timeout after ${timeoutMs}ms`)
-              ),
-            timeoutMs
-          )
-        );
-
-        const client = (await Promise.race([
-          clientCreationPromise,
-          timeoutPromise,
-        ])) as Client<any>;
-
-        console.log(
-          "✅ XMTP client created successfully (reused existing installation)!"
-        );
-
-        // Validate client connection immediately
-        try {
-          console.log("🔍 Validating client connection...");
-          const validationStart = Date.now();
-          await client.conversations.list({ limit: 1 });
-          const validationDuration = Date.now() - validationStart;
-          console.log(
-            `✅ Client connection validated in ${validationDuration}ms`
-          );
-        } catch (validationError) {
-          console.warn(
-            "⚠️ Client connection validation failed, but proceeding:",
-            validationError
-          );
-        }
-
-        return client;
-      } catch (error: any) {
-        lastError = error;
-        console.error(`❌ Client build attempt ${attempt} failed:`, error);
-
-        // Check if this is an installation limit error
-        const installationError = this.parseInstallationError(error);
-
-        if (installationError.type === "INSTALLATION_LIMIT_EXCEEDED") {
-          console.error(
-            `🚫 Installation limit exceeded (${this.MAX_INSTALLATIONS} max)`
-          );
-          console.error(
-            "💡 Consider cleaning up old installations or using a different approach"
-          );
-
-          // Throw with helpful message
-          throw new Error(this.formatInstallationLimitError(installationError));
-        }
-
-        // For other errors, wait before retrying (if not last attempt)
-        if (attempt < retryAttempts) {
-          const waitTime = attempt * 2000; // Exponential backoff: 2s, 4s, 6s
-          console.log(`⏳ Waiting ${waitTime}ms before retry...`);
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-        }
-      }
-    }
-
-    // All attempts failed
-    throw new Error(
-      `Failed to build XMTP client after ${retryAttempts} attempts. ` +
-        `Last error: ${lastError?.message || "Unknown error"}`
-    );
   }
 }

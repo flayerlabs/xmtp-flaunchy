@@ -2,12 +2,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { createSigner, getEncryptionKeyFromHex } from "../helpers/client";
 import { logAgentDetails, validateEnvironment } from "../helpers/utils";
-import { WalletSendCallsCodec } from "@xmtp/content-type-wallet-send-calls";
 import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
 import { flaunchy } from "../characters/flaunchy";
 
-// New group-centric architecture imports
 import { SessionManager } from "./core/session/SessionManager";
 import { FlowRouter, FlowRegistry } from "./core/flows/FlowRouter";
 import { FileGroupStateStorage } from "./core/storage/GroupStateStorage";
@@ -27,7 +25,7 @@ let volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH ?? ".data/xmtp";
 
 // Stream failure handling configuration
 const MAX_STREAM_RETRIES = 5;
-const STREAM_RETRY_INTERVAL = 5000; // 5 seconds
+const STREAM_RETRY_INTERVAL = 5_000; // 5 seconds
 let streamRetries = MAX_STREAM_RETRIES;
 let isStreamActive = true;
 
@@ -102,7 +100,7 @@ async function handleMessageStream(
 
     // Allow stream to fully initialize
     console.log("⏳ Allowing stream to fully initialize...");
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
     console.log("✅ Stream initialization complete, ready for messages");
 
     // Reset retry count on successful stream start
@@ -174,7 +172,7 @@ async function createApplication() {
   if (isRailway) {
     console.log("🚄 Railway environment detected");
     console.log("⏳ Allowing Railway container network to stabilize...");
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay for Railway
+    await new Promise((resolve) => setTimeout(resolve, 2_000)); // 2 second delay for Railway
     console.log("✅ Railway network stabilization complete");
   }
 
@@ -274,7 +272,7 @@ async function createApplication() {
   };
 
   // 5. Create flow router
-  const flowRouter = new FlowRouter(flows, openai);
+  const flowRouter = new FlowRouter(flows);
 
   // 6. Create enhanced message coordinator
   const messageCoordinator = new EnhancedMessageCoordinator(
@@ -319,7 +317,7 @@ async function createApplication() {
       streamRetries = 0; // Prevent retries during cleanup
 
       // Wait a bit for the stream to stop gracefully
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
 
       console.log("✅ Application cleanup completed");
     } catch (error) {

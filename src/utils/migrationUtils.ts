@@ -160,8 +160,6 @@ export class MigrationUtils {
           if (!groupStates[chatRoomId]) {
             groupStates[chatRoomId] = {
               groupId: chatRoomId,
-              createdAt: userState.createdAt,
-              updatedAt: userState.updatedAt,
               metadata: {},
               participants: {},
               managers: [],
@@ -189,8 +187,6 @@ export class MigrationUtils {
         if (!groupStates[groupChatId]) {
           groupStates[groupChatId] = {
             groupId: groupChatId,
-            createdAt: userGroup.createdAt,
-            updatedAt: userGroup.updatedAt,
             metadata: {
               name: userGroup.name,
             },
@@ -212,7 +208,6 @@ export class MigrationUtils {
             txHash: "", // We don't have this from UserGroup
             deployedBy: userGroup.createdBy,
             chainId: userGroup.chainId,
-            chainName: userGroup.chainName,
             receivers: userGroup.receivers,
             liveData: userGroup.liveData,
           };
@@ -250,8 +245,6 @@ export class MigrationUtils {
           if (userState.groupStates?.[groupChatId]) {
             const groupState = userState.groupStates[groupChatId];
             participant.coinLaunchProgress = groupState.coinLaunchProgress;
-            participant.onboardingProgress = groupState.onboardingProgress;
-            participant.managementProgress = groupState.managementProgress;
             participant.pendingTransaction = groupState.pendingTransaction;
           }
 
@@ -283,8 +276,6 @@ export class MigrationUtils {
             if (userState.groupStates?.[chatRoomId]) {
               const groupState = userState.groupStates[chatRoomId];
               participant.coinLaunchProgress = groupState.coinLaunchProgress;
-              participant.onboardingProgress = groupState.onboardingProgress;
-              participant.managementProgress = groupState.managementProgress;
               participant.pendingTransaction = groupState.pendingTransaction;
             }
 
@@ -317,7 +308,6 @@ export class MigrationUtils {
               launchedAt: userCoin.createdAt,
               launchedBy: userAddress, // Assume this user launched it
               chainId: userCoin.chainId,
-              chainName: userCoin.chainName,
               fairLaunchDuration: userCoin.fairLaunchDuration,
               fairLaunchPercent: userCoin.fairLaunchPercent,
               initialMarketCap: userCoin.initialMarketCap,

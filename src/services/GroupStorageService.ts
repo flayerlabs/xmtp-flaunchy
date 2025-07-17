@@ -28,7 +28,6 @@ export class GroupStorageService {
     contractAddress: string,
     receivers: FeeReceiver[],
     chainId: number,
-    chainName: "base" | "baseSepolia",
     txHash: string
   ): Promise<string> {
     const groupStateManager = this.sessionManager.getGroupStateManager();
@@ -43,7 +42,6 @@ export class GroupStorageService {
       txHash,
       deployedBy: creatorAddress,
       chainId,
-      chainName,
       receivers: receivers.map((r) => ({
         username: r.username,
         resolvedAddress: r.resolvedAddress!,
@@ -142,7 +140,6 @@ export class GroupStorageService {
     contractAddress: string,
     receivers: FeeReceiver[],
     chainId: number,
-    chainName: "base" | "baseSepolia",
     txHash: string
   ): Promise<string> {
     console.log("[GroupStorageService] Using group-centric architecture");
@@ -152,7 +149,6 @@ export class GroupStorageService {
       contractAddress,
       receivers,
       chainId,
-      chainName,
       txHash
     );
   }
@@ -178,7 +174,6 @@ export class GroupStorageService {
       launchedAt: coin.createdAt,
       launchedBy: creatorAddress,
       chainId: coin.chainId,
-      chainName: coin.chainName,
       fairLaunchDuration: coin.fairLaunchDuration,
       fairLaunchPercent: coin.fairLaunchPercent,
       initialMarketCap: coin.initialMarketCap,

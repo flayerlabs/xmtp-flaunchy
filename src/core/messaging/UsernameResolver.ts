@@ -1,4 +1,4 @@
-import { createPublicClient, http, isAddress } from "viem";
+import { Address, createPublicClient, http, isAddress } from "viem";
 import { mainnet } from "viem/chains";
 
 /**
@@ -141,7 +141,7 @@ export class UsernameResolver {
   async getCreatorAddressFromInboxId(
     inboxId: string,
     client: any
-  ): Promise<string | undefined> {
+  ): Promise<Address | undefined> {
     try {
       // Use the same pattern as in processCoordinatedMessages
       const inboxState = await client.preferences.inboxStateFromInboxIds([

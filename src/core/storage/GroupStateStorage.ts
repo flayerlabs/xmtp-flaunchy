@@ -62,7 +62,6 @@ export class MemoryGroupStateStorage implements GroupStateStorage {
   async setGroupState(groupId: string, state: GroupChatState): Promise<void> {
     this.storage.set(groupId, {
       ...state,
-      updatedAt: new Date(),
     });
   }
 
@@ -93,8 +92,6 @@ export class MemoryGroupStateStorage implements GroupStateStorage {
       // Create new group state if it doesn't exist
       groupState = {
         groupId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
         metadata: {},
         participants: {},
         managers: [],
@@ -102,10 +99,7 @@ export class MemoryGroupStateStorage implements GroupStateStorage {
       };
     }
 
-    groupState.participants[participantAddress] = {
-      ...participant,
-      lastActiveAt: new Date(),
-    };
+    groupState.participants[participantAddress] = participant;
 
     await this.setGroupState(groupId, groupState);
   }
@@ -200,8 +194,6 @@ export class FileGroupStateStorage implements GroupStateStorage {
       for (const [groupId, groupState] of Object.entries(parsed)) {
         const convertedState: GroupChatState = {
           ...groupState,
-          createdAt: new Date(groupState.createdAt),
-          updatedAt: new Date(groupState.updatedAt),
 
           // Convert participant dates
           participants: Object.fromEntries(
@@ -210,30 +202,6 @@ export class FileGroupStateStorage implements GroupStateStorage {
                 address,
                 {
                   ...participant,
-                  joinedAt: new Date(participant.joinedAt),
-                  lastActiveAt: new Date(participant.lastActiveAt),
-
-                  // Convert progress state dates
-                  onboardingProgress: participant.onboardingProgress
-                    ? {
-                        ...participant.onboardingProgress,
-                        startedAt: new Date(
-                          participant.onboardingProgress.startedAt
-                        ),
-                        completedAt: participant.onboardingProgress.completedAt
-                          ? new Date(participant.onboardingProgress.completedAt)
-                          : undefined,
-                      }
-                    : undefined,
-
-                  managementProgress: participant.managementProgress
-                    ? {
-                        ...participant.managementProgress,
-                        startedAt: new Date(
-                          participant.managementProgress.startedAt
-                        ),
-                      }
-                    : undefined,
 
                   coinLaunchProgress: participant.coinLaunchProgress
                     ? {
@@ -318,7 +286,6 @@ export class FileGroupStateStorage implements GroupStateStorage {
     const states = await this.loadData();
     states.set(groupId, {
       ...state,
-      updatedAt: new Date(),
     });
     await this.saveData(states);
   }
@@ -353,8 +320,6 @@ export class FileGroupStateStorage implements GroupStateStorage {
       // Create new group state if it doesn't exist
       groupState = {
         groupId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
         metadata: {},
         participants: {},
         managers: [],
@@ -362,10 +327,7 @@ export class FileGroupStateStorage implements GroupStateStorage {
       };
     }
 
-    groupState.participants[participantAddress] = {
-      ...participant,
-      lastActiveAt: new Date(),
-    };
+    groupState.participants[participantAddress] = participant;
 
     await this.setGroupState(groupId, groupState);
   }

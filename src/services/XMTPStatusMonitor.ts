@@ -312,7 +312,7 @@ export class XMTPStatusMonitor {
       await this.cleanup();
 
       // Wait a moment to ensure cleanup is complete
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
 
       // Restart the application with monitoring
       console.log("🚀 Restarting application...");
@@ -328,7 +328,7 @@ export class XMTPStatusMonitor {
       console.log("⏳ Retrying restart in 10 seconds...");
       setTimeout(async () => {
         await this.handleRestart();
-      }, 10000);
+      }, 10_000);
     }
   }
 
@@ -434,7 +434,7 @@ export class XMTPStatusMonitor {
         // Execute restart with a slight delay to ensure logs are written
         setTimeout(async () => {
           await this.handleRestart();
-        }, 1000);
+        }, 1_000);
       }
     } catch (error) {
       console.error("❌ Error during status check:", error);

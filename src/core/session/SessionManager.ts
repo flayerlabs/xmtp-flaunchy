@@ -2,6 +2,8 @@ import {
   GroupChatState,
   GroupParticipant,
   AggregatedUserData,
+  GroupManager,
+  GroupCoin,
 } from "../types/GroupState";
 import {
   GroupStateStorage,
@@ -17,6 +19,7 @@ import {
   PerUserStateStorage,
   FilePerUserStateStorage,
 } from "../storage/PerUserStateStorage";
+import { Address } from "viem";
 
 export class SessionManager {
   private groupStateManager: GroupStateManager;
@@ -60,7 +63,7 @@ export class SessionManager {
    */
   async updateParticipantState(
     groupId: string,
-    participantAddress: string,
+    participantAddress: Address,
     updates: Partial<Omit<GroupParticipant, "address" | "joinedAt">>
   ): Promise<GroupParticipant | null> {
     return await this.groupStateManager.updateParticipantState(
@@ -75,7 +78,7 @@ export class SessionManager {
    */
   async clearParticipantProgress(
     groupId: string,
-    participantAddress: string
+    participantAddress: Address
   ): Promise<void> {
     await this.groupStateManager.clearParticipantProgress(
       groupId,
@@ -88,14 +91,9 @@ export class SessionManager {
    */
   async addParticipantToGroup(
     groupId: string,
-    participantAddress: string,
-    status: GroupParticipant["status"] = "active"
+    participantAddress: Address
   ): Promise<void> {
-    await this.groupStateManager.addParticipant(
-      groupId,
-      participantAddress,
-      status
-    );
+    await this.groupStateManager.addParticipant(groupId, participantAddress);
   }
 
   /**
@@ -139,7 +137,7 @@ export class SessionManager {
    */
   async initializeGroup(
     groupId: string,
-    participantAddress: string,
+    participantAddress: Address,
     metadata: { name?: string; description?: string } = {}
   ): Promise<GroupChatState> {
     return await this.groupStateManager.initializeGroup(
@@ -161,7 +159,6 @@ export class SessionManager {
       await this.groupStateManager.setGroupState(groupId, {
         ...currentState,
         ...updates,
-        updatedAt: new Date(),
       });
     }
   }
@@ -171,7 +168,7 @@ export class SessionManager {
    */
   async addManagerToGroup(
     groupId: string,
-    manager: GroupChatState["managers"][0]
+    manager: GroupManager
   ): Promise<void> {
     await this.groupStateManager.addManager(groupId, manager);
   }
@@ -179,10 +176,7 @@ export class SessionManager {
   /**
    * Add coin to group
    */
-  async addCoinToGroup(
-    groupId: string,
-    coin: GroupChatState["coins"][0]
-  ): Promise<void> {
+  async addCoinToGroup(groupId: string, coin: GroupCoin): Promise<void> {
     await this.groupStateManager.addCoin(groupId, coin);
   }
 
@@ -198,26 +192,10 @@ export class SessionManager {
   // ================================
 
   /**
-   * Check if user is new (backwards compatibility)
-   */
-  async isNewUser(userId: string): Promise<boolean> {
-    const aggregatedData = await this.getAggregatedUserData(userId);
-    return aggregatedData.status === "new";
-  }
-
-  /**
    * Check if user exists (backwards compatibility)
    */
   async userExists(userId: string): Promise<boolean> {
     return await this.participantExistsInAnyGroup(userId);
-  }
-
-  /**
-   * Check if user is onboarding (backwards compatibility)
-   */
-  async isOnboarding(userId: string): Promise<boolean> {
-    const aggregatedData = await this.getAggregatedUserData(userId);
-    return aggregatedData.status === "onboarding";
   }
 
   // ================================
@@ -244,18 +222,6 @@ export class SessionManager {
       // Create new per-user state
       userState = {
         userAddress,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        status: "new",
-        preferences: {
-          defaultMarketCap: 1000,
-          defaultFairLaunchPercent: 10,
-          defaultFairLaunchDuration: 30 * 60,
-          notificationSettings: {
-            launchUpdates: true,
-            priceAlerts: true,
-          },
-        },
         coinsLaunchedHistory: [],
         groupParticipations: [],
       };
@@ -288,10 +254,7 @@ export class SessionManager {
     if (!existingParticipation) {
       const participation: UserGroupParticipation = {
         groupId,
-        joinedAt: new Date(),
-        status: "active",
         coinsLaunchedInGroup: 0,
-        lastActiveAt: new Date(),
       };
 
       await this.perUserStateStorage.addGroupParticipation(
@@ -312,7 +275,6 @@ export class SessionManager {
       name: string;
       groupId: string;
       chainId: number;
-      chainName: "base" | "baseSepolia";
       txHash?: string;
       initialMarketCap?: number;
     }
@@ -341,7 +303,6 @@ export class SessionManager {
           coinData.groupId,
           {
             coinsLaunchedInGroup: participation.coinsLaunchedInGroup + 1,
-            lastActiveAt: new Date(),
           }
         );
       }
@@ -351,13 +312,8 @@ export class SessionManager {
   /**
    * Update per-user state status
    */
-  async updatePerUserStatus(
-    userAddress: string,
-    status: PerUserState["status"]
-  ): Promise<void> {
+  async updatePerUserStatus(userAddress: string): Promise<void> {
     const userState = await this.ensureUserExists(userAddress);
-    userState.status = status;
-    userState.updatedAt = new Date();
     await this.perUserStateStorage.setUserState(userAddress, userState);
   }
 

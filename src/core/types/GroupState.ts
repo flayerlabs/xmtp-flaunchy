@@ -1,10 +1,4 @@
-import {
-  UserPreferences,
-  OnboardingProgress,
-  ManagementProgress,
-  CoinLaunchProgress,
-  PendingTransaction,
-} from "./UserState";
+import { Address, Hex } from "viem";
 
 /**
  * Main group state interface - represents a group chat and all its data
@@ -12,8 +6,6 @@ import {
  */
 export interface GroupChatState {
   groupId: string; // The group chat ID (conversation.id)
-  createdAt: Date;
-  updatedAt: Date;
   metadata: {
     name?: string;
     description?: string;
@@ -28,16 +20,10 @@ export interface GroupChatState {
  * Tracks per-user progress and preferences within the group context
  */
 export interface GroupParticipant {
-  address: string;
-  joinedAt: Date;
-  lastActiveAt: Date;
-  status: "new" | "onboarding" | "active" | "invited" | "inactive";
-  preferences: UserPreferences;
+  address: Address;
 
   // Flow progress states - per user within this group
   coinLaunchProgress?: CoinLaunchProgress;
-  onboardingProgress?: OnboardingProgress;
-  managementProgress?: ManagementProgress;
   pendingTransaction?: PendingTransaction;
 }
 
@@ -46,21 +32,20 @@ export interface GroupParticipant {
  * A group can have multiple managers over time
  */
 export interface GroupManager {
-  contractAddress: string;
+  contractAddress: Address;
   deployedAt: Date;
-  txHash: string;
-  deployedBy: string; // user address who deployed this manager
+  txHash?: Hex;
+  deployedBy: Address; // user address who deployed this manager
   chainId: number;
-  chainName: "base" | "baseSepolia";
   receivers: Array<{
     username: string;
-    resolvedAddress: string;
+    resolvedAddress: Address;
     percentage: number;
   }>;
   // Live data from API
   liveData?: {
     recipients: Array<{
-      recipient: string;
+      recipient: Address;
       recipientShare: string;
     }>;
     totalFeesUSDC: string;
@@ -77,20 +62,14 @@ export interface GroupCoin {
   ticker: string;
   name: string;
   image: string;
-  contractAddress: string;
-  txHash: string;
+  contractAddress: Address;
+  txHash?: Hex;
   launchedAt: Date;
-  launchedBy: string; // user address who launched this coin
+  launchedBy: Address; // user address who launched this coin
   chainId: number;
-  chainName: "base" | "baseSepolia";
-
-  // Launch parameters
-  fairLaunchDuration: number;
-  fairLaunchPercent: number;
-  initialMarketCap: number;
 
   // Associated manager that receives fees for this coin
-  managerAddress: string;
+  managerAddress: Address;
 
   // Live data from API
   liveData?: {
@@ -113,13 +92,13 @@ export type GroupStatesStorage = Record<string, GroupChatState>;
  */
 export interface GroupStateUpdate {
   groupId: string;
-  updates: Partial<Omit<GroupChatState, "groupId" | "createdAt">>;
+  updates: Partial<Omit<GroupChatState, "groupId">>;
 }
 
 export interface ParticipantStateUpdate {
   groupId: string;
-  participantAddress: string;
-  updates: Partial<Omit<GroupParticipant, "address" | "joinedAt">>;
+  participantAddress: Address;
+  updates: Partial<Omit<GroupParticipant, "address">>;
 }
 
 /**
@@ -128,16 +107,12 @@ export interface ParticipantStateUpdate {
  */
 export interface AggregatedUserData {
   userId: string;
-  status: "new" | "onboarding" | "active" | "invited";
-  globalPreferences: UserPreferences;
 
   // Aggregated from all groups this user participates in
   allGroups: Array<{
     groupId: string;
     groupName?: string;
     managers: GroupManager[];
-    participantStatus: GroupParticipant["status"];
-    joinedAt: Date;
   }>;
 
   allCoins: Array<{
@@ -149,11 +124,44 @@ export interface AggregatedUserData {
   // Current active states across all groups
   activeProgressStates: Array<{
     groupId: string;
-    type: "coinLaunch" | "onboarding" | "management" | "pendingTransaction";
-    state:
-      | CoinLaunchProgress
-      | OnboardingProgress
-      | ManagementProgress
-      | PendingTransaction;
+    type: "coinLaunch" | "pendingTransaction";
+    state: CoinLaunchProgress | PendingTransaction;
   }>;
+}
+
+export interface CoinLaunchProgress {
+  step: "collecting_coin_data" | "selecting_group" | "creating_transaction";
+  coinData?: {
+    name?: string;
+    ticker?: string;
+    image?: string;
+  };
+  launchParameters?: {
+    startingMarketCap?: number;
+    fairLaunchDuration?: number;
+    premineAmount?: number;
+    buybackPercentage?: number;
+  };
+  targetGroupId?: string;
+  startedAt: Date;
+}
+
+export interface PendingTransaction {
+  type: "coin_creation";
+  txHash?: Hex;
+  coinData?: {
+    name: string;
+    ticker: string;
+    image: string;
+  };
+  launchParameters?: {
+    startingMarketCap?: number;
+    fairLaunchDuration?: number;
+    premineAmount?: number;
+    buybackPercentage?: number;
+    targetGroupId?: string;
+    isFirstLaunch?: boolean;
+  };
+  network: "base" | "baseSepolia";
+  timestamp: Date;
 }

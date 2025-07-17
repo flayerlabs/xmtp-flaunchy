@@ -6,7 +6,7 @@ import {
   createPublicClient,
   http,
 } from "viem";
-import { TreasuryManagerFactoryAbi } from "../../abi/TreasuryManagerFactory";
+import { TreasuryManagerFactoryAbi } from "../data/abi/TreasuryManagerFactory";
 import {
   TreasuryManagerFactoryAddress,
   AddressFeeSplitManagerAddress,

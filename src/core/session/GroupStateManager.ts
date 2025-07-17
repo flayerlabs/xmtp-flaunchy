@@ -9,6 +9,7 @@ import {
 } from "../types/GroupState";
 import { UserPreferences } from "../types/UserState";
 import { GroupStateStorage } from "../storage/GroupStateStorage";
+import { Address } from "viem";
 
 /**
  * GroupStateManager handles all group-centric state operations
@@ -64,16 +65,12 @@ export class GroupStateManager {
    */
   async initializeGroup(
     groupId: string,
-    participantAddress: string,
+    participantAddress: Address,
     metadata: { name?: string; description?: string } = {}
   ): Promise<GroupChatState> {
-    const now = new Date();
-
     // Create new group state
     const groupState: GroupChatState = {
       groupId,
-      createdAt: now,
-      updatedAt: now,
       metadata,
       participants: {},
       managers: [],
@@ -83,18 +80,6 @@ export class GroupStateManager {
     // Create initial participant
     const participant: GroupParticipant = {
       address: participantAddress,
-      joinedAt: now,
-      lastActiveAt: now,
-      status: "active",
-      preferences: {
-        defaultMarketCap: 1000,
-        defaultFairLaunchPercent: 10,
-        defaultFairLaunchDuration: 30 * 60, // 30 minutes
-        notificationSettings: {
-          launchUpdates: true,
-          priceAlerts: true,
-        },
-      },
     };
 
     groupState.participants[participantAddress] = participant;
@@ -112,7 +97,6 @@ export class GroupStateManager {
 
     // Get current state to avoid overwriting existing groups
     const currentStates = await this.groupStateStorage.getAllGroupStates();
-    const now = new Date();
 
     // Add only new groups that don't already exist
     let newGroupsAdded = 0;
@@ -120,8 +104,6 @@ export class GroupStateManager {
       if (!currentStates[groupId]) {
         currentStates[groupId] = {
           groupId,
-          createdAt: now,
-          updatedAt: now,
           metadata: {},
           participants: {},
           managers: [],
@@ -149,8 +131,7 @@ export class GroupStateManager {
    */
   async addParticipant(
     groupId: string,
-    participantAddress: string,
-    status: GroupParticipant["status"] = "active",
+    participantAddress: Address,
     preferences?: UserPreferences
   ): Promise<void> {
     let groupState = await this.getGroupState(groupId);
@@ -163,31 +144,14 @@ export class GroupStateManager {
 
     // Don't overwrite existing participant
     if (groupState.participants[participantAddress]) {
-      // Just update last active time
-      groupState.participants[participantAddress].lastActiveAt = new Date();
-      await this.setGroupState(groupId, groupState);
       return;
     }
 
-    const now = new Date();
     const participant: GroupParticipant = {
       address: participantAddress,
-      joinedAt: now,
-      lastActiveAt: now,
-      status,
-      preferences: preferences || {
-        defaultMarketCap: 1000,
-        defaultFairLaunchPercent: 10,
-        defaultFairLaunchDuration: 30 * 60,
-        notificationSettings: {
-          launchUpdates: true,
-          priceAlerts: true,
-        },
-      },
     };
 
     groupState.participants[participantAddress] = participant;
-    groupState.updatedAt = now;
 
     await this.setGroupState(groupId, groupState);
   }
@@ -197,8 +161,8 @@ export class GroupStateManager {
    */
   async updateParticipantState(
     groupId: string,
-    participantAddress: string,
-    updates: Partial<Omit<GroupParticipant, "address" | "joinedAt">>
+    participantAddress: Address,
+    updates: Partial<Omit<GroupParticipant, "address">>
   ): Promise<GroupParticipant | null> {
     const currentParticipant = await this.getParticipantState(
       groupId,
@@ -214,7 +178,6 @@ export class GroupStateManager {
     const updatedParticipant: GroupParticipant = {
       ...currentParticipant,
       ...updates,
-      lastActiveAt: new Date(),
     };
 
     await this.setParticipantState(
@@ -230,12 +193,10 @@ export class GroupStateManager {
    */
   async clearParticipantProgress(
     groupId: string,
-    participantAddress: string
+    participantAddress: Address
   ): Promise<void> {
     await this.updateParticipantState(groupId, participantAddress, {
       coinLaunchProgress: undefined,
-      onboardingProgress: undefined,
-      managementProgress: undefined,
       pendingTransaction: undefined,
     });
   }
@@ -279,8 +240,6 @@ export class GroupStateManager {
       participantAddress
     );
 
-    // Determine overall user status
-    let overallStatus: AggregatedUserData["status"] = "new";
     let globalPreferences: UserPreferences = {
       defaultMarketCap: 1000,
       defaultFairLaunchPercent: 10,
@@ -299,31 +258,11 @@ export class GroupStateManager {
       const participant = state.participants[participantAddress];
 
       if (participant) {
-        // Update overall status (priority: active > onboarding > invited > new)
-        if (
-          participant.status === "active" ||
-          (participant.status === "onboarding" && overallStatus !== "active") ||
-          (participant.status === "invited" &&
-            !["active", "onboarding"].includes(overallStatus))
-        ) {
-          overallStatus = participant.status;
-        }
-
-        // Use latest preferences
-        if (participant.preferences) {
-          globalPreferences = {
-            ...globalPreferences,
-            ...participant.preferences,
-          };
-        }
-
         // Add group info
         allGroups.push({
           groupId,
           groupName: state.metadata.name,
           managers: state.managers,
-          participantStatus: participant.status,
-          joinedAt: participant.joinedAt,
         });
 
         // Add coins from this group
@@ -343,20 +282,6 @@ export class GroupStateManager {
             state: participant.coinLaunchProgress,
           });
         }
-        if (participant.onboardingProgress) {
-          activeProgressStates.push({
-            groupId,
-            type: "onboarding",
-            state: participant.onboardingProgress,
-          });
-        }
-        if (participant.managementProgress) {
-          activeProgressStates.push({
-            groupId,
-            type: "management",
-            state: participant.managementProgress,
-          });
-        }
         if (participant.pendingTransaction) {
           activeProgressStates.push({
             groupId,
@@ -369,8 +294,6 @@ export class GroupStateManager {
 
     return {
       userId: participantAddress,
-      status: overallStatus,
-      globalPreferences,
       allGroups,
       allCoins,
       activeProgressStates,
@@ -410,7 +333,6 @@ export class GroupStateManager {
     const groupState = await this.getGroupState(groupId);
     if (groupState) {
       groupState.metadata = { ...groupState.metadata, ...metadata };
-      groupState.updatedAt = new Date();
       await this.setGroupState(groupId, groupState);
     }
   }
