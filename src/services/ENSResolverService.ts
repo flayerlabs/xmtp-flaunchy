@@ -117,7 +117,7 @@ export class ENSResolverService {
         const queryKey = `query_${address.replace(/[^a-zA-Z0-9]/g, "_")}`;
         const enses = result.data[queryKey];
 
-        if (enses && enses.length > 0) {
+        if (enses && enses.length > 0 && enses[0]) {
           const displayName = this.getPreferredDisplayName(enses[0]);
           resultMap.set(address.toLowerCase(), displayName);
         } else {
@@ -137,6 +137,11 @@ export class ENSResolverService {
   }
 
   private getPreferredDisplayName(ensData: ENSData): string {
+    // Defensive check for null/undefined ensData
+    if (!ensData) {
+      return "";
+    }
+
     // Priority: basename > farcaster name > ens name > address (ignore twitter)
     const links = ensData.links || [];
 

@@ -823,20 +823,49 @@ export class QAFlow extends BaseFlow {
       (!isCoinsQuery && aggregatedUserData.allGroups.length > 0)
     ) {
       // Handle groups query
-      if (aggregatedUserData.allGroups.length === 0) {
+      // Filter groups to only include those with managers
+      const groupsWithManagers = aggregatedUserData.allGroups.filter(
+        (group: any) => group.managers && group.managers.length > 0
+      );
+
+      if (groupsWithManagers.length === 0) {
         response =
           "you don't have any groups yet! when you launch coins, i'll automatically create groups for fee splitting.";
       } else {
-        response = `you have ${aggregatedUserData.allGroups.length} group${
-          aggregatedUserData.allGroups.length > 1 ? "s" : ""
+        response = `you have ${groupsWithManagers.length} group${
+          groupsWithManagers.length > 1 ? "s" : ""
         }:\n\n`;
 
         const currentChain = getDefaultChain();
 
-        for (const group of aggregatedUserData.allGroups) {
+        // Reorder groups to put current group first (if it exists)
+        let orderedGroups = [...groupsWithManagers];
+        const currentGroupIndex = groupsWithManagers.findIndex(
+          (group: any) => group.groupId === context.groupId
+        );
+
+        if (currentGroupIndex > 0) {
+          // Move current group to the front
+          const currentGroup = orderedGroups.splice(currentGroupIndex, 1)[0];
+          orderedGroups.unshift(currentGroup);
+        }
+
+        for (let i = 0; i < orderedGroups.length; i++) {
+          const group = orderedGroups[i];
           const groupDisplay = await this.formatGroupDisplay(group, context);
-          response += `${groupDisplay}\n`;
-          response += `  ${currentChain.viemChain.blockExplorers.default.url}/address/${group.groupId}\n`;
+          const isCurrent = group.groupId === context.groupId;
+
+          response += `${i + 1}. group chat: ${groupDisplay}${
+            isCurrent ? " (current)" : ""
+          } having managers:\n`;
+
+          // Show block explorer links for all managers in the group
+          for (const manager of group.managers) {
+            if (manager.contractAddress) {
+              response += `- ${currentChain.viemChain.blockExplorers.default.url}/address/${manager.contractAddress}\n`;
+            }
+          }
+          response += `\n`; // Add spacing between groups
         }
       }
     } else {
@@ -929,19 +958,61 @@ Answer only "yes" or "no".`,
     group: any,
     context: FlowContext
   ): Promise<string> {
+    let display = "";
+
+    // First, try to get the group name from local group state
+    try {
+      const groupState = await context.sessionManager
+        .getGroupStateManager()
+        .getGroupState(group.groupId);
+
+      if (groupState?.metadata?.name) {
+        display = groupState.metadata.name;
+        console.log(`[QAFlow] Using group name from local state: ${display}`);
+        return display;
+      }
+    } catch (error) {
+      console.warn(
+        `[QAFlow] Could not fetch group state for ${group.groupId}:`,
+        error
+      );
+    }
+
+    // If no group name in local state, try to get it from XMTP conversation metadata
+    // try {
+    //   const conversation =
+    //     await context.client.conversations.getConversationById(group.groupId);
+    //   if (conversation) {
+    //     // Note: XMTP conversation metadata methods might not be available yet
+    //     // This is a placeholder for when they become available
+    //     // Uncomment and modify when XMTP adds group name support:
+    //     // if (conversation.metadata?.name) {
+    //     //   display = conversation.metadata.name;
+    //     //   console.log(`[QAFlow] Using group name from XMTP: ${display}`);
+    //     //   return display;
+    //     // }
+    //   }
+    // } catch (error) {
+    //   console.warn(
+    //     `[QAFlow] Could not fetch XMTP conversation for ${group.groupId}:`,
+    //     error
+    //   );
+    // }
+
+    // Fallback to formatAddress as before
     const groupDisplay = await GroupCreationUtils.formatAddress(
       group.groupId,
       context.ensResolver
     );
 
-    let display = `• ${groupDisplay}`;
+    display = `${groupDisplay}`;
 
-    // Note: Live data access would need to be implemented based on group structure
-    // For now, just show basic info
+    // Note: Keep existing logic for backward compatibility
     if (group.groupName) {
       display += ` (${group.groupName})`;
     }
 
+    console.log(`[QAFlow] Using fallback address format: ${display}`);
     return display;
   }
 
