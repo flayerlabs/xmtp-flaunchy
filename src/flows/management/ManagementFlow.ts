@@ -155,9 +155,6 @@ export class ManagementFlow extends BaseFlow {
         transactionContext += `- Starting Market Cap: $${
           pendingTx.launchParameters.startingMarketCap || 1000
         }\n`;
-        transactionContext += `- Fair Launch Duration: ${
-          pendingTx.launchParameters.fairLaunchDuration || 30
-        } minutes\n`;
         transactionContext += `- Prebuy Amount: ${
           pendingTx.launchParameters.premineAmount || 0
         }%\n`;
@@ -341,9 +338,6 @@ Message: "${messageText}"
 
 Current parameters:
 - Starting Market Cap: $${pendingTx.launchParameters?.startingMarketCap || 1000}
-- Fair Launch Duration: ${
-              pendingTx.launchParameters?.fairLaunchDuration || 30
-            } minutes
 - Prebuy Amount: ${pendingTx.launchParameters?.premineAmount || 0}%
 - Buyback Percentage: ${pendingTx.launchParameters?.buybackPercentage || 0}%
 
@@ -356,7 +350,6 @@ Return your response in this exact format:
 \`\`\`json
 {
   "startingMarketCap": number (if mentioned),
-  "fairLaunchDuration": number (if mentioned, in minutes),
   "premineAmount": number (if mentioned, as percentage for prebuy/premine),
   "buybackPercentage": number (if mentioned, as percentage for buybacks)
 }
@@ -396,15 +389,6 @@ If no parameters are mentioned, return:
           parameterChanges.startingMarketCap > 10000
         ) {
           return "starting market cap must be between $100 and $10,000.";
-        }
-      }
-
-      if (parameterChanges.fairLaunchDuration !== undefined) {
-        if (
-          parameterChanges.fairLaunchDuration < 1 ||
-          parameterChanges.fairLaunchDuration > 1440
-        ) {
-          return "fair launch duration must be between 1 minute and 24 hours (1440 minutes).";
         }
       }
 
@@ -458,8 +442,6 @@ If no parameters are mentioned, return:
             targetGroup: targetGroup.id,
             startingMarketCap:
               updatedLaunchParameters.startingMarketCap || 1000,
-            fairLaunchDuration:
-              updatedLaunchParameters.fairLaunchDuration || 30,
             premineAmount: updatedLaunchParameters.premineAmount || 0,
             buybackPercentage: updatedLaunchParameters.buybackPercentage || 0,
           } as any,
@@ -1104,15 +1086,6 @@ If no parameters are mentioned, return:
         transactionDetails += `• Starting Market Cap: $${
           pendingTx.launchParameters.startingMarketCap || 1000
         }\n`;
-        transactionDetails += `• Fair Launch Duration: ${
-          pendingTx.launchParameters.fairLaunchDuration || 30
-        } minutes\n`;
-
-        // Calculate fair launch supply (40% of total supply by default)
-        const fairLaunchPercent = 10; // This is the default from the system
-        const totalSupply = 100; // 100 tokens total supply
-        const fairLaunchSupply = (totalSupply * fairLaunchPercent) / 100;
-        transactionDetails += `• Fair Launch Supply: ${fairLaunchSupply} ${pendingTx.coinData.ticker} (${fairLaunchPercent}% of total)\n`;
 
         if (
           pendingTx.launchParameters.premineAmount &&

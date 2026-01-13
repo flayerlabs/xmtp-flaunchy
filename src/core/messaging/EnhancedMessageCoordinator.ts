@@ -1496,8 +1496,8 @@ export class EnhancedMessageCoordinator {
               groupId: groupAddress.toLowerCase(), // Normalize to lowercase for consistent matching
               contractAddress,
               launched: true,
-              fairLaunchDuration: 30 * 60, // 30 minutes
-              fairLaunchPercent: 10,
+              fairLaunchDuration: 0, // No fair launch duration
+              fairLaunchPercent: 0, // No fair launch
               initialMarketCap: 1000,
               chainId,
               chainName,
@@ -2718,7 +2718,7 @@ ENGAGE (respond "YES:reason"):
 CRITICAL: COIN LAUNCH PATTERNS (respond "YES:coin_launch"):
 - Token/coin specifications: "Launch Test (TEST)", "MyCoin (MCN)", "DOGE token" → "YES:coin_launch"
 - Coin launch requests: "launch a coin", "create a token", "flaunch DOGE" → "YES:coin_launch"
-- Coin parameters: "Banana (BNAA) with $100 market cap", "Token ABC with 30 minute fair launch" → "YES:coin_launch"
+- Coin parameters: "Banana (BNAA) with $100 market cap", "Token ABC with 5% prebuy" → "YES:coin_launch"
 - Ticker patterns: "TEST", "DOGE", "MCN", "BTC" (when clearly meant as coin tickers) → "YES:coin_launch"
 - Launch commands: "launch [anything]", "create [token/coin]", "flaunch [anything]" → "YES:coin_launch"
 

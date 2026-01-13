@@ -170,8 +170,8 @@ export class SessionManager {
       groupStates: {},
       preferences: {
         defaultMarketCap: 1000,
-        defaultFairLaunchPercent: 10,
-        defaultFairLaunchDuration: 30 * 60, // 30 minutes
+        defaultFairLaunchPercent: 0, // No fair launch
+        defaultFairLaunchDuration: 0, // No fair launch duration
         notificationSettings: {
           launchUpdates: true,
           priceAlerts: true,

@@ -304,8 +304,8 @@ export class UserDataService {
             groupId: groupId,
             contractAddress: holding.collectionToken.id,
             launched: true,
-            fairLaunchDuration: 30 * 60, // Default 30 minutes
-            fairLaunchPercent: 10, // Default 10%
+            fairLaunchDuration: 0, // No fair launch duration
+            fairLaunchPercent: 0, // No fair launch
             initialMarketCap:
               parseInt(holding.collectionToken.marketCapUSDC) || 1000,
             chainId: userGroup?.chainId || 8453, // Default to Base mainnet

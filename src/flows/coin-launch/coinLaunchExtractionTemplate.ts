@@ -66,10 +66,6 @@ Market Cap:
 - Extract numeric values and convert k/K to thousands
 - Clamp between $100 and $10,000
 
-Duration:
-- Look for: "fair launch duration", "launch time", "30 minutes", "1 hour", etc.
-- Convert hours to minutes, clamp between 1-60 minutes
-
 Prebuy/Premine:
 - Look for: "prebuy", "premine", "pre-buy", "pre-mine" with percentages
 - These refer to tokens bought at launch (costs ETH)
@@ -106,7 +102,6 @@ Return ONLY this JSON structure:
   "targetGroup": "string or null",
   "launchParameters": {
     "startingMarketCap": number_or_null,
-    "fairLaunchDuration": number_or_null,
     "premineAmount": number_or_null,
     "buybackPercentage": number_or_null
   }
@@ -119,14 +114,14 @@ Key-value format (most common):
 {
   "tokenDetails": {"name": "YouTube", "ticker": null, "image": null},
   "targetGroup": null,
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 "Ticker: YTBE" →
 {
   "tokenDetails": {"name": null, "ticker": "YTBE", "image": null},
   "targetGroup": null,
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Full launch command:
@@ -134,15 +129,15 @@ Full launch command:
 {
   "tokenDetails": {"name": "nobi", "ticker": "NOBI", "image": null},
   "targetGroup": "0xfdb02c98d215ee60e19822a42dee9e6c26fe7394",
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Token with parameters:
-"Launch DogeCoin (DOGE) with $5000 market cap and 45 minute fair launch" →
+"Launch DogeCoin (DOGE) with $5000 market cap" →
 {
   "tokenDetails": {"name": "DogeCoin", "ticker": "DOGE", "image": null},
   "targetGroup": null,
-  "launchParameters": {"startingMarketCap": 5000, "fairLaunchDuration": 45, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": 5000, "premineAmount": null, "buybackPercentage": null}
 }
 
 Token with group name:
@@ -150,7 +145,7 @@ Token with group name:
 {
   "tokenDetails": {"name": "Caps", "ticker": "CAPS", "image": null},
   "targetGroup": "Zenith Pack 50",
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Group selection only:
@@ -158,7 +153,7 @@ Group selection only:
 {
   "tokenDetails": {"name": null, "ticker": null, "image": null},
   "targetGroup": "0x1234567890abcdef1234567890abcdef12345678",
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Image only (with attachment):
@@ -166,7 +161,7 @@ Image only (with attachment):
 {
   "tokenDetails": {"name": null, "ticker": null, "image": "attachment_provided"},
   "targetGroup": null,
-  "launchParameters": {"startingMarketCap": null, "fairLaunchDuration": null, "premineAmount": null, "buybackPercentage": null}
+  "launchParameters": {"startingMarketCap": null, "premineAmount": null, "buybackPercentage": null}
 }
 
 Extract coin launch details from the current message now:
@@ -216,7 +211,6 @@ export interface CoinLaunchExtractionResult {
   targetGroup: string | null;
   launchParameters: {
     startingMarketCap: number | null;
-    fairLaunchDuration: number | null;
     premineAmount: number | null;
     buybackPercentage: number | null;
   };

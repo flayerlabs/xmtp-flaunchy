@@ -90,8 +90,8 @@ export async function createFlaunchTransaction(
     chain,
     treasuryManagerAddress,
     treasuryInitializeData,
-    fairLaunchPercent = 10,
-    fairLaunchDuration = 30 * 60, // 30 minutes
+    fairLaunchPercent = 0, // No fair launch by default
+    fairLaunchDuration = 0, // No fair launch duration by default
     startingMarketCapUSD = 1000,
     creatorFeeAllocationPercent = 100,
     preminePercentage = 0,

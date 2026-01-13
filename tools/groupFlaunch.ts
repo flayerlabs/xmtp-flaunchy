@@ -22,12 +22,6 @@ export const groupFlaunchSchema = z.object({
     .describe(
       "The starting market cap of the coin in USD. Between 100 and 10,000. Default: 1,000"
     ),
-  fairLaunchDuration: z
-    .number()
-    .min(1)
-    .max(60)
-    .optional()
-    .describe("Fair launch duration in minutes. Between 1 and 60 minutes"),
   preminePercentage: z
     .number()
     .min(0)
@@ -62,7 +56,7 @@ const createGroupFlaunchCalls = async ({
       flaunchArgs: args,
     });
 
-    const fairLaunchPercent = 10;
+    const fairLaunchPercent = 0; // No fair launch
     const creatorFeeAllocationPercent = 100;
 
     const inboxState = await client.preferences.inboxStateFromInboxIds([
@@ -245,7 +239,7 @@ const createGroupFlaunchCalls = async ({
       treasuryManagerAddress: AddressFeeSplitManagerAddress[chain.id],
       treasuryInitializeData: initializeData,
       fairLaunchPercent,
-      fairLaunchDuration: (args.fairLaunchDuration || 0) * 60, // Convert to seconds
+      fairLaunchDuration: 0, // No fair launch duration
       startingMarketCapUSD: args.startingMarketCap ?? 1000,
       creatorFeeAllocationPercent: adjustedCreatorFeeAllocationPercent,
       preminePercentage: args.preminePercentage || 0,
@@ -343,7 +337,7 @@ export const groupFlaunchTool = {
   tool: getTool({
     name: "group_flaunch",
     description: `
-This Group Flaunch tool allows launching a new coin using the Flaunch protocol. 80% of the fees are equally split between the group members. 60% of the supply is allocated to the fair launch.
+This Group Flaunch tool allows launching a new coin using the Flaunch protocol. 80% of the fees are equally split between the group members.
 
 It takes:
 - ticker: The ticker of the coin to flaunch
