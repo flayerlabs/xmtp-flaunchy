@@ -88,8 +88,6 @@ export class QAFlow extends BaseFlow {
         const launchParameters = {
           startingMarketCap:
             extraction.launchParameters.startingMarketCap || undefined,
-          fairLaunchDuration:
-            extraction.launchParameters.fairLaunchDuration || undefined,
           premineAmount: extraction.launchParameters.premineAmount || undefined,
           buybackPercentage:
             extraction.launchParameters.buybackPercentage || undefined,
@@ -381,7 +379,7 @@ export class QAFlow extends BaseFlow {
         Provide helpful guidance about:
         - Coin launching with automatic group creation
         - Fee splitting mechanisms (automatic for everyone in chat)
-        - Trading and fair launches
+        - Trading and launches
         - No complex setup needed - just launch coins
         
         IMPORTANT: Emphasize the simplicity - users just need to launch coins and everything else is handled automatically.

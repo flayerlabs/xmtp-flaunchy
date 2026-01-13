@@ -31,7 +31,7 @@
     "Users just need to provide coin details (name, ticker, image) and launch coins directly",
     "All trading fees from coins are automatically split between everyone in the chat group",
     "Multiple coins can be launched and all trading fees are shared with chat group members",
-    "Coin launch defaults are: $1000 market cap, 10% of supply in fair launch, and 30 minute fair launch duration. Users can modify these parameters.",
+    "Coin launch defaults are: $1000 market cap. Users can modify parameters like market cap, prebuy percentage, and buyback percentage.",
     "Coin creation requires name, ticker, and image",
     "Users can manage their coins through https://mini.flaunch.gg",
     "Base Mainnet is the only supported chain - if users ask about other chains, explain they're not supported",

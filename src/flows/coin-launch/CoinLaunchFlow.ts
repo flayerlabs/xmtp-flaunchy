@@ -20,7 +20,6 @@ interface CoinLaunchData {
   targetGroup?: string;
   // Launch parameters
   startingMarketCap?: number;
-  fairLaunchDuration?: number;
   premineAmount?: number;
   buybackPercentage?: number;
 }
@@ -196,7 +195,6 @@ export class CoinLaunchFlow extends BaseFlow {
         image: coinData.image,
         targetGroup: managerInfo.address,
         startingMarketCap: launchParams.startingMarketCap,
-        fairLaunchDuration: launchParams.fairLaunchDuration,
         premineAmount: launchParams.premineAmount,
         buybackPercentage: launchParams.buybackPercentage,
       } as Required<CoinLaunchData>;
@@ -244,8 +242,8 @@ export class CoinLaunchFlow extends BaseFlow {
         ensResolver: context.ensResolver,
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
-        fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds
-        fairLaunchPercent: 10, // Keep default for now
+        fairLaunchDuration: 0, // No fair launch duration
+        fairLaunchPercent: 0, // No fair launch
         creatorFeeAllocationPercent,
         preminePercentage: coinData.premineAmount || 0,
       });
@@ -344,7 +342,6 @@ export class CoinLaunchFlow extends BaseFlow {
         const fullCoinData = {
           ...coinData,
           startingMarketCap: progress.launchParameters?.startingMarketCap,
-          fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
           premineAmount: progress.launchParameters?.premineAmount,
           buybackPercentage: progress.launchParameters?.buybackPercentage,
           targetGroup: managerInfo.address,
@@ -395,18 +392,6 @@ export class CoinLaunchFlow extends BaseFlow {
       updated = true;
     }
     if (
-      currentData.fairLaunchDuration &&
-      currentData.fairLaunchDuration !==
-        progress.launchParameters.fairLaunchDuration
-    ) {
-      progress.launchParameters.fairLaunchDuration =
-        currentData.fairLaunchDuration;
-      parameterUpdates.push(
-        `fair launch duration to ${currentData.fairLaunchDuration} minutes`
-      );
-      updated = true;
-    }
-    if (
       currentData.premineAmount &&
       currentData.premineAmount !== progress.launchParameters.premineAmount
     ) {
@@ -452,7 +437,6 @@ export class CoinLaunchFlow extends BaseFlow {
       const fullCoinData = {
         ...coinData,
         startingMarketCap: progress.launchParameters?.startingMarketCap,
-        fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
         premineAmount: progress.launchParameters?.premineAmount,
         buybackPercentage: progress.launchParameters?.buybackPercentage,
         targetGroup: managerInfo.address,
@@ -479,7 +463,6 @@ export class CoinLaunchFlow extends BaseFlow {
 
     const launchParameters = {
       startingMarketCap: extractedData.startingMarketCap,
-      fairLaunchDuration: extractedData.fairLaunchDuration,
       premineAmount: extractedData.premineAmount,
       buybackPercentage: extractedData.buybackPercentage,
     };
@@ -947,10 +930,6 @@ export class CoinLaunchFlow extends BaseFlow {
           extractedData.launchParameters.startingMarketCap ||
           existingCoinData?.startingMarketCap ||
           undefined,
-        fairLaunchDuration:
-          extractedData.launchParameters.fairLaunchDuration ||
-          existingCoinData?.fairLaunchDuration ||
-          undefined,
         premineAmount:
           extractedData.launchParameters.premineAmount !== null
             ? extractedData.launchParameters.premineAmount
@@ -1013,7 +992,6 @@ export class CoinLaunchFlow extends BaseFlow {
         image: coinData?.image,
         targetGroup: progress.targetGroupId,
         startingMarketCap: progress.launchParameters?.startingMarketCap,
-        fairLaunchDuration: progress.launchParameters?.fairLaunchDuration,
         premineAmount: progress.launchParameters?.premineAmount,
         buybackPercentage: progress.launchParameters?.buybackPercentage,
       };
@@ -1030,7 +1008,6 @@ export class CoinLaunchFlow extends BaseFlow {
           image: coinData.image,
           targetGroup: launchParams.targetGroupId,
           startingMarketCap: launchParams.startingMarketCap,
-          fairLaunchDuration: launchParams.fairLaunchDuration,
           premineAmount: launchParams.premineAmount,
           buybackPercentage: launchParams.buybackPercentage,
         };
@@ -1147,8 +1124,8 @@ export class CoinLaunchFlow extends BaseFlow {
         ensResolver: context.ensResolver,
         // Pass extracted launch parameters
         startingMarketCapUSD: coinData.startingMarketCap || 1000,
-        fairLaunchDuration: (coinData.fairLaunchDuration || 30) * 60, // Convert to seconds
-        fairLaunchPercent: 10, // Keep default for now
+        fairLaunchDuration: 0, // No fair launch duration
+        fairLaunchPercent: 0, // No fair launch
         creatorFeeAllocationPercent,
         preminePercentage: coinData.premineAmount || 0,
       });
@@ -1164,7 +1141,6 @@ export class CoinLaunchFlow extends BaseFlow {
           },
           launchParameters: {
             startingMarketCap: coinData.startingMarketCap || 1000,
-            fairLaunchDuration: coinData.fairLaunchDuration || 30,
             premineAmount: coinData.premineAmount || 0,
             buybackPercentage: coinData.buybackPercentage || 0,
             targetGroupId: managerInfo.address,
@@ -1251,9 +1227,8 @@ export class CoinLaunchFlow extends BaseFlow {
         User is asking about launch options. Explain the configurable parameters available:
 
         1. Starting market cap: $100 to $10,000
-        2. Fair launch duration: 1 to 60 minutes  
-        3. Prebuy amount: 0% to 100% (prebuy coins before launch)
-        4. Automated buybacks: 0% to 100% of fees go to automated buybacks
+        2. Prebuy amount: 0% to 100% (prebuy coins before launch)
+        3. Automated buybacks: 0% to 100% of fees go to automated buybacks
 
         Be brief and clear. Don't overwhelm with details. Use your character voice.
       `,
@@ -1347,7 +1322,6 @@ export class CoinLaunchFlow extends BaseFlow {
         User is asking about default launch settings. Explain the defaults:
 
         - Starting market cap: $1,000
-        - Fair launch duration: 30 minutes
         - Prebuy amount: 0% (no prebuy)
         - Automated buybacks: 0% (no buybacks)
         - Fee sharing: Everyone in the chat group automatically shares trading fees

@@ -20,12 +20,6 @@ export const flaunchSchema = z.object({
     .describe(
       "The starting market cap of the coin in USD. Between 100 and 10,000. Default: 1,000"
     ),
-  fairLaunchDuration: z
-    .number()
-    .min(1)
-    .max(60)
-    .optional()
-    .describe("Fair launch duration in minutes. Between 1 and 60 minutes"),
   preminePercentage: z
     .number()
     .min(0)
@@ -99,8 +93,8 @@ const createFlaunchCalls = async ({
       senderInboxId,
       chain,
       treasuryManagerAddress: creatorAddress, // For simple flaunch, creator is the treasury manager
-      fairLaunchPercent: 10, // Match Group Flaunch default
-      fairLaunchDuration: (args.fairLaunchDuration || 0) * 60, // Convert to seconds
+      fairLaunchPercent: 0, // No fair launch
+      fairLaunchDuration: 0, // No fair launch duration
       startingMarketCapUSD: args.startingMarketCap ?? 1000,
       creatorFeeAllocationPercent,
       preminePercentage: args.preminePercentage || 0,
@@ -197,14 +191,13 @@ export const flaunchTool = {
   tool: getTool({
     name: "flaunch",
     description: `
-This tool allows launching a new coin using the Flaunch protocol. 10% of the supply is allocated to the fair launch, creator gets 100% of the fees.
+This tool allows launching a new coin using the Flaunch protocol. Creator gets 100% of the fees.
 
 It takes:
 - ticker: The ticker of the coin to flaunch
 
 - image: Attach the image of the coin to flaunch or the user can provide the image url.
 - startingMarketCap: (optional) The starting market cap of the coin in USD. Between 100 and 10,000
-- fairLaunchDuration: (optional) Fair launch duration in minutes. Between 1 and 60 minutes
 - preminePercentage: (optional) Percentage of tokens to premine (prebuy). Between 0 and 100%
 - buybackPercentage: (optional) Percentage of fees to go to automated buybacks. Between 0 and 100%
 - feeReceiver: (optional) The ETH address of the creator that receives the fees
